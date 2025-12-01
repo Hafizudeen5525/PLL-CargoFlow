@@ -1,0 +1,5 @@
+{
+  "name": "PLL CargoFlow",
+  "description": "A smart logistics management dashboard to track cargo profiles, financial metrics, and P&L. Features AI-powered document parsing to auto-populate cargo data from KTS documents.",
+  "requestFramePermissions": []
+}
