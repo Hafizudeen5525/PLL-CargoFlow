@@ -18,7 +18,18 @@ export interface ForwardCurveRow {
   prices: Record<string, number>;
 }
 
-let FORWARD_CURVE: ForwardCurveRow[] = [];
+// STORAGE: Map of "Curve Date" (YYYY-MM-DD) -> Curve Data
+let CURVE_HISTORY: Record<string, ForwardCurveRow[]> = {};
+
+// Initialize from LocalStorage if available
+try {
+    const saved = localStorage.getItem('forward_curve_history');
+    if (saved) {
+        CURVE_HISTORY = JSON.parse(saved);
+    }
+} catch (e) {
+    console.warn("Failed to load curve history");
+}
 
 // Aliases to map natural language to Market Data Keys
 const INDEX_ALIASES: Record<string, string> = {
@@ -47,14 +58,37 @@ const OIL_INDICES = ['brent', 'bripe', 'jcc'];
 
 export const getMarketData = () => ({ ...LIVE_MARKET_DATA });
 
-export const getForwardCurve = () => [...FORWARD_CURVE];
+// Get the curve for a specific "As Of" date, or the most recent one if not specified
+export const getForwardCurve = (asOfDate?: string): ForwardCurveRow[] => {
+    if (asOfDate && CURVE_HISTORY[asOfDate]) {
+        return CURVE_HISTORY[asOfDate];
+    }
+    
+    // Find latest
+    const dates = Object.keys(CURVE_HISTORY).sort().reverse();
+    if (dates.length > 0) return CURVE_HISTORY[dates[0]];
+    
+    return [];
+};
+
+export const getAvailableCurveDates = (): string[] => {
+    return Object.keys(CURVE_HISTORY).sort().reverse();
+};
 
 export const updateMarketData = (newData: Record<string, number>) => {
   LIVE_MARKET_DATA = { ...LIVE_MARKET_DATA, ...newData };
 };
 
-export const updateForwardCurve = (newCurve: ForwardCurveRow[]) => {
-  FORWARD_CURVE = newCurve;
+// Save a curve for a specific date (Historical Tracking)
+export const saveForwardCurve = (date: string, newCurve: ForwardCurveRow[]) => {
+  CURVE_HISTORY[date] = newCurve;
+  // Persist to LocalStorage (Mock DB)
+  localStorage.setItem('forward_curve_history', JSON.stringify(CURVE_HISTORY));
+};
+
+export const deleteForwardCurve = (date: string) => {
+    delete CURVE_HISTORY[date];
+    localStorage.setItem('forward_curve_history', JSON.stringify(CURVE_HISTORY));
 };
 
 /**
@@ -106,6 +140,82 @@ function normalizeDateToMonth(dateStr: string): string {
 }
 
 /**
+ * Estimates when the price for a cargo will be "fixed" (no longer floating).
+ */
+export function estimatePricingDate(formula: string, deliveryDate: string): string {
+    if (!deliveryDate) return '';
+    if (!formula) return deliveryDate;
+    
+    const d = new Date(deliveryDate);
+    const idx = formula.toLowerCase();
+    
+    // JKM: ~15th of previous month
+    if (idx.includes('jkm')) {
+        d.setMonth(d.getMonth() - 1);
+        d.setDate(15);
+    }
+    // Gas Indices (TTF, NBP, HH): End of previous month usually (or during delivery month for spot)
+    // For exposure tracking, let's assume end of previous month is when 'forward' becomes 'spot'
+    else if (idx.includes('ttf') || idx.includes('nbp') || idx.includes('hh')) {
+         d.setDate(0); // Last day of previous month
+    }
+    // Oil: Average of delivery month, so fixes at end of delivery month
+    else if (detectUnit(formula) === 'bbl') {
+        d.setMonth(d.getMonth() + 1);
+        d.setDate(0);
+    }
+    
+    return d.toISOString().split('T')[0];
+}
+
+/**
+ * Aggregates Volume Exposure by Pricing Month
+ */
+export function getExposureChartData(profiles: CargoProfile[]) {
+    const exposureMap = new Map<string, Record<string, number>>();
+    
+    profiles.forEach(p => {
+        // Only Unrealized counts as "Exposure"
+        if (p.pnlBucket === PnLBucket.Realized) return;
+        
+        const dateStr = p.pricingEndDate || estimatePricingDate(p.sellFormula || p.buyFormula, p.deliveryDate);
+        if (!dateStr) return;
+        
+        // Filter out past dates (no longer exposed)
+        if (new Date(dateStr) < new Date()) return; 
+        
+        const month = dateStr.slice(0, 7); // YYYY-MM
+        
+        if (!exposureMap.has(month)) {
+            exposureMap.set(month, { date: month } as any);
+        }
+        
+        const entry = exposureMap.get(month)!;
+        
+        // Identify Index
+        let index = 'Other';
+        const formula = (p.sellFormula || p.buyFormula || '').toUpperCase();
+        if (formula.includes('JKM')) index = 'JKM';
+        else if (formula.includes('TTF')) index = 'TTF';
+        else if (formula.includes('NBP')) index = 'NBP';
+        else if (formula.includes('HH')) index = 'HH';
+        else if (formula.includes('BRENT') || formula.includes('JCC')) index = 'Oil';
+        else if (formula.includes('AECO')) index = 'AECO';
+        
+        // Normalize Volume to MMBtu for aggregation
+        let vol = p.deliveredVolume || 0;
+        const unit = p.volumeUnit || detectUnit(formula);
+        if (unit === 'bbl') vol = vol * 5.8;
+        else if (unit === 'm3') vol = vol * 24; // LNG m3 to MMBtu approx (depends on density)
+        else if (unit === 'MT') vol = vol * 52; // LNG MT to MMBtu approx
+        
+        entry[index] = (entry[index] || 0) + vol;
+    });
+    
+    return Array.from(exposureMap.values()).sort((a: any, b: any) => a.date.localeCompare(b.date));
+}
+
+/**
  * Safely evaluates a pricing formula string against market data.
  * If referenceDate is provided, it attempts to find a matching month in the Forward Curve.
  */
@@ -118,9 +228,13 @@ export function evaluateFormula(formula: string, referenceDate?: string): number
     // 1. Determine Pricing Context (Spot vs Forward)
     let pricingContext = { ...LIVE_MARKET_DATA };
     
-    if (referenceDate && FORWARD_CURVE.length > 0) {
+    // Use the LATEST forward curve for pricing unless specific logic is added to find "Curve As Of X Date"
+    // In this implementation, we assume we want the *Latest* view of the market.
+    const latestCurve = getForwardCurve(); 
+
+    if (referenceDate && latestCurve.length > 0) {
         const targetMonth = normalizeDateToMonth(referenceDate);
-        const forwardRow = FORWARD_CURVE.find(r => r.month === targetMonth);
+        const forwardRow = latestCurve.find(r => r.month === targetMonth);
         
         if (forwardRow) {
             // Merge forward prices on top of spot prices. 
@@ -222,6 +336,11 @@ export function recalculateProfile(profile: Partial<CargoProfile>, forceCalc: bo
         const refDate = updated.loadingDate || updated.deliveryDate;
         const derivedBuy = evaluateFormula(updated.buyFormula, refDate);
         if (derivedBuy !== null) updated.absoluteBuyPrice = derivedBuy;
+    }
+    
+    // Update Pricing End Date automatically based on formula if missing
+    if (!updated.pricingEndDate && updated.deliveryDate) {
+        updated.pricingEndDate = estimatePricingDate(updated.sellFormula || updated.buyFormula || '', updated.deliveryDate);
     }
   }
 

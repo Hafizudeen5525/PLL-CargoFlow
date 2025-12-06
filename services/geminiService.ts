@@ -8,15 +8,19 @@ const parseCargoSchema: Schema = {
     strategyName: { type: Type.STRING },
     buyer: { type: Type.STRING },
     optimized: { type: Type.BOOLEAN },
-    deliveryDate: { type: Type.STRING, description: "YYYY-MM-DD format if possible" },
+    deliveryDate: { type: Type.STRING, description: "YYYY-MM-DD format" },
     deliveryMonth: { type: Type.STRING },
+    deliveryWindowStart: { type: Type.STRING, description: "YYYY-MM-DD start of delivery window" },
+    deliveryWindowEnd: { type: Type.STRING, description: "YYYY-MM-DD end of delivery window" },
     deliveredVolume: { type: Type.NUMBER },
     sellFormula: { type: Type.STRING },
     absoluteSellPrice: { type: Type.NUMBER },
     salesRevenue: { type: Type.NUMBER },
     loadedVolume: { type: Type.NUMBER },
-    loadingDate: { type: Type.STRING, description: "YYYY-MM-DD format if possible" },
+    loadingDate: { type: Type.STRING, description: "YYYY-MM-DD format" },
     loadingMonth: { type: Type.STRING },
+    loadingWindowStart: { type: Type.STRING, description: "YYYY-MM-DD start of loading window" },
+    loadingWindowEnd: { type: Type.STRING, description: "YYYY-MM-DD end of loading window" },
     buyFormula: { type: Type.STRING },
     absoluteBuyPrice: { type: Type.NUMBER },
     incoterms: { type: Type.STRING },
@@ -29,6 +33,7 @@ const parseCargoSchema: Schema = {
     finalPhysicalPnL: { type: Type.NUMBER },
     totalHedgingPnL: { type: Type.NUMBER },
     finalTotalPnL: { type: Type.NUMBER },
+    volumeUnit: { type: Type.STRING, enum: ['MMBtu', 'm3', 'MT', 'bbl'] },
   },
 };
 
@@ -56,13 +61,13 @@ export async function parseKTSDocument(
       1. If a field is not explicitly present, exclude it or return null. Do NOT force data creation.
       2. For Boolean 'optimized', infer from context (Yes=true, No=false).
       3. For dates, standardize to YYYY-MM-DD.
-      4. For Pricing Formulas (Sell Formula / Buy Formula):
+      4. Look for Date Windows (e.g. "January 15-17"). Split into Start and End dates.
+      5. For Pricing Formulas (Sell Formula / Buy Formula):
          - Extract the MATHEMATICAL logic.
          - Convert standard indices to their codes: "Henry Hub" -> "HH", "Dutch TTF" -> "TTF", "Brent" -> "Dated Brent", "NBP" -> "NBP", "JKM" -> "JKM".
          - CLEANUP: Remove currency symbols ($), contract periods like '(n)' or '(m)', and non-numeric variables like 'Alpha' or 'Beta' unless a value is defined.
          - Example: "95% NBP(n) - $0.88 +/- Alpha" should be extracted as "95% NBP - 0.88".
-         - Example: "HH plus 2.50 USD" should be "HH + 2.50".
-      5. The data might be incomplete, that is okay.
+      6. Extract Volume Unit (MMBtu, m3, MT, bbl) if explicitly stated.
     `;
 
     // Prepare contents based on whether we have raw text (from DOCX) or a file blob (PDF/Image)

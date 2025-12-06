@@ -1,7 +1,7 @@
 import React, { useState, useEffect, useCallback } from 'react';
 import { CargoProfile, EmptyCargoProfile, PnLBucket } from '../types';
-import { parseKTSDocument } from '../services/geminiService';
 import { recalculateProfile, actualizeProfile, getMarketData, evaluateFormula, generateStrategyName, detectUnit } from '../services/calculationService';
+import { apiClient } from '../services/apiClient';
 import { toast } from 'react-hot-toast';
 import { motion } from 'framer-motion';
 // @ts-ignore
@@ -13,7 +13,7 @@ interface CargoFormProps {
   onCancel: () => void;
 }
 
-// -- Extracted Components to prevent re-rendering focus loss --
+// -- Extracted Components --
 
 interface InputGroupProps {
     label: string;
@@ -77,7 +77,6 @@ const FormulaInput: React.FC<FormulaInputProps> = React.memo(({ label, name, val
                 placeholder="e.g. 95% NBP"
                 className="w-full px-3 py-2 rounded-lg border border-slate-200 focus:outline-none focus:ring-2 focus:ring-indigo-500/20 focus:border-indigo-500 text-sm"
             />
-            {/* Live Validator Indicator */}
             <div className="absolute right-3 top-2.5">
                 {resultValue ? (
                     <div className="w-2 h-2 rounded-full bg-emerald-400 shadow-[0_0_8px_rgba(52,211,153,0.6)]"></div>
@@ -87,7 +86,6 @@ const FormulaInput: React.FC<FormulaInputProps> = React.memo(({ label, name, val
             </div>
         </div>
         
-        {/* Quick Add Chips */}
         <div className="flex flex-wrap gap-1.5 mt-2">
             <span className="text-[10px] text-slate-400 flex items-center mr-1">Available:</span>
             {availableIndices.slice(0, 5).map(idx => (
@@ -107,7 +105,6 @@ const FormulaInput: React.FC<FormulaInputProps> = React.memo(({ label, name, val
     </div>
 ));
 
-// Helper: Format YYYY-MM-DD to MMM-YY
 const formatMonthStr = (dateStr: string): string => {
     if (!dateStr) return '';
     try {
@@ -134,10 +131,8 @@ export const CargoForm: React.FC<CargoFormProps> = ({ initialData, onSave, onCan
   const marketData = getMarketData();
   const availableIndices = Object.keys(marketData);
 
-  // Determine current unit for labels
-  const unit = detectUnit(formData.sellFormula || formData.buyFormula);
+  const unit = formData.volumeUnit || detectUnit(formData.sellFormula || formData.buyFormula);
 
-  // Initialize data
   useEffect(() => {
     if (initialData) {
       const { id, ...rest } = initialData;
@@ -145,7 +140,6 @@ export const CargoForm: React.FC<CargoFormProps> = ({ initialData, onSave, onCan
     }
   }, [initialData]);
 
-  // Handle manual field changes
   const handleChange = useCallback((e: React.ChangeEvent<HTMLInputElement | HTMLSelectElement>) => {
     const { name, value, type } = e.target;
     
@@ -157,61 +151,60 @@ export const CargoForm: React.FC<CargoFormProps> = ({ initialData, onSave, onCan
         [name]: newValue
       };
 
-      // 0. Auto-Populate Month from Date
+      // Auto-Populate Month
       if (name === 'deliveryDate' && typeof newValue === 'string' && newValue) {
           const monthStr = formatMonthStr(newValue);
           if (monthStr) tempProfile.deliveryMonth = monthStr;
+          // Auto set window to single day if empty
+          if (!tempProfile.deliveryWindowStart) tempProfile.deliveryWindowStart = newValue;
+          if (!tempProfile.deliveryWindowEnd) tempProfile.deliveryWindowEnd = newValue;
       }
       if (name === 'loadingDate' && typeof newValue === 'string' && newValue) {
           const monthStr = formatMonthStr(newValue);
           if (monthStr) tempProfile.loadingMonth = monthStr;
+          if (!tempProfile.loadingWindowStart) tempProfile.loadingWindowStart = newValue;
+          if (!tempProfile.loadingWindowEnd) tempProfile.loadingWindowEnd = newValue;
+      }
+      
+      // Auto-sync window end if start changes
+      if (name === 'loadingWindowStart' && !tempProfile.loadingWindowEnd) {
+          tempProfile.loadingWindowEnd = newValue;
+      }
+      if (name === 'deliveryWindowStart' && !tempProfile.deliveryWindowEnd) {
+          tempProfile.deliveryWindowEnd = newValue;
       }
 
-      // 1. Explicitly recalculate prices if Formulas or Dates change.
-      // This overrides "Realized" locks in recalculateProfile during form editing, 
-      // giving the user immediate feedback.
+      // Recalc logic
       if (name === 'sellFormula' || name === 'deliveryDate') {
           const formula = name === 'sellFormula' ? newValue : prev.sellFormula;
           const date = name === 'deliveryDate' ? newValue : prev.deliveryDate;
           const price = evaluateFormula(formula, date);
-          
           if (price !== null) {
               tempProfile.absoluteSellPrice = price;
-              if (tempProfile.deliveredVolume) {
-                  tempProfile.salesRevenue = tempProfile.deliveredVolume * price;
-              }
+              if (tempProfile.deliveredVolume) tempProfile.salesRevenue = tempProfile.deliveredVolume * price;
           }
       }
 
       if (name === 'buyFormula' || name === 'loadingDate') {
           const formula = name === 'buyFormula' ? newValue : prev.buyFormula;
-          // Use loading date if available, otherwise delivery date as fallback
           const date = name === 'loadingDate' ? newValue : (prev.loadingDate || prev.deliveryDate);
           const price = evaluateFormula(formula, date);
-          
           if (price !== null) {
               tempProfile.absoluteBuyPrice = price;
-              // Only update purchase cost if not realized or if we want to preview it
-              if (tempProfile.loadedVolume) {
-                   tempProfile.reconciledPurchaseCost = tempProfile.loadedVolume * price;
-              }
+              if (tempProfile.loadedVolume) tempProfile.reconciledPurchaseCost = tempProfile.loadedVolume * price;
           }
       }
 
-      // 2. Handle numeric parsing for display
       const calcProfile = { ...tempProfile };
       if (type === 'number' && typeof newValue === 'string') {
          if (newValue === '') {
              calcProfile[name] = 0;
          } else {
              const parsed = parseFloat(newValue);
-             if (!isNaN(parsed)) {
-                 calcProfile[name] = parsed;
-             }
+             if (!isNaN(parsed)) calcProfile[name] = parsed;
          }
       }
 
-      // 3. Auto-Strategy Name Logic
       if ((name === 'source' || name === 'deliveryDate' || name === 'loadingDate') && !tempProfile.strategyName) {
         if (tempProfile.source && (tempProfile.deliveryDate || tempProfile.loadingDate)) {
              const autoName = generateStrategyName(tempProfile);
@@ -220,10 +213,8 @@ export const CargoForm: React.FC<CargoFormProps> = ({ initialData, onSave, onCan
         }
       }
 
-      // 4. Run full recalculation for dependent P&L fields
       const calculated = recalculateProfile(calcProfile);
 
-      // 5. Merge manual change back in (to preserve typing state like "10.")
       return {
           ...calculated,
           [name]: newValue 
@@ -235,17 +226,11 @@ export const CargoForm: React.FC<CargoFormProps> = ({ initialData, onSave, onCan
     setFormData((prev: any) => {
         const currentVal = prev[targetField] || '';
         const needsSpace = currentVal.length > 0 && !currentVal.endsWith(' ');
-        
         let suffix = indexName;
-        // Smart spacing for percentage
         if (indexName === '20%') suffix = '+ 20%';
-
         const updatedVal = `${currentVal}${needsSpace ? ' ' : ''}${suffix}`;
         
-        // Construct updated profile to calculate immediately
         const updatedProfile = { ...prev, [targetField]: updatedVal };
-        
-        // Manual calc trigger for immediate UI update
         const date = targetField === 'sellFormula' ? prev.deliveryDate : (prev.loadingDate || prev.deliveryDate);
         const price = evaluateFormula(updatedVal, date);
         
@@ -258,7 +243,6 @@ export const CargoForm: React.FC<CargoFormProps> = ({ initialData, onSave, onCan
                 if (updatedProfile.loadedVolume) updatedProfile.reconciledPurchaseCost = updatedProfile.loadedVolume * price;
             }
         }
-
         return recalculateProfile(updatedProfile);
     });
   }, []);
@@ -275,7 +259,7 @@ export const CargoForm: React.FC<CargoFormProps> = ({ initialData, onSave, onCan
     if (!file) return;
 
     setIsProcessing(true);
-    const loadingToast = toast.loading('Analyzing document with AI...');
+    const loadingToast = toast.loading('Processing document...');
 
     try {
       const isDocx = file.name.endsWith('.docx') || file.name.endsWith('.doc');
@@ -288,7 +272,8 @@ export const CargoForm: React.FC<CargoFormProps> = ({ initialData, onSave, onCan
           const textContent = result.value;
           if (!textContent) throw new Error("Could not extract text.");
 
-          const aiData = await parseKTSDocument(textContent, 'text/plain', true);
+          // Use apiClient for extraction
+          const aiData = await apiClient.parseDocument(textContent, 'text/plain', true);
           mergeData(aiData);
           toast.success('Document parsed successfully!', { id: loadingToast });
 
@@ -302,7 +287,7 @@ export const CargoForm: React.FC<CargoFormProps> = ({ initialData, onSave, onCan
           const base64String = event.target?.result as string;
           const base64Data = base64String.split(',')[1];
           try {
-            const aiData = await parseKTSDocument(base64Data, file.type, false);
+            const aiData = await apiClient.parseDocument(base64Data, file.type, false);
             mergeData(aiData);
             toast.success('Document parsed successfully!', { id: loadingToast });
           } catch (err) {
@@ -329,15 +314,9 @@ export const CargoForm: React.FC<CargoFormProps> = ({ initialData, onSave, onCan
             Object.entries(aiData).filter(([_, v]) => v !== null && v !== undefined && v !== '')
         )
       };
-
-      // Auto-populate months if dates came from AI
       if (merged.deliveryDate && !merged.deliveryMonth) merged.deliveryMonth = formatMonthStr(merged.deliveryDate);
       if (merged.loadingDate && !merged.loadingMonth) merged.loadingMonth = formatMonthStr(merged.loadingDate);
-
-      if (!merged.strategyName) {
-        merged.strategyName = generateStrategyName(merged);
-      }
-
+      if (!merged.strategyName) merged.strategyName = generateStrategyName(merged);
       return recalculateProfile(merged);
     });
   };
@@ -420,17 +399,7 @@ export const CargoForm: React.FC<CargoFormProps> = ({ initialData, onSave, onCan
                             isProcessing ? 'bg-indigo-50 text-indigo-400' : 'bg-indigo-600 hover:bg-indigo-700 text-white shadow-indigo-200'
                         }`}
                     >
-                        {isProcessing ? (
-                            <>
-                                <svg className="animate-spin h-4 w-4" viewBox="0 0 24 24"><circle className="opacity-25" cx="12" cy="12" r="10" stroke="currentColor" strokeWidth="4"></circle><path className="opacity-75" fill="currentColor" d="M4 12a8 8 0 018-8V0C5.373 0 0 5.373 0 12h4zm2 5.291A7.962 7.962 0 014 12H0c0 3.042 1.135 5.824 3 7.938l3-2.647z"></path></svg>
-                                Analyzing...
-                            </>
-                        ) : (
-                            <>
-                                <svg className="w-4 h-4" fill="none" stroke="currentColor" viewBox="0 0 24 24"><path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M19.428 15.428a2 2 0 00-1.022-.547l-2.384-.477a6 6 0 00-3.86.517l-.318.158a6 6 0 01-3.86.517L6.05 15.21a2 2 0 00-1.806.547M8 4h8l-1 1v5.172a2 2 0 00.586 1.414l5 5c1.26 1.26.367 3.414-1.415 3.414H4.828c-1.782 0-2.674-2.154-1.414-3.414l5-5A2 2 0 009 10.172V5L8 4z" /></svg>
-                                Upload KTS
-                            </>
-                        )}
+                        {isProcessing ? 'Analyzing...' : 'Upload KTS'}
                     </button>
                 </div>
             )}
@@ -483,13 +452,38 @@ export const CargoForm: React.FC<CargoFormProps> = ({ initialData, onSave, onCan
                     Schedule & Volume
                 </h3>
                 <div className="grid grid-cols-1 md:grid-cols-4 gap-6">
-                    <InputGroup label="Delivery Date" name="deliveryDate" type="date" value={formData.deliveryDate} onChange={handleChange} />
-                    <InputGroup label="Deliv. Month" name="deliveryMonth" value={formData.deliveryMonth} onChange={handleChange} />
-                    <InputGroup label={`Delivered (${unit})`} name="deliveredVolume" type="number" value={formData.deliveredVolume} onChange={handleChange} />
-                    <div className="hidden md:block"></div>
                     <InputGroup label="Loading Date" name="loadingDate" type="date" value={formData.loadingDate} onChange={handleChange} />
-                    <InputGroup label="Load Month" name="loadingMonth" value={formData.loadingMonth} onChange={handleChange} />
-                    <InputGroup label={`Loaded (${unit})`} name="loadedVolume" type="number" value={formData.loadedVolume} onChange={handleChange} />
+                    <InputGroup label="Window Start" name="loadingWindowStart" type="date" value={formData.loadingWindowStart} onChange={handleChange} />
+                    <InputGroup label="Window End" name="loadingWindowEnd" type="date" value={formData.loadingWindowEnd} onChange={handleChange} />
+                    <InputGroup label={`Loaded Vol`} name="loadedVolume" type="number" value={formData.loadedVolume} onChange={handleChange}>
+                        <div className="absolute right-0 top-0 bottom-0 flex items-center px-2 bg-slate-50 border-l border-slate-200 text-xs text-slate-500">
+                           {unit}
+                        </div>
+                    </InputGroup>
+
+                    <InputGroup label="Delivery Date" name="deliveryDate" type="date" value={formData.deliveryDate} onChange={handleChange} />
+                    <InputGroup label="Window Start" name="deliveryWindowStart" type="date" value={formData.deliveryWindowStart} onChange={handleChange} />
+                    <InputGroup label="Window End" name="deliveryWindowEnd" type="date" value={formData.deliveryWindowEnd} onChange={handleChange} />
+                    <InputGroup label={`Delivered Vol`} name="deliveredVolume" type="number" value={formData.deliveredVolume} onChange={handleChange}>
+                        <div className="absolute right-0 top-0 bottom-0 flex items-center px-2 bg-slate-50 border-l border-slate-200 text-xs text-slate-500">
+                           {unit}
+                        </div>
+                    </InputGroup>
+
+                    <div className="md:col-span-2">
+                        <label className="text-[10px] font-bold text-slate-400 uppercase tracking-wide mb-1.5 ml-1">Volume Unit</label>
+                        <select
+                            name="volumeUnit"
+                            value={formData.volumeUnit || unit}
+                            onChange={handleChange}
+                            className="w-full px-3 py-2.5 bg-white border border-slate-200 rounded-lg text-sm"
+                        >
+                            <option value="MMBtu">MMBtu</option>
+                            <option value="m3">m3</option>
+                            <option value="MT">MT</option>
+                            <option value="bbl">bbl</option>
+                        </select>
+                    </div>
                 </div>
             </div>
 
@@ -534,7 +528,7 @@ export const CargoForm: React.FC<CargoFormProps> = ({ initialData, onSave, onCan
                             name="pnlBucket"
                             value={formData.pnlBucket}
                             onChange={handleChange}
-                            className="px-3 py-2.5 bg-white border border-slate-200 rounded-lg focus:outline-none focus:ring-2 focus:ring-blue-500/20 text-sm text-slate-800"
+                            className="px-3 py-2.5 bg-white border border-slate-200 rounded-lg text-sm text-slate-800"
                         >
                             <option value={PnLBucket.Realized}>Realized</option>
                             <option value={PnLBucket.Unrealized}>Unrealized</option>

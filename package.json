@@ -15,7 +15,10 @@
     "recharts": "^3.5.1",
     "mammoth": "1.6.0",
     "framer-motion": "^11.0.8",
-    "react-hot-toast": "^2.4.1"
+    "react-hot-toast": "^2.4.1",
+    "body-parser": "^2.2.1",
+    "express": "^5.2.1",
+    "cors": "^2.8.5"
   },
   "devDependencies": {
     "@types/node": "^22.14.0",

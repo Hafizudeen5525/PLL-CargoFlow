@@ -9,22 +9,27 @@ interface BulkImportModalProps {
   onImport: (profiles: CargoProfile[]) => void;
 }
 
-// Maps likely header names to CargoProfile keys
 const COLUMN_MAPPING: Record<string, string[]> = {
   strategyName: ['strategy', 'name', 'deal', 'id', 'ref'],
   source: ['source', 'origin', 'load port', 'loading port'],
   buyer: ['buyer', 'customer', 'client', 'destination', 'disport'],
-  deliveryDate: ['delivery', 'arrival', 'end date', 'del date', 'delivery month'],
-  loadingDate: ['loading', 'load date', 'start date', 'bl date', 'loading month'],
-  deliveredVolume: ['volume', 'vol', 'quantity', 'qty', 'mmbtu', 'bbl'],
   
-  // Formulas vs Explicit Prices
+  // Date Fields with Windows
+  deliveryDate: ['delivery date', 'arrival', 'end date', 'del date'],
+  deliveryWindowStart: ['delivery start', 'del start'],
+  deliveryWindowEnd: ['delivery end', 'del end'],
+  loadingDate: ['loading date', 'load date', 'bl date'],
+  loadingWindowStart: ['loading start', 'load start'],
+  loadingWindowEnd: ['loading end', 'load end'],
+
+  deliveredVolume: ['volume', 'vol', 'quantity', 'qty', 'mmbtu', 'bbl', 'delivered volume'],
+  loadedVolume: ['loaded volume', 'load vol'],
+  
   sellFormula: ['sell formula', 'sales formula'],
   absoluteSellPrice: ['sell price', 'sales price', 'unit price', 'final price'],
   buyFormula: ['buy formula', 'purchase formula'],
   absoluteBuyPrice: ['buy price', 'purchase price', 'cost price'],
   
-  // Financials
   salesRevenue: ['sales revenue', 'revenue', 'invoice value'],
   reconciledPurchaseCost: ['purchase cost', 'cost', 'total cost'],
   finalTotalPnL: ['total pnl', 'final pnl', 'profit', 'p&l', 'net pnl'],
@@ -43,7 +48,6 @@ const formatMonthStr = (dateStr: string): string => {
             const d = parseInt(parts[2]);
             const date = new Date(y, m, d);
             if (isNaN(date.getTime())) return '';
-            
             const monthShort = date.toLocaleString('en-US', { month: 'short' });
             const yearShort = y.toString().slice(2);
             return `${monthShort}-${yearShort}`;
@@ -52,24 +56,67 @@ const formatMonthStr = (dateStr: string): string => {
     return '';
 }
 
+interface DiffCellProps {
+    row: any;
+    field: keyof CargoProfile;
+    rowIndex: number;
+    format?: (v: any) => React.ReactNode;
+    className?: string;
+    isIgnored: boolean;
+    onToggle: (idx: number, field: string) => void;
+}
+
+const DiffCell = ({ row, field, rowIndex, format, className = "", isIgnored, onToggle }: DiffCellProps) => {
+    const val = row[field];
+    const change = row._status === 'Update' && row._changes && row._changes[field];
+    const isEmpty = (v: any) => v === null || v === undefined || v === '' || v === 0;
+
+    if (change) {
+        if (isEmpty(change.old) && isEmpty(change.new)) {
+             return <div className={`text-slate-600 ${className}`}>{format ? format(val) : val}</div>;
+        }
+        return (
+            <div 
+                onClick={() => onToggle(rowIndex, field as string)}
+                className={`flex flex-col leading-tight cursor-pointer group select-none transition-all p-1 rounded ${isIgnored ? 'bg-slate-100 border border-slate-200 opacity-70' : 'hover:bg-blue-50'} ${className}`}
+                title="Click to toggle this specific change"
+            >
+                {isIgnored ? (
+                    <>
+                        <span className="text-[10px] font-bold text-slate-500 mb-0.5">Keep: {format ? format(change.old) : (change.old || '-')}</span>
+                        <span className="line-through text-[9px] text-slate-400 opacity-60">Skip: {format ? format(change.new) : (change.new || '-')}</span>
+                    </>
+                ) : (
+                    <>
+                         <div className="flex items-center gap-1">
+                            <span className="line-through text-[9px] text-rose-400 opacity-60">{format ? format(change.old) : (change.old || '-')}</span>
+                             <svg className="w-2 h-2 text-blue-300 opacity-0 group-hover:opacity-100" fill="none" viewBox="0 0 24 24" stroke="currentColor"><path strokeLinecap="round" strokeLinejoin="round" strokeWidth={3} d="M6 18L18 6M6 6l12 12" /></svg>
+                        </div>
+                        <span className="text-[10px] font-bold text-blue-700 bg-blue-100/50 px-1 rounded -ml-1 w-max border border-blue-100">{format ? format(change.new) : (change.new || '-')}</span>
+                    </>
+                )}
+            </div>
+        );
+    }
+    return <div className={`text-slate-600 ${className}`}>{format ? format(val) : val}</div>;
+};
+
 export const BulkImportModal: React.FC<BulkImportModalProps> = ({ existingProfiles, onClose, onImport }) => {
   const [inputText, setInputText] = useState('');
-  const [parsedRows, setParsedRows] = useState<(CargoProfile & { _status: 'New' | 'Update' })[]>([]);
+  const [parsedRows, setParsedRows] = useState<(CargoProfile & { _status: 'New' | 'Update' | 'No Change', _changes?: Record<string, {old: any, new: any}> })[]>([]);
   const [step, setStep] = useState<'paste' | 'preview'>('paste');
+  const [selectedIndices, setSelectedIndices] = useState<Set<number>>(new Set());
+  const [ignoredChanges, setIgnoredChanges] = useState<Record<number, Set<string>>>({});
 
   const parseDate = (raw: string): string => {
     if (!raw) return '';
     const str = raw.trim();
-
-    // Helper for months
     const months: Record<string, string> = {
         jan: '01', feb: '02', mar: '03', apr: '04', may: '05', jun: '06',
         jul: '07', aug: '08', sep: '09', oct: '10', nov: '11', dec: '12',
         january: '01', february: '02', march: '03', april: '04', june: '06',
         july: '07', august: '08', september: '09', october: '10', november: '11', december: '12'
     };
-
-    // 1. Check for DD-MMM-YY or DD-MMM-YYYY (e.g. 15-Jan-25)
     const ddMmmYy = str.match(/^(\d{1,2})[\s\-\/]+([a-zA-Z]{3,})[\s\-\/]+(\d{2,4})$/);
     if (ddMmmYy) {
         const d = ddMmmYy[1].padStart(2, '0');
@@ -79,8 +126,6 @@ export const BulkImportModal: React.FC<BulkImportModalProps> = ({ existingProfil
         const m = months[mStr];
         if (m) return `${y}-${m}-${d}`;
     }
-
-    // 2. Check for MMM-YY (e.g. Jan-25) -> Treat as 1st of month
     const mmmYy = str.match(/^([a-zA-Z]{3,})[\s\-\']+(\d{2})$/);
     if (mmmYy) {
         const mStr = mmmYy[1].toLowerCase().slice(0, 3);
@@ -88,25 +133,8 @@ export const BulkImportModal: React.FC<BulkImportModalProps> = ({ existingProfil
         const m = months[mStr];
         if (m) return `20${yStr}-${m}-01`;
     }
-
-    // 3. Try standard Date constructor
     const d = new Date(str);
-    if (!isNaN(d.getTime())) {
-         return d.toISOString().split('T')[0];
-    }
-    
-    // 4. Try DD/MM/YYYY or MM/DD/YYYY numeric formats
-    const parts = str.split(/[\/\-\.]/);
-    if (parts.length === 3) {
-        // Heuristic: If last part is year
-        const p2 = parseInt(parts[2]); // Year part
-        
-        if (p2 > 31 || parts[2].length === 4) {
-             const y = parts[2].length === 2 ? `20${parts[2]}` : parts[2];
-             return `${y}-${parts[1].padStart(2,'0')}-${parts[0].padStart(2,'0')}`; 
-        }
-    }
-    
+    if (!isNaN(d.getTime())) return d.toISOString().split('T')[0];
     return '';
   };
 
@@ -115,130 +143,117 @@ export const BulkImportModal: React.FC<BulkImportModalProps> = ({ existingProfil
         toast.error("Clipboard is empty");
         return;
     }
-
     try {
         const rows = inputText.trim().split('\n');
-        if (rows.length < 2) {
-             toast.error("Need at least a header row and one data row");
-             return;
-        }
-
-        // 1. Identify Headers
         const headers = rows[0].split(/\t|,/).map(h => h.trim().toLowerCase().replace(/['"]+/g, ''));
-        
-        // 2. Map Headers to Keys
         const mapIndices: Record<string, number> = {};
         
         headers.forEach((h, index) => {
-            // Prioritize exact matches first?
-            // Simple iteration through map
             for (const [key, aliases] of Object.entries(COLUMN_MAPPING)) {
                 if (aliases.some(alias => h.includes(alias))) {
-                    // Only assign if not already assigned (First Match Wins)
-                    // Or prioritize specific ones? e.g. "Sell Price" vs "Sell Formula"
-                    // Our mapping keys are distinct enough now.
                     if (mapIndices[key] === undefined) mapIndices[key] = index;
                 }
             }
         });
 
-        if (Object.keys(mapIndices).length === 0) {
-            toast.error("Could not match any columns. Please check your headers.");
-            return;
-        }
-
-        // 3. Process Rows
-        const processedProfiles: (CargoProfile & { _status: 'New' | 'Update' })[] = [];
+        const processedProfiles: (CargoProfile & { _status: 'New' | 'Update' | 'No Change', _changes?: Record<string, {old: any, new: any}> })[] = [];
         
         for (let i = 1; i < rows.length; i++) {
             const rowStr = rows[i].trim();
             if (!rowStr) continue;
-            
-            const isTab = rowStr.includes('\t');
-            const cells = rowStr.split(isTab ? '\t' : ',').map(c => c.trim().replace(/^"|"$/g, ''));
-            
-            // Extract fields from row
+            const cells = rowStr.split(rowStr.includes('\t') ? '\t' : ',').map(c => c.trim().replace(/^"|"$/g, ''));
             const parsedFields: Partial<CargoProfile> = {};
             
             Object.entries(mapIndices).forEach(([key, index]) => {
                 if (cells[index]) {
                     const rawVal = cells[index];
-                    
-                    if (['deliveredVolume', 'loadedVolume', 'absoluteSellPrice', 'absoluteBuyPrice', 
-                         'salesRevenue', 'reconciledPurchaseCost', 'finalTotalPnL'].includes(key)) {
-                        // Numeric Fields
+                    if (key.includes('Volume')) {
+                        const mmbtuMatch = rawVal.match(/([\d,.]+)\s*(mmbtu)/i);
+                        const m3Match = rawVal.match(/([\d,.]+)\s*(m3|cbm|cubic)/i);
+                        let volNum = 0;
+                        if (mmbtuMatch) {
+                             volNum = parseFloat(mmbtuMatch[1].replace(/,/g, ''));
+                             if (!parsedFields.volumeUnit) parsedFields.volumeUnit = 'MMBtu';
+                        } else if (m3Match) {
+                             volNum = parseFloat(m3Match[1].replace(/,/g, ''));
+                             if (!parsedFields.volumeUnit) parsedFields.volumeUnit = 'm3';
+                        } else {
+                             volNum = parseFloat(rawVal.replace(/[^0-9.-]/g, ''));
+                        }
+                        if (!isNaN(volNum)) (parsedFields as any)[key] = volNum;
+                    } else if (key.includes('Date') || key.includes('Start') || key.includes('End')) {
+                        (parsedFields as any)[key] = parseDate(rawVal);
+                    } else if (['absoluteSellPrice', 'absoluteBuyPrice', 'salesRevenue', 'reconciledPurchaseCost', 'finalTotalPnL'].includes(key)) {
                         const cleanNum = parseFloat(rawVal.replace(/[^0-9.-]/g, ''));
                         if (!isNaN(cleanNum)) (parsedFields as any)[key] = cleanNum;
-                    } 
-                    else if (key === 'deliveryDate' || key === 'loadingDate') {
-                        (parsedFields as any)[key] = parseDate(rawVal);
-                    } 
-                    else if (key === 'pnlBucket') {
+                    } else if (key === 'pnlBucket') {
                         const val = rawVal.toLowerCase();
-                        // CRITICAL FIX: Check 'unreal' before 'real'
                         if (val.includes('unreal')) parsedFields.pnlBucket = PnLBucket.Unrealized;
                         else if (val.includes('real')) parsedFields.pnlBucket = PnLBucket.Realized;
-                    } 
-                    else {
+                    } else {
                         (parsedFields as any)[key] = rawVal;
                     }
                 }
             });
 
-            // Post-Process: Auto-Derive Month Strings if missing
-            if (parsedFields.deliveryDate && !parsedFields.deliveryMonth) {
-                parsedFields.deliveryMonth = formatMonthStr(parsedFields.deliveryDate);
+            // Date Logic
+            if (parsedFields.deliveryDate && !parsedFields.deliveryMonth) parsedFields.deliveryMonth = formatMonthStr(parsedFields.deliveryDate);
+            if (parsedFields.loadingDate && !parsedFields.loadingMonth) parsedFields.loadingMonth = formatMonthStr(parsedFields.loadingDate);
+            
+            // Default Windows if missing
+            if (parsedFields.deliveryDate) {
+                if (!parsedFields.deliveryWindowStart) parsedFields.deliveryWindowStart = parsedFields.deliveryDate;
+                if (!parsedFields.deliveryWindowEnd) parsedFields.deliveryWindowEnd = parsedFields.deliveryDate;
             }
-            if (parsedFields.loadingDate && !parsedFields.loadingMonth) {
-                parsedFields.loadingMonth = formatMonthStr(parsedFields.loadingDate);
+            if (parsedFields.loadingDate) {
+                if (!parsedFields.loadingWindowStart) parsedFields.loadingWindowStart = parsedFields.loadingDate;
+                if (!parsedFields.loadingWindowEnd) parsedFields.loadingWindowEnd = parsedFields.loadingDate;
             }
 
-            // Logic to Merge with Existing or Create New
-            let baseProfile: CargoProfile;
-            let status: 'New' | 'Update';
+            let finalProfile: CargoProfile;
+            let status: 'New' | 'Update' | 'No Change';
+            let changes: Record<string, { old: any, new: any }> = {};
 
             const strategyName = parsedFields.strategyName;
-            const existingMatch = strategyName 
-                ? existingProfiles.find(p => p.strategyName?.toLowerCase() === strategyName.toLowerCase())
-                : undefined;
+            const existingMatch = strategyName ? existingProfiles.find(p => p.strategyName?.toLowerCase() === strategyName.toLowerCase()) : undefined;
 
             if (existingMatch) {
-                // UPDATE: Merge parsed fields on top of existing profile
-                baseProfile = { ...existingMatch, ...parsedFields };
+                const merged = { ...existingMatch, ...parsedFields };
+                const isRealized = merged.pnlBucket === PnLBucket.Realized;
+                finalProfile = recalculateProfile(merged, !isRealized) as CargoProfile;
                 status = 'Update';
+
+                (Object.keys(finalProfile) as Array<keyof CargoProfile>).forEach(key => {
+                    if (key === 'id') return;
+                    const oldVal = existingMatch[key];
+                    const newVal = finalProfile[key];
+                    if (oldVal !== newVal) {
+                         if (typeof oldVal === 'number' && typeof newVal === 'number' && Math.abs(oldVal - newVal) < 0.001) return;
+                         if (!oldVal && !newVal) return;
+                         changes[key] = { old: oldVal, new: newVal };
+                    }
+                });
+                if (Object.keys(changes).length === 0) status = 'No Change';
+
             } else {
-                // NEW: Use defaults
-                baseProfile = { 
-                    ...EmptyCargoProfile, 
-                    id: Date.now().toString() + Math.random().toString().slice(2, 6),
-                    ...parsedFields 
-                };
-                if (!baseProfile.strategyName) {
-                    baseProfile.strategyName = generateStrategyName(baseProfile);
-                }
+                const baseProfile = { ...EmptyCargoProfile, id: Date.now().toString() + Math.random().toString().slice(2, 6), ...parsedFields };
+                if (!baseProfile.strategyName) baseProfile.strategyName = generateStrategyName(baseProfile);
+                if (!baseProfile.loadedVolume && baseProfile.deliveredVolume) baseProfile.loadedVolume = baseProfile.deliveredVolume;
+                finalProfile = recalculateProfile(baseProfile, true) as CargoProfile;
                 status = 'New';
             }
-
-            // Fallbacks for Volume linkage if creating new
-            if (status === 'New') {
-                if (!baseProfile.loadedVolume && baseProfile.deliveredVolume) baseProfile.loadedVolume = baseProfile.deliveredVolume;
-            }
-
-            // Pricing Logic:
-            // If Unrealized: FORCE calc (use formulas + market data).
-            // If Realized: DO NOT FORCE calc (keep pasted prices/revenues).
-            const isRealized = baseProfile.pnlBucket === PnLBucket.Realized;
-            const forceCalc = !isRealized; 
-
-            const finalProfile = recalculateProfile(baseProfile, forceCalc) as (CargoProfile & { _status: 'New' | 'Update' });
-            finalProfile._status = status;
             
-            processedProfiles.push(finalProfile);
+            processedProfiles.push({ ...finalProfile, _status: status, _changes: changes });
         }
 
         setParsedRows(processedProfiles);
+        const defaultSelected = new Set<number>();
+        processedProfiles.forEach((row, idx) => {
+            if (row._status === 'New' || row._status === 'Update') defaultSelected.add(idx);
+        });
+        setSelectedIndices(defaultSelected);
+        setIgnoredChanges({});
         setStep('preview');
-        toast.success(`Parsed ${processedProfiles.length} rows`);
 
     } catch (e) {
         console.error(e);
@@ -246,38 +261,71 @@ export const BulkImportModal: React.FC<BulkImportModalProps> = ({ existingProfil
     }
   };
 
+  const toggleFieldChange = (rowIndex: number, field: string) => {
+      setIgnoredChanges(prev => {
+          const rowSet = new Set(prev[rowIndex] || []);
+          if (rowSet.has(field)) rowSet.delete(field); else rowSet.add(field);
+          return { ...prev, [rowIndex]: rowSet };
+      });
+  };
+
   const handleFinish = () => {
-      // Strip the temporary _status field before returning
-      const cleanProfiles = parsedRows.map(({ _status, ...rest }) => rest as CargoProfile);
-      onImport(cleanProfiles);
+      const finalImports: CargoProfile[] = [];
+      parsedRows.forEach((row, idx) => {
+          if (!selectedIndices.has(idx)) return;
+          if (row._status === 'New' || row._status === 'No Change') {
+              const { _status, _changes, ...rest } = row;
+              finalImports.push(rest as CargoProfile);
+          } else {
+              const ignoredFields = ignoredChanges[idx] || new Set();
+              if (ignoredFields.size === 0) {
+                  const { _status, _changes, ...rest } = row;
+                  finalImports.push(rest as CargoProfile);
+              } else {
+                  const original = existingProfiles.find(p => p.id === row.id);
+                  if (!original) return;
+                  const mixed: any = { ...row };
+                  ignoredFields.forEach(field => mixed[field] = (original as any)[field]);
+                  const { _status, _changes, ...cleanMixed } = mixed;
+                  finalImports.push(recalculateProfile(cleanMixed, true) as CargoProfile);
+              }
+          }
+      });
+      onImport(finalImports);
       onClose();
   };
 
+  const toggleRow = (index: number) => {
+      const newSet = new Set(selectedIndices);
+      if (newSet.has(index)) newSet.delete(index); else newSet.add(index);
+      setSelectedIndices(newSet);
+  };
+
+  const toggleAll = () => {
+      const actionableIndices = parsedRows.map((r, i) => r._status !== 'No Change' ? i : -1).filter(i => i !== -1);
+      const allActionableSelected = actionableIndices.every(i => selectedIndices.has(i));
+      if (allActionableSelected && actionableIndices.length > 0) setSelectedIndices(new Set());
+      else setSelectedIndices(new Set([...Array.from(selectedIndices), ...actionableIndices]));
+  };
+
+  const actionableCount = parsedRows.filter(r => r._status !== 'No Change').length;
+  const selectedActionableCount = parsedRows.filter((r, i) => r._status !== 'No Change' && selectedIndices.has(i)).length;
+  const isAllSelected = actionableCount > 0 && actionableCount === selectedActionableCount;
+
   return (
     <div className="fixed inset-0 bg-slate-900/60 backdrop-blur-sm flex items-center justify-center p-4 z-50">
-      <div className="bg-white rounded-xl shadow-2xl w-full max-w-6xl max-h-[90vh] flex flex-col overflow-hidden">
+      <div className="bg-white rounded-xl shadow-2xl w-full max-w-7xl max-h-[90vh] flex flex-col overflow-hidden">
         <div className="p-6 border-b border-slate-100 flex justify-between items-center bg-white">
             <h2 className="text-xl font-bold text-slate-800">Bulk Import & Update</h2>
-            <button onClick={onClose} className="text-slate-400 hover:text-slate-600">
-                <svg className="w-6 h-6" fill="none" stroke="currentColor" viewBox="0 0 24 24"><path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M6 18L18 6M6 6l12 12" /></svg>
-            </button>
+            <button onClick={onClose} className="text-slate-400 hover:text-slate-600"><svg className="w-6 h-6" fill="none" stroke="currentColor" viewBox="0 0 24 24"><path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M6 18L18 6M6 6l12 12" /></svg></button>
         </div>
 
         <div className="flex-1 overflow-y-auto p-6 bg-slate-50">
             {step === 'paste' ? (
                 <div className="space-y-4 h-full flex flex-col">
-                    <div className="bg-blue-50 text-blue-800 p-4 rounded-lg text-sm border border-blue-100">
-                        <strong>Instructions:</strong> Paste your table from Excel below.
-                        <ul className="list-disc ml-5 mt-2 opacity-80">
-                            <li>To <strong>Update</strong> existing cargos, ensure the <strong>Strategy Name</strong> matches exactly.</li>
-                            <li>To <strong>Create</strong> new cargos, use a new or empty Strategy Name.</li>
-                            <li><strong>Realized Cargos:</strong> Pasted prices/revenues/P&L are preserved. Formulas are ignored.</li>
-                            <li><strong>Unrealized Cargos:</strong> Formulas are used to calculate fresh prices from Market Data.</li>
-                        </ul>
-                    </div>
                     <textarea 
                         className="flex-1 w-full p-4 border border-slate-300 rounded-lg font-mono text-xs focus:ring-2 focus:ring-blue-500/20 focus:border-blue-500 whitespace-pre"
-                        placeholder={`Strategy Name\tSource\tVolume\tSell Formula\tStatus\nSN2024_Existing\t\t55000\tJKM + 0.1\tUnrealized\t(Recalculates Price)\nPast_Cargo\tQatar\t60000\t\tRealized\t(Uses existing/pasted numbers)`}
+                        placeholder="Strategy Name | Source | Volume | Status | Window Start | Window End"
                         value={inputText}
                         onChange={(e) => setInputText(e.target.value)}
                     />
@@ -287,42 +335,35 @@ export const BulkImportModal: React.FC<BulkImportModalProps> = ({ existingProfil
                     <table className="w-full text-xs text-left bg-white whitespace-nowrap">
                         <thead className="text-xs text-slate-500 uppercase bg-slate-100 border-b border-slate-200">
                             <tr>
+                                <th className="px-4 py-3 text-center w-10 bg-slate-100 border-r border-slate-200">
+                                    <input type="checkbox" checked={isAllSelected} onChange={toggleAll} className="rounded border-slate-300 text-blue-600 focus:ring-blue-500 cursor-pointer" />
+                                </th>
                                 <th className="px-4 py-3 font-bold text-center">Status</th>
                                 <th className="px-4 py-3 font-bold">Strategy</th>
-                                <th className="px-4 py-3 font-bold">Source</th>
-                                <th className="px-4 py-3 font-bold">Buyer</th>
-                                <th className="px-4 py-3 font-bold">Date</th>
+                                <th className="px-4 py-3 font-bold">Load Win Start</th>
+                                <th className="px-4 py-3 font-bold">Load Win End</th>
+                                <th className="px-4 py-3 font-bold">Del Win Start</th>
+                                <th className="px-4 py-3 font-bold">Del Win End</th>
                                 <th className="px-4 py-3 font-bold text-right">Vol</th>
-                                <th className="px-4 py-3 font-bold">Sell Formula</th>
-                                <th className="px-4 py-3 font-bold text-right">Price</th>
                                 <th className="px-4 py-3 font-bold text-right">P&L</th>
                             </tr>
                         </thead>
                         <tbody className="divide-y divide-slate-100">
                             {parsedRows.map((row, i) => (
-                                <tr key={i} className={`hover:bg-slate-50 ${row._status === 'Update' ? 'bg-blue-50/30' : ''}`}>
-                                    <td className="px-4 py-2 text-center">
-                                        <span className={`px-2 py-0.5 rounded text-[10px] font-bold uppercase tracking-wider ${
-                                            row._status === 'Update' 
-                                            ? 'bg-blue-100 text-blue-700 border border-blue-200' 
-                                            : 'bg-emerald-100 text-emerald-700 border border-emerald-200'
-                                        }`}>
-                                            {row._status}
-                                        </span>
-                                        <div className="mt-1 text-[9px] text-slate-400 uppercase">{row.pnlBucket}</div>
+                                <tr key={i} className={`hover:bg-slate-50 transition-colors ${row._status === 'Update' ? 'bg-blue-50/10' : row._status === 'New' ? 'bg-emerald-50/10' : ''} ${!selectedIndices.has(i) ? 'opacity-50 grayscale' : ''}`}>
+                                    <td className="px-4 py-2 text-center align-middle border-r border-slate-100">
+                                        <input type="checkbox" checked={selectedIndices.has(i)} onChange={() => toggleRow(i)} className="rounded border-slate-300 text-blue-600 focus:ring-blue-500 cursor-pointer" />
                                     </td>
-                                    <td className="px-4 py-2 font-medium text-slate-700">{row.strategyName}</td>
-                                    <td className="px-4 py-2 text-slate-600">{row.source}</td>
-                                    <td className="px-4 py-2 text-slate-600">{row.buyer}</td>
-                                    <td className="px-4 py-2 text-slate-600">{row.deliveryDate}</td>
-                                    <td className="px-4 py-2 text-slate-600 text-right">{row.deliveredVolume?.toLocaleString()}</td>
-                                    <td className="px-4 py-2 text-slate-600 font-mono text-[10px]">{row.sellFormula}</td>
-                                    <td className="px-4 py-2 text-slate-600 text-right font-mono text-[10px]">
-                                        {row.absoluteSellPrice ? `$${row.absoluteSellPrice.toFixed(2)}` : '-'}
+                                    <td className="px-4 py-2 text-center align-middle">
+                                        <span className={`px-2 py-0.5 rounded text-[10px] font-bold uppercase tracking-wider block w-max mx-auto ${row._status === 'Update' ? 'bg-blue-100 text-blue-700' : 'bg-emerald-100 text-emerald-700'}`}>{row._status}</span>
                                     </td>
-                                    <td className={`px-4 py-2 font-bold text-right ${row.finalTotalPnL >= 0 ? 'text-emerald-600' : 'text-rose-600'}`}>
-                                        {row.finalTotalPnL?.toLocaleString()}
-                                    </td>
+                                    <td className="px-4 py-2 font-medium text-slate-700 align-middle">{row.strategyName}</td>
+                                    <td className="px-4 py-2 align-middle"><DiffCell row={row} rowIndex={i} field="loadingWindowStart" isIgnored={ignoredChanges[i]?.has("loadingWindowStart")} onToggle={toggleFieldChange} /></td>
+                                    <td className="px-4 py-2 align-middle"><DiffCell row={row} rowIndex={i} field="loadingWindowEnd" isIgnored={ignoredChanges[i]?.has("loadingWindowEnd")} onToggle={toggleFieldChange} /></td>
+                                    <td className="px-4 py-2 align-middle"><DiffCell row={row} rowIndex={i} field="deliveryWindowStart" isIgnored={ignoredChanges[i]?.has("deliveryWindowStart")} onToggle={toggleFieldChange} /></td>
+                                    <td className="px-4 py-2 align-middle"><DiffCell row={row} rowIndex={i} field="deliveryWindowEnd" isIgnored={ignoredChanges[i]?.has("deliveryWindowEnd")} onToggle={toggleFieldChange} /></td>
+                                    <td className="px-4 py-2 text-right align-middle"><DiffCell row={row} rowIndex={i} field="deliveredVolume" format={(v) => v?.toLocaleString()} isIgnored={ignoredChanges[i]?.has("deliveredVolume")} onToggle={toggleFieldChange} /></td>
+                                    <td className={`px-4 py-2 font-bold text-right align-middle ${row.finalTotalPnL >= 0 ? 'text-emerald-600' : 'text-rose-600'}`}><DiffCell row={row} rowIndex={i} field="finalTotalPnL" format={(v) => v?.toLocaleString()} isIgnored={ignoredChanges[i]?.has("finalTotalPnL")} onToggle={toggleFieldChange} /></td>
                                 </tr>
                             ))}
                         </tbody>
@@ -330,30 +371,11 @@ export const BulkImportModal: React.FC<BulkImportModalProps> = ({ existingProfil
                 </div>
             )}
         </div>
-
         <div className="p-6 border-t border-slate-100 bg-white flex justify-end gap-3">
              {step === 'paste' ? (
-                <button 
-                    onClick={handleParse}
-                    className="px-6 py-2 bg-blue-600 hover:bg-blue-700 text-white font-medium rounded-lg shadow-lg shadow-blue-600/20"
-                >
-                    Parse Table
-                </button>
+                <button onClick={handleParse} className="px-6 py-2 bg-blue-600 hover:bg-blue-700 text-white font-medium rounded-lg shadow-lg">Review Changes</button>
              ) : (
-                <>
-                    <button 
-                        onClick={() => setStep('paste')}
-                        className="px-4 py-2 text-slate-600 font-medium hover:bg-slate-100 rounded-lg"
-                    >
-                        Back
-                    </button>
-                    <button 
-                        onClick={handleFinish}
-                        className="px-6 py-2 bg-emerald-600 hover:bg-emerald-700 text-white font-medium rounded-lg shadow-lg shadow-emerald-600/20"
-                    >
-                        Process {parsedRows.length} Cargos
-                    </button>
-                </>
+                <button onClick={handleFinish} className="px-6 py-2 bg-emerald-600 hover:bg-emerald-700 text-white font-medium rounded-lg shadow-lg disabled:opacity-50" disabled={selectedIndices.size === 0}>Confirm {selectedIndices.size} Updates</button>
              )}
         </div>
       </div>

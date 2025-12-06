@@ -1,3 +1,4 @@
+
 export enum PnLBucket {
   Realized = 'Realized',
   Unrealized = 'Unrealized',
@@ -31,6 +32,14 @@ export interface CargoProfile {
   finalPhysicalPnL: number;
   totalHedgingPnL: number;
   finalTotalPnL: number;
+  volumeUnit?: string;
+  pricingEndDate?: string;
+  
+  // Date Windows
+  loadingWindowStart?: string;
+  loadingWindowEnd?: string;
+  deliveryWindowStart?: string;
+  deliveryWindowEnd?: string;
 }
 
 export const EmptyCargoProfile: Omit<CargoProfile, 'id'> = {
@@ -59,4 +68,9 @@ export const EmptyCargoProfile: Omit<CargoProfile, 'id'> = {
   finalPhysicalPnL: 0,
   totalHedgingPnL: 0,
   finalTotalPnL: 0,
+  volumeUnit: 'MMBtu',
+  loadingWindowStart: '',
+  loadingWindowEnd: '',
+  deliveryWindowStart: '',
+  deliveryWindowEnd: ''
 };
