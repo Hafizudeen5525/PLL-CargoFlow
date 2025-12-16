@@ -10,7 +10,7 @@
     "preview": "vite preview"
   },
   "dependencies": {
-    "@google/genai": "^0.1.1",
+    "@google/genai": "*",
     "framer-motion": "^11.0.8",
     "mammoth": "^1.7.1",
     "react": "^18.2.0",
