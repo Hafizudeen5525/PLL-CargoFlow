@@ -1,6 +1,7 @@
-import React, { useState, useEffect, useCallback } from 'react';
+
+import React, { useState, useEffect, useCallback, useMemo } from 'react';
 import { CargoProfile, EmptyCargoProfile, PnLBucket } from '../types';
-import { recalculateProfile, actualizeProfile, getMarketData, evaluateFormula, generateStrategyName, detectUnit } from '../services/calculationService';
+import { recalculateProfile, actualizeProfile, getMarketData, evaluateFormula, generateStrategyName, detectUnit, analyzeFormulaStructure } from '../services/calculationService';
 import { apiClient } from '../services/apiClient';
 import { toast } from 'react-hot-toast';
 import { motion } from 'framer-motion';
@@ -58,12 +59,14 @@ interface FormulaInputProps {
     onChange: (e: React.ChangeEvent<HTMLInputElement>) => void;
     onIndexClick: (index: string, field: 'sellFormula' | 'buyFormula') => void;
     availableIndices: string[];
+    isRealized: boolean;
+    warnings?: string[];
 }
 
-const FormulaInput: React.FC<FormulaInputProps> = React.memo(({ label, name, value, resultValue, onChange, onIndexClick, availableIndices }) => (
-    <div className="space-y-2 p-4 rounded-xl bg-slate-50 border border-slate-100">
+const FormulaInput: React.FC<FormulaInputProps> = React.memo(({ label, name, value, resultValue, onChange, onIndexClick, availableIndices, isRealized, warnings }) => (
+    <div className={`space-y-2 p-4 rounded-xl border transition-colors ${warnings && warnings.length > 0 ? 'bg-amber-50 border-amber-200' : 'bg-slate-50 border-slate-100'}`}>
         <div className="flex justify-between items-center mb-1">
-            <label className="text-xs font-bold text-slate-500 uppercase">{label}</label>
+            <label className={`text-xs font-bold uppercase ${warnings && warnings.length > 0 ? 'text-amber-600' : 'text-slate-500'}`}>{label}</label>
             <span className="text-xs font-mono font-medium text-slate-400">
                 Current: <span className={resultValue ? 'text-blue-600' : ''}>${(resultValue || 0).toFixed(2)}</span>
             </span>
@@ -75,7 +78,7 @@ const FormulaInput: React.FC<FormulaInputProps> = React.memo(({ label, name, val
                 value={value ?? ''}
                 onChange={onChange}
                 placeholder="e.g. 95% NBP"
-                className="w-full px-3 py-2 rounded-lg border border-slate-200 focus:outline-none focus:ring-2 focus:ring-indigo-500/20 focus:border-indigo-500 text-sm"
+                className={`w-full px-3 py-2 rounded-lg border focus:outline-none focus:ring-2 text-sm ${warnings && warnings.length > 0 ? 'border-amber-300 focus:ring-amber-500/20 focus:border-amber-500' : 'border-slate-200 focus:ring-indigo-500/20 focus:border-indigo-500'}`}
             />
             <div className="absolute right-3 top-2.5">
                 {resultValue ? (
@@ -86,22 +89,35 @@ const FormulaInput: React.FC<FormulaInputProps> = React.memo(({ label, name, val
             </div>
         </div>
         
-        <div className="flex flex-wrap gap-1.5 mt-2">
-            <span className="text-[10px] text-slate-400 flex items-center mr-1">Available:</span>
-            {availableIndices.slice(0, 5).map(idx => (
-                <button
-                    key={idx}
-                    type="button"
-                    onClick={() => onIndexClick(idx, name)}
-                    className="px-2 py-0.5 bg-white border border-slate-200 rounded text-[10px] font-medium text-slate-600 hover:border-indigo-300 hover:text-indigo-600 hover:shadow-sm transition-all active:scale-95"
-                >
-                    {idx}
-                </button>
-            ))}
-            <button type="button" onClick={() => onIndexClick('+', name)} className="px-2 py-0.5 bg-slate-100 rounded text-[10px] text-slate-500 hover:bg-slate-200">+</button>
-            <button type="button" onClick={() => onIndexClick('-', name)} className="px-2 py-0.5 bg-slate-100 rounded text-[10px] text-slate-500 hover:bg-slate-200">-</button>
-            <button type="button" onClick={() => onIndexClick('20%', name)} className="px-2 py-0.5 bg-slate-100 rounded text-[10px] text-slate-500 hover:bg-slate-200">%</button>
-        </div>
+        {warnings && warnings.length > 0 && (
+            <div className="mt-2 space-y-1">
+                {warnings.map((w, i) => (
+                    <div key={i} className="flex items-start gap-1.5 text-[10px] text-amber-700 font-medium">
+                        <svg className="w-3 h-3 shrink-0 mt-0.5" fill="none" stroke="currentColor" viewBox="0 0 24 24"><path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M12 9v2m0 4h.01m-6.938 4h13.856c1.54 0 2.502-1.667 1.732-3L13.732 4c-.77-1.333-2.694-1.333-3.464 0L3.34 16c-.77 1.333.192 3 1.732 3z" /></svg>
+                        {w}
+                    </div>
+                ))}
+            </div>
+        )}
+        
+        {!isRealized && (
+            <div className="flex flex-wrap gap-1.5 mt-2">
+                <span className="text-[10px] text-slate-400 flex items-center mr-1">Available:</span>
+                {availableIndices.slice(0, 5).map(idx => (
+                    <button
+                        key={idx}
+                        type="button"
+                        onClick={() => onIndexClick(idx, name)}
+                        className="px-2 py-0.5 bg-white border border-slate-200 rounded text-[10px] font-medium text-slate-600 hover:border-indigo-300 hover:text-indigo-600 hover:shadow-sm transition-all active:scale-95"
+                    >
+                        {idx}
+                    </button>
+                ))}
+                <button type="button" onClick={() => onIndexClick('+', name)} className="px-2 py-0.5 bg-slate-100 rounded text-[10px] text-slate-500 hover:bg-slate-200">+</button>
+                <button type="button" onClick={() => onIndexClick('-', name)} className="px-2 py-0.5 bg-slate-100 rounded text-[10px] text-slate-500 hover:bg-slate-200">-</button>
+                <button type="button" onClick={() => onIndexClick('20%', name)} className="px-2 py-0.5 bg-slate-100 rounded text-[10px] text-slate-500 hover:bg-slate-200">%</button>
+            </div>
+        )}
     </div>
 ));
 
@@ -133,6 +149,10 @@ export const CargoForm: React.FC<CargoFormProps> = ({ initialData, onSave, onCan
 
   const unit = formData.volumeUnit || detectUnit(formData.sellFormula || formData.buyFormula);
 
+  // Compute warnings on render
+  const sellWarnings = useMemo(() => analyzeFormulaStructure(formData.sellFormula).warnings, [formData.sellFormula]);
+  const buyWarnings = useMemo(() => analyzeFormulaStructure(formData.buyFormula).warnings, [formData.buyFormula]);
+
   useEffect(() => {
     if (initialData) {
       const { id, ...rest } = initialData;
@@ -153,14 +173,14 @@ export const CargoForm: React.FC<CargoFormProps> = ({ initialData, onSave, onCan
 
       // Auto-Populate Month
       if (name === 'deliveryDate' && typeof newValue === 'string' && newValue) {
-          const monthStr = formatMonthStr(newValue);
+          const monthStr = formatMonthStr(newValue as string);
           if (monthStr) tempProfile.deliveryMonth = monthStr;
           // Auto set window to single day if empty
           if (!tempProfile.deliveryWindowStart) tempProfile.deliveryWindowStart = newValue;
           if (!tempProfile.deliveryWindowEnd) tempProfile.deliveryWindowEnd = newValue;
       }
       if (name === 'loadingDate' && typeof newValue === 'string' && newValue) {
-          const monthStr = formatMonthStr(newValue);
+          const monthStr = formatMonthStr(newValue as string);
           if (monthStr) tempProfile.loadingMonth = monthStr;
           if (!tempProfile.loadingWindowStart) tempProfile.loadingWindowStart = newValue;
           if (!tempProfile.loadingWindowEnd) tempProfile.loadingWindowEnd = newValue;
@@ -174,24 +194,34 @@ export const CargoForm: React.FC<CargoFormProps> = ({ initialData, onSave, onCan
           tempProfile.deliveryWindowEnd = newValue;
       }
 
-      // Recalc logic
-      if (name === 'sellFormula' || name === 'deliveryDate') {
-          const formula = name === 'sellFormula' ? newValue : prev.sellFormula;
-          const date = name === 'deliveryDate' ? newValue : prev.deliveryDate;
-          const price = evaluateFormula(formula, date);
-          if (price !== null) {
-              tempProfile.absoluteSellPrice = price;
-              if (tempProfile.deliveredVolume) tempProfile.salesRevenue = tempProfile.deliveredVolume * price;
-          }
-      }
+      // Recalc logic: Only if NOT realized. 
+      if (tempProfile.pnlBucket !== PnLBucket.Realized) {
+          const volDel = parseFloat(tempProfile.deliveredVolume || 0);
+          const volLoad = parseFloat(tempProfile.loadedVolume || 0);
+          const curUnit = tempProfile.volumeUnit || unit;
 
-      if (name === 'buyFormula' || name === 'loadingDate') {
-          const formula = name === 'buyFormula' ? newValue : prev.buyFormula;
-          const date = name === 'loadingDate' ? newValue : (prev.loadingDate || prev.deliveryDate);
-          const price = evaluateFormula(formula, date);
-          if (price !== null) {
-              tempProfile.absoluteBuyPrice = price;
-              if (tempProfile.loadedVolume) tempProfile.reconciledPurchaseCost = tempProfile.loadedVolume * price;
+          if (name === 'sellFormula' || name === 'deliveryDate' || name === 'deliveredVolume') {
+              const formula = name === 'sellFormula' ? newValue : prev.sellFormula;
+              const date = name === 'deliveryDate' ? newValue : prev.deliveryDate;
+              const v = name === 'deliveredVolume' ? parseFloat(newValue as string) : volDel;
+              
+              const price = evaluateFormula(formula as string, date as string, undefined, v, curUnit);
+              if (price !== null) {
+                  tempProfile.absoluteSellPrice = price;
+                  if (v) tempProfile.salesRevenue = v * price;
+              }
+          }
+
+          if (name === 'buyFormula' || name === 'loadingDate' || name === 'loadedVolume') {
+              const formula = name === 'buyFormula' ? newValue : prev.buyFormula;
+              const date = name === 'loadingDate' ? newValue : (prev.loadingDate || prev.deliveryDate);
+              const v = name === 'loadedVolume' ? parseFloat(newValue as string) : volLoad;
+
+              const price = evaluateFormula(formula as string, date as string, undefined, v, curUnit);
+              if (price !== null) {
+                  tempProfile.absoluteBuyPrice = price;
+                  if (v) tempProfile.reconciledPurchaseCost = v * price;
+              }
           }
       }
 
@@ -220,10 +250,12 @@ export const CargoForm: React.FC<CargoFormProps> = ({ initialData, onSave, onCan
           [name]: newValue 
       };
     });
-  }, []);
+  }, [unit]);
 
   const handleIndexClick = useCallback((indexName: string, targetField: 'sellFormula' | 'buyFormula') => {
     setFormData((prev: any) => {
+        if (prev.pnlBucket === PnLBucket.Realized) return prev;
+
         const currentVal = prev[targetField] || '';
         const needsSpace = currentVal.length > 0 && !currentVal.endsWith(' ');
         let suffix = indexName;
@@ -232,7 +264,10 @@ export const CargoForm: React.FC<CargoFormProps> = ({ initialData, onSave, onCan
         
         const updatedProfile = { ...prev, [targetField]: updatedVal };
         const date = targetField === 'sellFormula' ? prev.deliveryDate : (prev.loadingDate || prev.deliveryDate);
-        const price = evaluateFormula(updatedVal, date);
+        const curUnit = prev.volumeUnit || detectUnit(prev.sellFormula || prev.buyFormula);
+        const vol = targetField === 'sellFormula' ? prev.deliveredVolume : prev.loadedVolume;
+
+        const price = evaluateFormula(updatedVal, date, undefined, vol, curUnit);
         
         if (price !== null) {
             if (targetField === 'sellFormula') {
@@ -307,6 +342,7 @@ export const CargoForm: React.FC<CargoFormProps> = ({ initialData, onSave, onCan
   };
 
   const mergeData = (aiData: Partial<CargoProfile>) => {
+    if (!aiData) return; // Guard against null AI response
     setFormData((prev: any) => {
       let merged = {
         ...prev,
@@ -427,6 +463,7 @@ export const CargoForm: React.FC<CargoFormProps> = ({ initialData, onSave, onCan
                         </button>
                     </InputGroup>
                     <InputGroup label="Source" name="source" value={formData.source} onChange={handleChange} />
+                    <InputGroup label="Manual Group" name="manualGroup" value={formData.manualGroup} onChange={handleChange} hint="Optional: Portfolio or custom group name" />
                     <InputGroup label="Buyer" name="buyer" value={formData.buyer} onChange={handleChange} />
                     
                     <div className="flex flex-col group">
@@ -502,6 +539,8 @@ export const CargoForm: React.FC<CargoFormProps> = ({ initialData, onSave, onCan
                         onChange={handleChange} 
                         onIndexClick={handleIndexClick}
                         availableIndices={availableIndices}
+                        isRealized={formData.pnlBucket === PnLBucket.Realized}
+                        warnings={sellWarnings}
                     />
                     <FormulaInput 
                         label="Buy Formula" 
@@ -511,6 +550,8 @@ export const CargoForm: React.FC<CargoFormProps> = ({ initialData, onSave, onCan
                         onChange={handleChange} 
                         onIndexClick={handleIndexClick}
                         availableIndices={availableIndices}
+                        isRealized={formData.pnlBucket === PnLBucket.Realized}
+                        warnings={buyWarnings}
                     />
                 </div>
             </div>

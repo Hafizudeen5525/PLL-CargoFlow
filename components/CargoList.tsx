@@ -2,7 +2,7 @@
 import React, { useState, useMemo } from 'react';
 import { CargoProfile, PnLBucket } from '../types';
 import { motion, AnimatePresence } from 'framer-motion';
-import { detectUnit } from '../services/calculationService';
+import { detectUnit, analyzeFormulaStructure } from '../services/calculationService';
 import { WorldMap } from './WorldMap';
 import { CalendarView } from './CalendarView';
 
@@ -12,18 +12,22 @@ interface CargoListProps {
   onDelete: (id: string) => void;
   onActualize: (profile: CargoProfile) => void;
   onBulkDelete: (ids: Set<string>) => void;
+  onBulkUpdate?: (ids: Set<string>, updates: Partial<CargoProfile>) => void;
 }
 
 type SortKey = keyof CargoProfile;
 type ViewMode = 'table' | 'map' | 'calendar';
 
-export const CargoList: React.FC<CargoListProps> = ({ profiles, onEdit, onDelete, onActualize, onBulkDelete }) => {
+export const CargoList: React.FC<CargoListProps> = ({ profiles, onEdit, onDelete, onActualize, onBulkDelete, onBulkUpdate }) => {
   const [viewMode, setViewMode] = useState<ViewMode>('table');
   const [selectedIds, setSelectedIds] = useState<Set<string>>(new Set());
   const [sortConfig, setSortConfig] = useState<{ key: SortKey | null; direction: 'asc' | 'desc' }>({
     key: null,
     direction: 'asc',
   });
+  
+  // Bulk Assign State
+  const [bulkGroupInput, setBulkGroupInput] = useState('');
 
   const sortedProfiles = useMemo(() => {
     let sortableItems = [...profiles];
@@ -87,14 +91,34 @@ export const CargoList: React.FC<CargoListProps> = ({ profiles, onEdit, onDelete
           setSelectedIds(new Set());
       }
   };
+  
+  const handleBulkAssignGroup = () => {
+      if (selectedIds.size > 0 && bulkGroupInput.trim() && onBulkUpdate) {
+          onBulkUpdate(selectedIds, { manualGroup: bulkGroupInput.trim() });
+          setBulkGroupInput('');
+          setSelectedIds(new Set());
+      }
+  };
 
   const downloadCSV = () => {
     if (sortedProfiles.length === 0) return;
+    
+    // EXACT HEADERS REQUESTED BY USER
     const headers = [
-        "Strategy Name", "Source", "Buyer", "Optimized", "Incoterms", "SRC",
-        "Delivery Date", "Delivered Volume", "Volume Unit", "Loading Date", "Loaded Volume",
-        "Sell Formula", "Sell Price", "Sales Revenue", 
-        "Buy Formula", "Buy Price", "Purchase Cost", 
+        "Strategy Name", "Buyer", "Optimized", 
+        "Delivery Date", "Delivery Month", "Delivered Volume", 
+        
+        // Sell Side - Specific Structure
+        "Sell Formula", "Absolute Sell Price", "Sales Revenue",
+        "Sell Price 1 Weightage", "Sell Price 1", "Sell Price 1 slope", "Sell Price Index 1", "Sell Price 1 Month Definition", "Sell Price 1 constant",
+        "Sell Price 2 Weightage", "Sell Price 2", "Sell Price 2 slope", "Sell Price Index 2", "Sell Price 2 Month Definition", "Sell Price 2 constant",
+        "Sell Price 3 Weightage", "Sell Price 3", "Sell Price 3 slope", "Sell Price Index 3", "Sell Price 3 Month Definition", "Sell Price 3 constant",
+        
+        // Buy Side - Mirrored Structure for completeness
+        "Buy Formula", "Absolute Buy Price", "Purchase Cost",
+        "Buy Price 1 Weightage", "Buy Price 1 slope", "Buy Price Index 1", "Buy Price 1 Month Definition", "Buy Price 1 constant",
+        "Buy Price 2 Weightage", "Buy Price 2", "Buy Price 2 slope", "Buy Price Index 2", "Buy Price 2 Month Definition", "Buy Price 2 constant",
+        
         "Status", "Physical P&L", "Hedging P&L", "Total P&L"
     ];
 
@@ -104,13 +128,54 @@ export const CargoList: React.FC<CargoListProps> = ({ profiles, onEdit, onDelete
     };
 
     const rows = sortedProfiles.map(p => {
-        const unit = detectUnit(p.sellFormula || p.buyFormula);
+        const unit = p.volumeUnit || detectUnit(p.sellFormula || p.buyFormula);
+        
+        // Analyze Formulas with context
+        // NOTE: We pass volume so analyzeFormulaStructure can determine active tier components if using split-row logic
+        // or return all parts if no clear split.
+        const sellAnalysis = analyzeFormulaStructure(p.sellFormula, p.deliveryDate, undefined, p.deliveredVolume, unit);
+        const buyAnalysis = analyzeFormulaStructure(p.buyFormula, p.loadingDate || p.deliveryDate, undefined, p.loadedVolume, unit);
+
+        // Helper to safely get part data
+        const getPart = (parts: any[], index: number) => {
+            const part = parts[index] || {};
+            return {
+                w: part.weightage || (parts.length > index ? '100%' : ''),
+                s: part.slope || '',
+                i: part.index || '',
+                m: part.monthDef || '',
+                c: part.constant || '',
+                v: part.componentValue // Value
+            };
+        };
+
+        const s1 = getPart(sellAnalysis.parts, 0);
+        const s2 = getPart(sellAnalysis.parts, 1);
+        const s3 = getPart(sellAnalysis.parts, 2);
+        
+        const b1 = getPart(buyAnalysis.parts, 0);
+        const b2 = getPart(buyAnalysis.parts, 1);
+
+        // Attach global constants to first part if no parts exist, or separate?
+        if (sellAnalysis.parts.length === 0 && sellAnalysis.globalConstant !== '0') s1.c = sellAnalysis.globalConstant;
+        if (buyAnalysis.parts.length === 0 && buyAnalysis.globalConstant !== '0') b1.c = buyAnalysis.globalConstant;
+
         return [
-            q(p.strategyName), q(p.source), q(p.buyer), p.optimized ? "Yes" : "No", q(p.incoterms), q(p.src),
-            p.deliveryDate || '', p.deliveredVolume || 0, unit, p.loadingDate || '', p.loadedVolume || 0,
-            q(p.sellFormula), p.absoluteSellPrice || 0, p.finalSalesRevenue || 0,
-            q(p.buyFormula), p.absoluteBuyPrice || 0, p.reconciledPurchaseCost || 0,
-            p.pnlBucket, p.finalPhysicalPnL || 0, p.totalHedgingPnL || 0, p.finalTotalPnL || 0
+            q(p.strategyName), q(p.buyer), p.optimized ? "Yes" : "No",
+            p.deliveryDate || '', p.deliveryMonth || '', p.deliveredVolume?.toLocaleString() || '0',
+            
+            // Sell Side
+            q(p.sellFormula), p.absoluteSellPrice?.toFixed(3) || '', p.finalSalesRevenue?.toFixed(2) || '',
+            q(s1.w), s1.v ? s1.v.toFixed(3) : '', q(s1.s), q(s1.i), q(s1.m), q(s1.c),
+            q(s2.w), s2.v ? s2.v.toFixed(3) : '', q(s2.s), q(s2.i), q(s2.m), q(s2.c),
+            q(s3.w), s3.v ? s3.v.toFixed(3) : '', q(s3.s), q(s3.i), q(s3.m), q(s3.c),
+            
+            // Buy Side
+            q(p.buyFormula), p.absoluteBuyPrice?.toFixed(3) || '', p.reconciledPurchaseCost?.toFixed(2) || '',
+            q(b1.w), q(b1.s), q(b1.i), q(b1.m), q(b1.c),
+            q(b2.w), q(b2.s), q(b2.i), q(b2.m), q(b2.c),
+            
+            p.pnlBucket, p.finalPhysicalPnL?.toFixed(2) || 0, p.totalHedgingPnL || 0, p.finalTotalPnL?.toFixed(2) || 0
         ];
     });
 
@@ -167,13 +232,33 @@ export const CargoList: React.FC<CargoListProps> = ({ profiles, onEdit, onDelete
                 {sortedProfiles.length} records found
             </span>
             {selectedIds.size > 0 && (
-                 <button 
-                    onClick={handleBulkDeleteClick}
-                    className="text-xs font-medium text-white bg-rose-600 hover:bg-rose-700 px-3 py-1.5 rounded-lg transition-colors flex items-center gap-2 shadow-sm ml-2"
-                >
-                    <svg className="w-3.5 h-3.5" fill="none" stroke="currentColor" viewBox="0 0 24 24"><path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M19 7l-.867 12.142A2 2 0 0116.138 21H7.862a2 2 0 01-1.995-1.858L5 7m5 4v6m4-6v6m1-10V4a1 1 0 00-1-1h-4a1 1 0 00-1 1v3M4 7h16" /></svg>
-                    Delete Selected ({selectedIds.size})
-                </button>
+                <div className="flex items-center gap-2 ml-4 pl-4 border-l border-slate-200">
+                     <span className="text-xs font-bold text-slate-500">{selectedIds.size} Selected</span>
+                     
+                     {/* Bulk Group Assign */}
+                     <div className="flex items-center rounded-lg border border-slate-300 bg-white overflow-hidden focus-within:ring-2 focus-within:ring-blue-500/20">
+                         <input 
+                            type="text" 
+                            placeholder="Assign Group..."
+                            className="text-xs border-none py-1 px-2 w-32 focus:ring-0 text-slate-700"
+                            value={bulkGroupInput}
+                            onChange={(e) => setBulkGroupInput(e.target.value)}
+                         />
+                         <button 
+                            onClick={handleBulkAssignGroup}
+                            className="bg-indigo-50 hover:bg-indigo-100 text-indigo-600 px-2 py-1.5 border-l border-slate-200 text-xs font-bold"
+                         >
+                            Set
+                         </button>
+                     </div>
+
+                     <button 
+                        onClick={handleBulkDeleteClick}
+                        className="text-xs font-medium text-white bg-rose-600 hover:bg-rose-700 px-3 py-1.5 rounded-lg transition-colors flex items-center gap-2 shadow-sm"
+                    >
+                        <svg className="w-3.5 h-3.5" fill="none" stroke="currentColor" viewBox="0 0 24 24"><path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M19 7l-.867 12.142A2 2 0 0116.138 21H7.862a2 2 0 01-1.995-1.858L5 7m5 4v6m4-6v6m1-10V4a1 1 0 00-1-1h-4a1 1 0 00-1 1v3M4 7h16" /></svg>
+                    </button>
+                </div>
             )}
         </div>
 
@@ -209,6 +294,9 @@ export const CargoList: React.FC<CargoListProps> = ({ profiles, onEdit, onDelete
                                 </th>
                                 <th className="px-6 py-4 font-bold cursor-pointer hover:bg-slate-100" onClick={() => requestSort('strategyName')}>
                                     <div className="flex items-center">Strategy / ID <SortIcon column="strategyName" /></div>
+                                </th>
+                                <th className="px-6 py-4 font-bold cursor-pointer hover:bg-slate-100" onClick={() => requestSort('manualGroup')}>
+                                    <div className="flex items-center">Group <SortIcon column="manualGroup" /></div>
                                 </th>
                                 <th className="px-6 py-4 font-bold cursor-pointer hover:bg-slate-100" onClick={() => requestSort('buyer')}>
                                     <div className="flex items-center">Buyer <SortIcon column="buyer" /></div>
@@ -250,6 +338,13 @@ export const CargoList: React.FC<CargoListProps> = ({ profiles, onEdit, onDelete
                                                     {profile.source || <span className="text-rose-400 italic">No Source</span>}
                                                 </span>
                                             </div>
+                                        </td>
+                                        <td className="px-6 py-4 text-slate-600">
+                                            {profile.manualGroup ? (
+                                                <span className="inline-flex items-center px-2 py-0.5 rounded text-xs font-medium bg-slate-100 text-slate-600 border border-slate-200">
+                                                    {profile.manualGroup}
+                                                </span>
+                                            ) : <span className="text-slate-300 text-xs italic">None</span>}
                                         </td>
                                         <td className="px-6 py-4 text-slate-600">
                                             {profile.buyer || <span className="text-rose-400 italic text-xs border border-rose-200 bg-rose-50 px-2 py-0.5 rounded">Unmatched Sell</span>}

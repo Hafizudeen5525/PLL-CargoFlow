@@ -1,395 +1,583 @@
+
 import { CargoProfile, PnLBucket } from '../types';
 
-// Live Market Data State (Spot Prices) - Updated to more realistic 2024/2025 ranges
-let LIVE_MARKET_DATA: Record<string, number> = {
-  'BRIPE': 78.50,       
-  'JCC': 81.00,         
-  'Dated Brent': 79.20, 
-  'HH': 3.10,           
-  'NBP': 11.50,         
-  'JKM': 13.50,         
-  'TTF': 12.00,         
-  'AECO': 1.85,         
-  'STN 2': 2.10        
-};
-
 export interface ForwardCurveRow {
-  month: string; // Standardized YYYY-MM
-  prices: Record<string, number>;
+    month: string; // YYYY-MM
+    prices: Record<string, number>;
 }
 
-// STORAGE: Map of "Curve Date" (YYYY-MM-DD) -> Curve Data
-let CURVE_HISTORY: Record<string, ForwardCurveRow[]> = {};
-
-// Initialize from LocalStorage if available
-try {
-    const saved = localStorage.getItem('forward_curve_history');
-    if (saved) {
-        CURVE_HISTORY = JSON.parse(saved);
-    }
-} catch (e) {
-    console.warn("Failed to load curve history");
+export interface PricingMetadata {
+    weightage: string;
+    slope: string;
+    index: string;
+    monthDef: string;
+    constant: string;
+    rawText: string;
+    componentValue?: number;
+    warning?: string; 
 }
 
-// Aliases to map natural language to Market Data Keys
 const INDEX_ALIASES: Record<string, string> = {
-  'henry hub': 'HH',
-  'nymex hh': 'HH',
-  'us gas': 'HH',
-  'japan korea marker': 'JKM',
-  'asian spot': 'JKM',
-  'dutch ttf': 'TTF',
-  'title transfer facility': 'TTF',
-  'eur gas': 'TTF',
-  'national balancing point': 'NBP',
-  'uk gas': 'NBP',
-  'japan crude cocktail': 'JCC',
-  'brent': 'Dated Brent',
-  'dated brent': 'Dated Brent',
-  'ice brent': 'BRIPE',
-  'stn2': 'STN 2',
-  'stn 2': 'STN 2',
-  'station 2': 'STN 2'
+    'DUTCH TTF': 'TTF',
+    'TTF': 'TTF',
+    'HENRY HUB': 'HH',
+    'HH': 'HH',
+    'JKM': 'JKM',
+    'NBP': 'NBP',
+    'BRENT': 'BRIPE',
+    'DATED BRENT': 'Dated Brent',
+    'BRIPE': 'BRIPE',
+    'JCC': 'JCC',
+    'AECO': 'AECO',
+    'STN 2': 'STN 2',
+    'STATION 2': 'STN 2',
+    'WTI': 'WTI'
 };
 
-// Keywords that imply the unit is Barrels (bbl)
-// Removed 'stn' as Station 2 is a gas index
-const OIL_INDICES = ['brent', 'bripe', 'jcc'];
+const OIL_INDICES = ['Dated Brent', 'JCC', 'WTI', 'BRIPE'];
 
-export const getMarketData = () => ({ ...LIVE_MARKET_DATA });
+const STORAGE_KEY_CURVES = 'forward_curves_data';
 
-// Get the curve for a specific "As Of" date, or the most recent one if not specified
-export const getForwardCurve = (asOfDate?: string): ForwardCurveRow[] => {
-    if (asOfDate && CURVE_HISTORY[asOfDate]) {
-        return CURVE_HISTORY[asOfDate];
-    }
-    
-    // Find latest
-    const dates = Object.keys(CURVE_HISTORY).sort().reverse();
-    if (dates.length > 0) return CURVE_HISTORY[dates[0]];
-    
-    return [];
+const UNIT_TO_MMBTU: Record<string, number> = {
+    'MMBTU': 1,
+    'TBTU': 1000000,
+    'TB': 1000000, 
+    'MT': 52,      
+    'M3': 24,      
+    'CBM': 24,
+    'BBL': 5.8
 };
 
-export const getAvailableCurveDates = (): string[] => {
-    return Object.keys(CURVE_HISTORY).sort().reverse();
-};
+// --- Helper Functions ---
 
-export const updateMarketData = (newData: Record<string, number>) => {
-  LIVE_MARKET_DATA = { ...LIVE_MARKET_DATA, ...newData };
-};
-
-// Save a curve for a specific date (Historical Tracking)
-export const saveForwardCurve = (date: string, newCurve: ForwardCurveRow[]) => {
-  CURVE_HISTORY[date] = newCurve;
-  // Persist to LocalStorage (Mock DB)
-  localStorage.setItem('forward_curve_history', JSON.stringify(CURVE_HISTORY));
-};
-
-export const deleteForwardCurve = (date: string) => {
-    delete CURVE_HISTORY[date];
-    localStorage.setItem('forward_curve_history', JSON.stringify(CURVE_HISTORY));
-};
-
-/**
- * Detects the volume unit based on the formula's index.
- * Returns 'bbl' for oil indices, 'MMBtu' for gas indices.
- */
-export function detectUnit(formula: string): 'bbl' | 'MMBtu' {
-  if (!formula) return 'MMBtu';
-  const lower = formula.toLowerCase();
-  if (OIL_INDICES.some(idx => lower.includes(idx))) {
-    return 'bbl';
-  }
-  return 'MMBtu';
-}
-
-/**
- * Generates a standardized Strategy Name.
- * Format: SN<Year>_<Portfolio/Source>_<RandomID>(PLL)
- */
-export function generateStrategyName(data: Partial<CargoProfile>): string {
-  const dateStr = data.deliveryDate || data.loadingDate;
-  const year = dateStr ? new Date(dateStr).getFullYear() : new Date().getFullYear();
-  
-  let portfolio = (data.source || 'Portfolio').split(' ')[0].replace(/[^a-zA-Z0-9]/g, '');
-  if (portfolio.length < 3) portfolio = 'Global';
-
-  const id = Math.floor(Math.random() * 90 + 10); 
-
-  return `SN${year}_${portfolio}_${id}(PLL)`;
-}
-
-/**
- * Helper to normalize a date string (YYYY-MM-DD or Month-Year) to YYYY-MM
- * CRITICAL FIX: String slicing to avoid Timezone shifts (e.g. Nov 1 -> Oct 31)
- */
-function normalizeDateToMonth(dateStr: string): string {
+const getMonthStr = (dateStr?: string) => {
     if (!dateStr) return '';
-    
-    // 1. If strict ISO format YYYY-MM-DD, slice it directly
-    const isoMatch = dateStr.match(/^(\d{4})-(\d{2})/);
-    if (isoMatch) {
-        return `${isoMatch[1]}-${isoMatch[2]}`;
-    }
-
-    // 2. Fallback to Date parsing, using UTC to avoid local timezone offset
     const d = new Date(dateStr);
     if (isNaN(d.getTime())) return '';
-    return `${d.getUTCFullYear()}-${String(d.getUTCMonth() + 1).padStart(2, '0')}`;
+    return d.toISOString().slice(0, 7);
+};
+
+function generateMockCurve(): ForwardCurveRow[] {
+    const today = new Date();
+    const rows: ForwardCurveRow[] = [];
+    for (let i = 0; i < 24; i++) {
+        const d = new Date(today.getFullYear(), today.getMonth() + i, 1);
+        const month = d.toISOString().slice(0, 7);
+        rows.push({
+            month,
+            prices: {
+                'TTF': 10 + Math.random() * 5,
+                'JKM': 12 + Math.random() * 5,
+                'HH': 2.5 + Math.random(),
+                'NBP': 9 + Math.random() * 4,
+                'Dated Brent': 75 + Math.random() * 10,
+                'JCC': 80 + Math.random() * 10,
+                'AECO': 1.5 + Math.random(),
+                'STN 2': 1.4 + Math.random()
+            }
+        });
+    }
+    return rows;
 }
 
-/**
- * Estimates when the price for a cargo will be "fixed" (no longer floating).
- */
-export function estimatePricingDate(formula: string, deliveryDate: string): string {
-    if (!deliveryDate) return '';
-    if (!formula) return deliveryDate;
-    
-    const d = new Date(deliveryDate);
-    const idx = formula.toLowerCase();
-    
-    // JKM: ~15th of previous month
-    if (idx.includes('jkm')) {
-        d.setMonth(d.getMonth() - 1);
-        d.setDate(15);
-    }
-    // Gas Indices (TTF, NBP, HH): End of previous month usually (or during delivery month for spot)
-    // For exposure tracking, let's assume end of previous month is when 'forward' becomes 'spot'
-    else if (idx.includes('ttf') || idx.includes('nbp') || idx.includes('hh')) {
-         d.setDate(0); // Last day of previous month
-    }
-    // Oil: Average of delivery month, so fixes at end of delivery month
-    else if (detectUnit(formula) === 'bbl') {
-        d.setMonth(d.getMonth() + 1);
-        d.setDate(0);
-    }
-    
-    return d.toISOString().split('T')[0];
+function convertVolume(val: number, fromUnit: string, toUnit: string): number {
+    const fromFactor = UNIT_TO_MMBTU[fromUnit.toUpperCase()] || 1;
+    const toFactor = UNIT_TO_MMBTU[toUnit.toUpperCase()] || 1;
+    const mmbtu = val * fromFactor;
+    return mmbtu / toFactor;
 }
 
-/**
- * Aggregates Volume Exposure by Pricing Month
- */
-export function getExposureChartData(profiles: CargoProfile[]) {
-    const exposureMap = new Map<string, Record<string, number>>();
+// --- Exported Functions ---
+
+export function getAvailableCurveDates(): string[] {
+    try {
+        const raw = localStorage.getItem(STORAGE_KEY_CURVES);
+        if (!raw) return [];
+        const data = JSON.parse(raw);
+        if (!data || typeof data !== 'object') return [];
+        return Object.keys(data).sort().reverse();
+    } catch { return []; }
+}
+
+export function saveForwardCurve(date: string, curve: ForwardCurveRow[]) {
+    try {
+        const raw = localStorage.getItem(STORAGE_KEY_CURVES);
+        const data = raw ? JSON.parse(raw) : {};
+        const safeData = (data && typeof data === 'object') ? data : {};
+        safeData[date] = curve;
+        localStorage.setItem(STORAGE_KEY_CURVES, JSON.stringify(safeData));
+    } catch (e) { console.error(e); }
+}
+
+export function deleteForwardCurve(date: string) {
+    try {
+        const raw = localStorage.getItem(STORAGE_KEY_CURVES);
+        if (!raw) return;
+        const data = JSON.parse(raw);
+        if (!data || typeof data !== 'object') return;
+        delete data[date];
+        localStorage.setItem(STORAGE_KEY_CURVES, JSON.stringify(data));
+    } catch (e) { console.error(e); }
+}
+
+export function getForwardCurve(dateStr?: string): ForwardCurveRow[] {
+    try {
+        const raw = localStorage.getItem(STORAGE_KEY_CURVES);
+        if (!raw) return generateMockCurve();
+        const data = JSON.parse(raw);
+        if (!data || typeof data !== 'object') return generateMockCurve();
+        if (dateStr && data[dateStr]) return data[dateStr];
+        const dates = Object.keys(data).sort().reverse();
+        if (dates.length > 0) return data[dates[0]];
+        return generateMockCurve();
+    } catch {
+        return generateMockCurve();
+    }
+}
+
+export function getMarketData(): Record<string, number> {
+    const curve = getForwardCurve();
+    if (curve.length > 0) return curve[0].prices;
+    return {};
+}
+
+export function getPricesSnapshot(dateStr?: string): Record<string, number> {
+    const curve = getForwardCurve(dateStr);
+    if (curve.length > 0) return curve[0].prices;
+    return {};
+}
+
+export function detectUnit(formula?: string): string {
+    if (!formula) return 'MMBtu';
+    const upper = formula.toUpperCase();
+    if (upper.includes('BRENT') || upper.includes('JCC') || upper.includes('BBL')) return 'bbl';
+    if (upper.includes('MT') || upper.includes('TONNE')) return 'MT';
+    return 'MMBtu';
+}
+
+function getIndexPrice(index: string, dateStr: string, monthDef: string, curveDate?: string): number {
+    const curve = getForwardCurve(curveDate);
+    if (!dateStr) return 0;
     
-    profiles.forEach(p => {
-        // Only Unrealized counts as "Exposure"
-        if (p.pnlBucket === PnLBucket.Realized) return;
-        
-        const dateStr = p.pricingEndDate || estimatePricingDate(p.sellFormula || p.buyFormula, p.deliveryDate);
-        if (!dateStr) return;
-        
-        // Filter out past dates (no longer exposed)
-        if (new Date(dateStr) < new Date()) return; 
-        
-        const month = dateStr.slice(0, 7); // YYYY-MM
-        
-        if (!exposureMap.has(month)) {
-            exposureMap.set(month, { date: month } as any);
+    // Logic for monthDef: (n-1), (3,0,1), etc.
+    const d = new Date(dateStr);
+    const targetMonth = d.toISOString().slice(0, 7);
+    
+    const row = curve.find(r => r.month === targetMonth);
+    return row?.prices[index] || 0;
+}
+
+// Helper to sanitize and prepare formula for JS Evaluation
+function normalizeFormula(formula: string): string {
+    let expr = formula
+        .replace(/\[/g, '(')
+        .replace(/\]/g, ')')
+        .replace(/\$/g, '')
+        .replace(/Fixed:\s*/i, '')
+        .trim();
+
+    // 1. Convert percentages: 50% -> 0.5
+    // Regex matches numbers ending in %
+    expr = expr.replace(/(\d+(?:\.\d+)?)\s*%/g, (_match, num) => {
+        return (parseFloat(num) / 100).toString();
+    });
+
+    // 2. Insert implicit multiplication for parens
+    // "0.5(" -> "0.5 * ("
+    expr = expr.replace(/(\d|\))(?=\s*\()/g, '$1 * ');
+    
+    return expr;
+}
+
+export function evaluateFormula(
+    formula: string, 
+    dateStr?: string, 
+    curveDate?: string,
+    volume: number = 0,
+    volumeUnit: string = 'MMBtu'
+): number | null {
+    if (!formula) return null;
+    const cleanFormula = formula.trim();
+
+    const tieredMatch = cleanFormula.match(/^>\s*([\d\.]+)\s*([a-zA-Z]+)\s*\?\s*([^;]+);\s*(.+)$/);
+    
+    if (tieredMatch) {
+        const thresholdVal = parseFloat(tieredMatch[1]);
+        const thresholdUnit = tieredMatch[2];
+        const overFormula = tieredMatch[3];
+        const underFormula = tieredMatch[4];
+
+        const volInThresholdUnit = convertVolume(volume, volumeUnit, thresholdUnit);
+
+        if (volInThresholdUnit <= 0) {
+            return evaluateSimpleFormula(underFormula, dateStr, curveDate);
         }
-        
-        const entry = exposureMap.get(month)!;
-        
-        // Identify Index
-        let index = 'Other';
-        const formula = (p.sellFormula || p.buyFormula || '').toUpperCase();
-        if (formula.includes('JKM')) index = 'JKM';
-        else if (formula.includes('TTF')) index = 'TTF';
-        else if (formula.includes('NBP')) index = 'NBP';
-        else if (formula.includes('HH')) index = 'HH';
-        else if (formula.includes('BRENT') || formula.includes('JCC')) index = 'Oil';
-        else if (formula.includes('AECO')) index = 'AECO';
-        
-        // Normalize Volume to MMBtu for aggregation
-        let vol = p.deliveredVolume || 0;
-        const unit = p.volumeUnit || detectUnit(formula);
-        if (unit === 'bbl') vol = vol * 5.8;
-        else if (unit === 'm3') vol = vol * 24; // LNG m3 to MMBtu approx (depends on density)
-        else if (unit === 'MT') vol = vol * 52; // LNG MT to MMBtu approx
-        
-        entry[index] = (entry[index] || 0) + vol;
-    });
-    
-    return Array.from(exposureMap.values()).sort((a: any, b: any) => a.date.localeCompare(b.date));
-}
 
-/**
- * Safely evaluates a pricing formula string against market data.
- * If referenceDate is provided, it attempts to find a matching month in the Forward Curve.
- */
-export function evaluateFormula(formula: string, referenceDate?: string): number | null {
-  if (!formula || !formula.trim()) return null;
+        const underVol = Math.min(volInThresholdUnit, thresholdVal);
+        const overVol = Math.max(0, volInThresholdUnit - thresholdVal);
 
-  try {
-    let parsed = formula.toLowerCase();
+        const priceUnder = evaluateSimpleFormula(underFormula, dateStr, curveDate) || 0;
+        const priceOver = evaluateSimpleFormula(overFormula, dateStr, curveDate) || 0;
 
-    // 1. Determine Pricing Context (Spot vs Forward)
-    let pricingContext = { ...LIVE_MARKET_DATA };
-    
-    // Use the LATEST forward curve for pricing unless specific logic is added to find "Curve As Of X Date"
-    // In this implementation, we assume we want the *Latest* view of the market.
-    const latestCurve = getForwardCurve(); 
-
-    if (referenceDate && latestCurve.length > 0) {
-        const targetMonth = normalizeDateToMonth(referenceDate);
-        const forwardRow = latestCurve.find(r => r.month === targetMonth);
-        
-        if (forwardRow) {
-            // Merge forward prices on top of spot prices. 
-            // Forward curve takes precedence for that month.
-            pricingContext = { ...pricingContext, ...forwardRow.prices };
+        if (volume > 0) {
+            return ((underVol * priceUnder) + (overVol * priceOver)) / volInThresholdUnit;
+        } else {
+            return priceUnder;
         }
     }
 
-    // 2. Normalization & Cleanup
-    parsed = parsed.replace(/–/g, '-'); 
-    parsed = parsed.replace(/[£$€¥]/g, ''); 
-    parsed = parsed.replace(/,/g, ''); 
-    
-    // Convert common word operators
-    parsed = parsed.replace(/\bplus\b/g, '+');
-    parsed = parsed.replace(/\bminus\b/g, '-');
-
-    // 3. Pre-process Aliases
-    const aliasKeys = Object.keys(INDEX_ALIASES).sort((a, b) => b.length - a.length);
-    aliasKeys.forEach(alias => {
-        const targetKey = INDEX_ALIASES[alias];
-        // Ensure we match whole words or boundaries for aliases to prevent partial replacements
-        const regex = new RegExp(`\\b${alias.replace(/[.*+?^${}()|[\]\\]/g, '\\$&')}\\b`, 'gi');
-        parsed = parsed.replace(regex, targetKey);
-    });
-
-    // 4. Handle Percentage Syntax (Before value substitution to preserve structure)
-    // "HH + 20%" -> "HH * (1 + 0.2)"
-    parsed = parsed.replace(/\+\s*(\d+(\.\d+)?)%(\s|$)/g, (_, p1) => `* (1 + ${parseFloat(p1)/100}) `);
-    // "- 20%" -> "* (1 - 0.2)"
-    parsed = parsed.replace(/\-\s*(\d+(\.\d+)?)%(\s|$)/g, (_, p1) => `* (1 - ${parseFloat(p1)/100}) `);
-    // "20% Index" -> "0.2 * Index"
-    parsed = parsed.replace(/(\d+(\.\d+)?)%/g, (_, p1) => `${parseFloat(p1) / 100} *`);
-
-    // 5. Handle "+/-" text (e.g. "Index +/- Alpha")
-    // We treat "+/-" as "+" for pricing estimation if Alpha is numeric, or ignore if Alpha is text
-    parsed = parsed.replace(/\+\/-/g, '+'); 
-
-    // 6. Replace Market Indices with values from Context
-    const keys = Object.keys(pricingContext).sort((a, b) => b.length - a.length);
-    keys.forEach(key => {
-        const val = pricingContext[key];
-        const escapedKey = key.replace(/[.*+?^${}()|[\]\\]/g, '\\$&');
-        // Match whole word logic to avoid replacing "NBP" inside "NBPlus" if that existed
-        const regex = new RegExp(`\\b${escapedKey}\\b`, 'gi');
-        parsed = parsed.replace(regex, val.toString());
-    });
-
-    // 7. Jargon Removal (After substitution)
-    // Remove parentheses that still contain letters (likely contract terms like (n), (m+1))
-    // We assume valid variables have been replaced by numbers already.
-    // Example: "(95.5 + 0.5)" -> kept. "(n)" -> removed.
-    parsed = parsed.replace(/\([^)]*[a-z][^)]*\)/gi, '');
-    
-    // 8. Aggressive Cleanup of leftover text (e.g. "Alpha", "Beta", units)
-    parsed = parsed.replace(/[a-z]+/gi, '');
-
-    // 9. Cleanup dangling operators
-    parsed = parsed.replace(/[\+\-\*\/]\s*$/g, '');
-    parsed = parsed.replace(/^\s*[\+\-\*\/]/g, '');
-    // Fix multiple operators
-    parsed = parsed.replace(/\+\+/g, '+');
-    parsed = parsed.replace(/\-\-/g, '+');
-    parsed = parsed.replace(/\+\-/g, '-');
-    parsed = parsed.replace(/\-\+/g, '-');
-
-    // 10. Final Validation
-    if (!/^[\d\.\s\+\-\*\/\(\)]+$/.test(parsed)) {
-      return null;
-    }
-
-    // eslint-disable-next-line no-new-func
-    const result = new Function(`return ${parsed}`)();
-    return isFinite(result) ? Number(result.toFixed(3)) : null;
-  } catch (err) {
-    return null;
-  }
+    return evaluateSimpleFormula(cleanFormula, dateStr, curveDate);
 }
 
-/**
- * Recalculates all derived fields for a cargo profile based on dependencies.
- * @param forceCalc - If true, recalculates prices even if status is Realized (useful for bulk imports/edits)
- */
-export function recalculateProfile(profile: Partial<CargoProfile>, forceCalc: boolean = false): Partial<CargoProfile> {
-  const updated = { ...profile };
-  const isRealized = updated.pnlBucket === PnLBucket.Realized;
-
-  // 1. Calculate Prices from Formulas
-  // We calculate if it's NOT realized, OR if we are forcing calculation (e.g. bulk update or form edit)
-  if (!isRealized || forceCalc) {
-    if (updated.sellFormula) {
-        // Use Delivery Date for Sell Side
-        const derivedSell = evaluateFormula(updated.sellFormula, updated.deliveryDate);
-        if (derivedSell !== null) updated.absoluteSellPrice = derivedSell;
-    }
-
-    if (updated.buyFormula) {
-        // Use Loading Date for Buy Side (if available), otherwise Delivery Date
-        const refDate = updated.loadingDate || updated.deliveryDate;
-        const derivedBuy = evaluateFormula(updated.buyFormula, refDate);
-        if (derivedBuy !== null) updated.absoluteBuyPrice = derivedBuy;
-    }
+function evaluateSimpleFormula(formula: string, dateStr?: string, curveDate?: string, priceOverride?: Record<string, number>): number | null {
+    if (!formula) return null;
     
-    // Update Pricing End Date automatically based on formula if missing
-    if (!updated.pricingEndDate && updated.deliveryDate) {
-        updated.pricingEndDate = estimatePricingDate(updated.sellFormula || updated.buyFormula || '', updated.deliveryDate);
+    let expression = normalizeFormula(formula);
+
+    if (!isNaN(parseFloat(expression)) && !/[a-zA-Z]/.test(expression)) {
+        return parseFloat(expression);
     }
-  }
 
-  // 2. Calculate Sales Revenue
-  if (updated.deliveredVolume && updated.absoluteSellPrice) {
-    updated.salesRevenue = updated.deliveredVolume * updated.absoluteSellPrice;
-  }
+    const sortedAliases = Object.keys(INDEX_ALIASES).sort((a, b) => b.length - a.length);
+    
+    for (const alias of sortedAliases) {
+        const canonical = INDEX_ALIASES[alias];
+        const regex = new RegExp(`\\b${alias}\\b(?:\\s*\\(([^)]+)\\))?`, 'gi');
+        
+        expression = expression.replace(regex, (match, monthDef) => {
+            let price = 0;
+            if (priceOverride && priceOverride[canonical] !== undefined) {
+                price = priceOverride[canonical];
+            } else if (dateStr) {
+                price = getIndexPrice(canonical, dateStr, monthDef, curveDate);
+            }
+            
+            return price.toString();
+        });
+    }
 
-  // 3. Calculate Purchase Cost
-  if (updated.loadedVolume && updated.absoluteBuyPrice) {
-     if (!updated.reconciledPurchaseCost || !isRealized || forceCalc) {
-         updated.reconciledPurchaseCost = updated.loadedVolume * updated.absoluteBuyPrice;
-     }
-  }
+    // Insert implicit multiplication between Number and Number
+    expression = expression.replace(/(\d+(?:\.\d+)?)\s+(\d+(?:\.\d+)?)/g, '$1 * $2');
 
-  // 4. Default "Final" values
-  if (!updated.finalSalesRevenue && updated.salesRevenue) {
-    updated.finalSalesRevenue = updated.salesRevenue;
-  }
-  
-  if (!updated.reconciledSalesRevenue && updated.finalSalesRevenue) {
-    updated.reconciledSalesRevenue = updated.finalSalesRevenue;
-  }
+    // Cleanup
+    expression = expression.replace(/[a-zA-Z]+/g, '0');
 
-  if (!updated.finalTotalCost && updated.reconciledPurchaseCost) {
-    updated.finalTotalCost = updated.reconciledPurchaseCost;
-  }
-
-  // 5. Calculate Physical P&L
-  const revenue = updated.finalSalesRevenue || 0;
-  const cost = updated.finalTotalCost || 0;
-  updated.finalPhysicalPnL = revenue - cost;
-
-  // 6. Calculate Final Total P&L
-  const physicalPnL = updated.finalPhysicalPnL || 0;
-  const hedgingPnL = updated.totalHedgingPnL || 0;
-  updated.finalTotalPnL = physicalPnL + hedgingPnL;
-
-  return updated;
+    try {
+        if (/[^0-9\.\+\-\*\/\(\)\s]/.test(expression)) {
+            return null;
+        }
+        // eslint-disable-next-line no-new-func
+        const func = new Function(`return ${expression}`);
+        const result = func();
+        return isNaN(result) ? null : result;
+    } catch (e) {
+        return null;
+    }
 }
 
-export function actualizeProfile(profile: Partial<CargoProfile>): Partial<CargoProfile> {
+export function analyzeFormulaStructure(
+    formula: string, 
+    dateStr?: string, 
+    curveDate?: string,
+    volume: number = 0,
+    volumeUnit: string = 'MMBtu'
+): { parts: PricingMetadata[], globalConstant: string, warnings: string[] } {
+    if (!formula) return { parts: [], globalConstant: '0', warnings: [] };
+
+    const tieredMatch = formula.trim().match(/^>\s*([\d\.]+)\s*([a-zA-Z]+)\s*\?\s*([^;]+);\s*(.+)$/);
+    
+    if (tieredMatch) {
+        const thresholdVal = parseFloat(tieredMatch[1]);
+        const thresholdUnit = tieredMatch[2];
+        const overFormula = tieredMatch[3];
+        const underFormula = tieredMatch[4];
+        
+        const under = analyzeSimpleStructure(underFormula, dateStr, curveDate);
+        const over = analyzeSimpleStructure(overFormula, dateStr, curveDate);
+        
+        return { 
+            parts: [...under.parts, ...over.parts], 
+            globalConstant: under.globalConstant, 
+            warnings: [...under.warnings, ...over.warnings] 
+        };
+    }
+
+    return analyzeSimpleStructure(formula, dateStr, curveDate);
+}
+
+function analyzeSimpleStructure(formula: string, dateStr?: string, curveDate?: string): { parts: PricingMetadata[], globalConstant: string, warnings: string[] } {
+    const cleanFormula = normalizeFormula(formula);
+    const warnings: string[] = [];
+
+    // Check for Unbalanced Parentheses
+    const openP = (formula.match(/\(/g) || []).length + (formula.match(/\[/g) || []).length;
+    const closeP = (formula.match(/\)/g) || []).length + (formula.match(/\]/g) || []).length;
+    if (openP !== closeP) {
+        warnings.push(`Unbalanced parentheses: ${openP} opening vs ${closeP} closing.`);
+    }
+
+    // Check for Unknown Tokens (Potential typos or weird formulations)
+    let textCheck = formula.toUpperCase();
+    
+    // Sort aliases by length to remove longest matches first
+    const sortedAliases = Object.keys(INDEX_ALIASES).sort((a, b) => b.length - a.length);
+    sortedAliases.forEach(alias => {
+        // Regex to replace whole words or phrases with word boundaries
+        textCheck = textCheck.replace(new RegExp(`\\b${alias.replace(/ /g, '\\s+')}\\b`, 'g'), ' ');
+    });
+    
+    // Remove "Fixed", "n", "m" (common variables)
+    textCheck = textCheck.replace(/\bFIXED\b/g, ' ');
+    textCheck = textCheck.replace(/\bN\b/g, ' ');
+    textCheck = textCheck.replace(/\bM\b/g, ' ');
+
+    // Remove math chars and numbers
+    textCheck = textCheck.replace(/[0-9\.\+\-\*\/\%\(\)\[\]:;]/g, ' ');
+    
+    // If anything remains, it's likely weird text
+    const unknownWords = textCheck.trim().split(/\s+/).filter(w => w.length > 0);
+    if (unknownWords.length > 0) {
+        const unique = Array.from(new Set(unknownWords));
+        warnings.push(`Unknown term(s): "${unique.join(', ')}". Is this a typo?`);
+    }
+
+    // 1. Calculate Global Constant using Mathematical Probing
+    const globalConstantVal = evaluateSimpleFormula(formula, dateStr, curveDate, 
+        Object.fromEntries(Object.keys(INDEX_ALIASES).map(k => [k, 0]))
+    );
+    const globalConstantStr = globalConstantVal !== null ? globalConstantVal.toFixed(4).replace(/\.?0+$/, '') : '0';
+
+    // 2. Identify Components via Backward Scanning
+    let workingFormula = formula.replace(/\[/g, '(').replace(/\]/g, ')');
+    
+    const foundIndices: { index: number, length: number, alias: string }[] = [];
+
+    for (const alias of sortedAliases) {
+        const regex = new RegExp(`\\b${alias}\\b`, 'gi');
+        let match;
+        while ((match = regex.exec(workingFormula)) !== null) {
+            const isOverlap = foundIndices.some(f => 
+                (match!.index >= f.index && match!.index < f.index + f.length) ||
+                (match!.index + match![0].length > f.index && match!.index + match![0].length <= f.index + f.length)
+            );
+            if (!isOverlap) {
+                foundIndices.push({ index: match.index, length: match[0].length, alias });
+            }
+        }
+    }
+    foundIndices.sort((a, b) => a.index - b.index);
+
+    const parts: PricingMetadata[] = [];
+
+    foundIndices.forEach(item => {
+        const precedingText = workingFormula.substring(0, item.index).trim();
+        const suffixText = workingFormula.substring(item.index + item.length);
+        
+        const monthMatch = suffixText.match(/^\s*\(([^)]+)\)/);
+        const monthDef = monthMatch ? monthMatch[1] : '';
+
+        let slope = '';
+        let weightage = '100%';
+        let warning = '';
+
+        const numRegex = /((?:\d+(?:\.\d+)?%?))\s*\*?\s*$/;
+        
+        let scanned = precedingText;
+        const slopeMatch = scanned.match(numRegex);
+        if (slopeMatch) {
+            slope = slopeMatch[1];
+            scanned = scanned.substring(0, slopeMatch.index).trim();
+        }
+
+        if (scanned.endsWith('(')) {
+            scanned = scanned.substring(0, scanned.length - 1).trim(); 
+            const weightMatch = scanned.match(numRegex);
+            if (weightMatch) {
+                weightage = weightMatch[1];
+            }
+        }
+
+        const numericSlope = parseFloat(slope);
+        const canonical = INDEX_ALIASES[item.alias.toUpperCase()];
+        const isOil = OIL_INDICES.includes(canonical);
+        
+        if (isOil && slope && !slope.includes('%') && !isNaN(numericSlope)) {
+            if (numericSlope >= 7 && numericSlope <= 25) {
+                warning = `Possible Typo: ${slope} ${item.alias} might be a gas conversion slope. Did you mean ${numericSlope}%?`;
+                warnings.push(warning);
+            }
+        }
+
+        let compVal = 0;
+        if (dateStr) {
+            const price = getIndexPrice(canonical, dateStr, monthDef, curveDate);
+            
+            let sVal = 1;
+            if (slope) sVal = slope.includes('%') ? parseFloat(slope)/100 : parseFloat(slope);
+            
+            let wVal = 1;
+            if (weightage) wVal = weightage.includes('%') ? parseFloat(weightage)/100 : parseFloat(weightage);
+            
+            compVal = price * sVal * wVal;
+        }
+
+        parts.push({
+            weightage,
+            slope,
+            index: canonical,
+            monthDef,
+            constant: '0', 
+            rawText: item.alias,
+            componentValue: compVal,
+            warning
+        });
+    });
+
+    if (Math.abs(parseFloat(globalConstantStr)) > 0.0001) {
+        if (parts.length > 0) {
+            parts[0].constant = globalConstantStr;
+            if (parts[0].componentValue !== undefined) {
+                parts[0].componentValue += parseFloat(globalConstantStr);
+            }
+        } else {
+            parts.push({
+                weightage: '100%',
+                slope: '',
+                index: 'FIXED',
+                monthDef: '',
+                constant: globalConstantStr,
+                rawText: formula,
+                componentValue: parseFloat(globalConstantStr)
+            });
+        }
+    }
+
+    return { parts, globalConstant: globalConstantStr, warnings };
+}
+
+// ... (Rest of exported functions: recalculateProfile, actualizeProfile, etc. remain unchanged) ...
+// Re-exporting them to ensure file integrity
+
+export function recalculateProfile(profile: Partial<CargoProfile>, useMarketData: boolean = true, dateOverride?: string): Partial<CargoProfile> {
     const updated = { ...profile };
-    updated.pnlBucket = PnLBucket.Realized;
-    if (!updated.reconciledSalesRevenue) updated.reconciledSalesRevenue = updated.salesRevenue;
-    if (!updated.finalSalesRevenue) updated.finalSalesRevenue = updated.reconciledSalesRevenue;
-    if (!updated.reconciledPurchaseCost && updated.loadedVolume && updated.absoluteBuyPrice) {
-        updated.reconciledPurchaseCost = updated.loadedVolume * updated.absoluteBuyPrice;
+    const getEffectiveDate = (dateField: string | undefined, windowStart: string | undefined): string | undefined => {
+        if (dateOverride) return dateOverride;
+        if (dateField) return dateField;
+        if (windowStart) return windowStart;
+        return undefined;
+    };
+    const deliveryDate = getEffectiveDate(updated.deliveryDate, updated.deliveryWindowStart);
+    const loadingDate = getEffectiveDate(updated.loadingDate, updated.loadingWindowStart);
+    const unit = updated.volumeUnit || detectUnit(updated.sellFormula || updated.buyFormula);
+    updated.volumeUnit = unit;
+
+    if (updated.pnlBucket !== PnLBucket.Realized && useMarketData && updated.sellFormula) {
+        const price = evaluateFormula(updated.sellFormula, deliveryDate, undefined, updated.deliveredVolume || 0, unit);
+        if (price !== null) updated.absoluteSellPrice = price;
     }
-    if (!updated.finalTotalCost) updated.finalTotalCost = updated.reconciledPurchaseCost;
-    return recalculateProfile(updated);
+    if (updated.pnlBucket !== PnLBucket.Realized && useMarketData && updated.buyFormula) {
+        const price = evaluateFormula(updated.buyFormula, loadingDate || deliveryDate, undefined, updated.loadedVolume || 0, unit);
+        if (price !== null) updated.absoluteBuyPrice = price;
+    }
+
+    const sellPrice = updated.absoluteSellPrice || 0;
+    const buyPrice = updated.absoluteBuyPrice || 0;
+    const delVol = updated.deliveredVolume || 0;
+    const loadVol = updated.loadedVolume || 0;
+
+    updated.salesRevenue = delVol * sellPrice;
+    updated.reconciledPurchaseCost = loadVol * buyPrice; 
+    updated.finalSalesRevenue = updated.salesRevenue; 
+    updated.reconciledSalesRevenue = updated.salesRevenue;
+    updated.finalTotalCost = updated.reconciledPurchaseCost;
+    updated.finalPhysicalPnL = (updated.finalSalesRevenue || 0) - (updated.finalTotalCost || 0);
+    updated.finalTotalPnL = (updated.finalPhysicalPnL || 0) + (updated.totalHedgingPnL || 0);
+
+    return updated;
+}
+
+export function actualizeProfile(profile: CargoProfile): CargoProfile {
+    const recalculated = recalculateProfile(profile, true) as CargoProfile;
+    return { ...recalculated, pnlBucket: PnLBucket.Realized };
+}
+
+export function generateStrategyName(profile: Partial<CargoProfile>): string {
+    const date = profile.loadingDate || profile.deliveryDate || new Date().toISOString().split('T')[0];
+    const dateObj = new Date(date);
+    const month = dateObj.toLocaleString('default', { month: 'short' }).toUpperCase();
+    const year = dateObj.getFullYear().toString().slice(-2);
+    const sourceCode = (profile.source || 'UNK').substring(0, 3).toUpperCase();
+    const buyerCode = (profile.buyer || 'SPOT').substring(0, 3).toUpperCase();
+    return `${month}${year}-${sourceCode}-${buyerCode}-${Math.floor(Math.random() * 1000)}`;
+}
+
+export function getPortfolioYear(profile: CargoProfile): number {
+    const d = profile.deliveryDate || profile.loadingDate;
+    if (!d) return new Date().getFullYear();
+    return new Date(d).getFullYear();
+}
+
+export function explainPricing(formula: string | undefined, dateStr: string | undefined, curveDate?: string): { pricingMode: string, details: string } {
+    if (!formula || !formula.trim()) return { pricingMode: 'Error', details: 'No formula provided' };
+    if (!dateStr) return { pricingMode: 'Error', details: 'No date provided for pricing' };
+    
+    const analysis = analyzeFormulaStructure(formula, dateStr, curveDate);
+    
+    // Check for weird formulations or warnings
+    if (analysis.warnings.length > 0) {
+        return { pricingMode: 'Error', details: analysis.warnings[0] };
+    }
+
+    if (analysis.parts.length === 0) {
+        if (analysis.globalConstant && analysis.globalConstant !== '0') {
+            return { pricingMode: 'Fixed', details: `Fixed Price: ${analysis.globalConstant}` };
+        }
+        return { pricingMode: 'Error', details: 'Could not parse formula' };
+    }
+    const indices = analysis.parts.map(p => p.index).join(', ');
+    return { pricingMode: 'Indexed', details: `Linked to: ${indices}` };
+}
+
+export function getExposureChartData(profiles: CargoProfile[]): any[] {
+    const exposureMap: Record<string, Record<string, number>> = {};
+    profiles.forEach(p => {
+        if (p.pnlBucket === PnLBucket.Realized) return;
+        const date = p.deliveryDate || p.loadingDate;
+        if (!date) return;
+        const monthKey = date.slice(0, 7); 
+        if (!exposureMap[monthKey]) exposureMap[monthKey] = {};
+        const unit = p.volumeUnit || detectUnit(p.sellFormula || p.buyFormula);
+        const delVol = p.deliveredVolume || 0;
+        const loadVol = p.loadedVolume || 0;
+
+        if (p.sellFormula) {
+            const analysis = analyzeFormulaStructure(p.sellFormula, date, undefined, delVol, unit);
+            analysis.parts.forEach(part => {
+                let w = 1;
+                if (part.weightage && part.weightage.includes('%')) w = parseFloat(part.weightage) / 100;
+                else if (part.weightage) w = parseFloat(part.weightage);
+                exposureMap[monthKey][part.index] = (exposureMap[monthKey][part.index] || 0) + (delVol * w);
+            });
+        }
+        if (p.buyFormula) {
+            const analysis = analyzeFormulaStructure(p.buyFormula, date, undefined, loadVol, unit);
+            analysis.parts.forEach(part => {
+                let w = 1;
+                if (part.weightage && part.weightage.includes('%')) w = parseFloat(part.weightage) / 100;
+                else if (part.weightage) w = parseFloat(part.weightage);
+                exposureMap[monthKey][part.index] = (exposureMap[monthKey][part.index] || 0) - (loadVol * w);
+            });
+        }
+    });
+    return Object.entries(exposureMap).map(([date, indices]) => ({ date, ...indices })).sort((a, b) => a.date.localeCompare(b.date));
+}
+
+export function estimatePricingDate(formula: string | undefined, refDate: string | undefined): string {
+    if (!refDate) return new Date().toISOString();
+    if (formula && formula.includes('-1')) {
+         const d = new Date(refDate);
+         d.setMonth(d.getMonth() - 1);
+         return new Date(d.getFullYear(), d.getMonth() + 1, 0).toISOString();
+    }
+    return refDate;
 }

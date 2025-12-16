@@ -1,3 +1,4 @@
+
 import { GoogleGenAI, Type, Schema } from "@google/genai";
 import { CargoProfile } from "../types";
 
@@ -6,6 +7,7 @@ const parseCargoSchema: Schema = {
   properties: {
     source: { type: Type.STRING },
     strategyName: { type: Type.STRING },
+    manualGroup: { type: Type.STRING, description: "Portfolio group or custom category if mentioned" },
     buyer: { type: Type.STRING },
     optimized: { type: Type.BOOLEAN },
     deliveryDate: { type: Type.STRING, description: "YYYY-MM-DD format" },

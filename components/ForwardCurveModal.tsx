@@ -50,7 +50,8 @@ export const ForwardCurveModal: React.FC<ForwardCurveModalProps> = ({ onClose, o
       if (data && data.length > 0) {
           // Convert back to TSV for editing
           const tsv = data.map(row => {
-              const vals = INDICES.map(idx => row.prices[idx] || 0);
+              // Create a row with placeholders for missing data to maintain column alignment
+              const vals = INDICES.map(idx => row.prices[idx] !== undefined ? row.prices[idx] : '');
               return `${row.month}\t${vals.join('\t')}`;
           }).join('\n');
           setInputText(tsv);
@@ -114,23 +115,29 @@ export const ForwardCurveModal: React.FC<ForwardCurveModalProps> = ({ onClose, o
     }
 
     try {
-        const rows = inputText.trim().split('\n');
+        const rawRows = inputText.trim().split('\n');
         const curveData: ForwardCurveRow[] = [];
 
-        // Try to identify if first row is header. If it contains "Month", skip it.
+        // Detect delimiter: Check first row for tab vs comma
+        const firstRow = rawRows[0];
+        const hasTab = firstRow.includes('\t');
+        const delimiter = hasTab ? '\t' : ',';
+
+        // Try to identify if first row is header. If it contains "Month" or "Price", skip it.
         let startIndex = 0;
-        if (rows[0].toLowerCase().includes('month')) {
+        if (firstRow.toLowerCase().includes('month') || firstRow.toLowerCase().includes('date')) {
             startIndex = 1;
         }
 
-        for (let i = startIndex; i < rows.length; i++) {
-            const line = rows[i].trim();
+        for (let i = startIndex; i < rawRows.length; i++) {
+            const line = rawRows[i].trim();
             if (!line) continue;
             
-            // Split by tab or comma
-            const values = line.split(/[\t,]/).map(v => v.trim());
+            // Smart Split
+            // If using comma, be careful of "1,200". But standard curves usually simple decimals.
+            const values = line.split(delimiter).map(v => v.trim());
             
-            // Need at least Month + 1 value
+            // Need at least Month + 1 value (or placeholder)
             if (values.length < 2) continue;
 
             // Parse Date (Column 0)
@@ -138,7 +145,7 @@ export const ForwardCurveModal: React.FC<ForwardCurveModalProps> = ({ onClose, o
             const formattedMonth = parseCurveDate(rawDate);
 
             if (!formattedMonth) {
-                 console.warn("Could not parse date:", rawDate);
+                 // Siletly skip invalid date rows (could be footer text)
                  continue;
             }
 
@@ -150,8 +157,17 @@ export const ForwardCurveModal: React.FC<ForwardCurveModalProps> = ({ onClose, o
             
             const mapVal = (idx: number, key: string) => {
                 if (values[idx]) {
-                    const num = parseFloat(values[idx].replace(/[^0-9.-]/g, ''));
-                    if (!isNaN(num)) prices[key] = num;
+                    // Remove currency symbols, keep negative signs and decimals
+                    const numStr = values[idx].replace(/[^0-9.-]/g, '');
+                    if (!numStr) return; // Empty cell
+
+                    const num = parseFloat(numStr);
+                    
+                    // CRITICAL: Treat 0 or 0.000 as "No Data" for sparse curves
+                    // This allows falling back to spot or treating as gap, rather than free cargo.
+                    if (!isNaN(num) && Math.abs(num) > 0.0001) {
+                        prices[key] = num;
+                    }
                 }
             };
 
@@ -191,18 +207,21 @@ export const ForwardCurveModal: React.FC<ForwardCurveModalProps> = ({ onClose, o
     saveForwardCurve(curveDate, parsedData);
     toast.success(`Forward Curve saved for ${curveDate}`);
     refreshDates();
-    onSave(); // Trigger app refresh
+    onSave(); 
   };
 
   const handleDelete = (date: string) => {
-      if (confirm(`Are you sure you want to delete the curve for ${date}?`)) {
+      // Logic inside the click handler to prevent parent bubbling
+      if (window.confirm(`Are you sure you want to delete the curve for ${date}?`)) {
           deleteForwardCurve(date);
           refreshDates();
           if (date === curveDate) {
               setPreviewMode(false);
               setInputText('');
+              setParsedData([]);
           }
           toast.success("Curve deleted");
+          onSave(); 
       }
   };
 
@@ -231,7 +250,6 @@ export const ForwardCurveModal: React.FC<ForwardCurveModalProps> = ({ onClose, o
   }, [compareDateA, compareDateB, selectedAnalysisIndex]);
 
   // --- EVOLUTION DATA (Seasonality) ---
-  // Get all unique contract months available in the system to populate dropdown
   const allContractMonths = useMemo(() => {
       const dates = getAvailableCurveDates();
       const contracts = new Set<string>();
@@ -240,9 +258,8 @@ export const ForwardCurveModal: React.FC<ForwardCurveModalProps> = ({ onClose, o
           curve.forEach(r => contracts.add(r.month));
       });
       return Array.from(contracts).sort();
-  }, [availableDates]); // Update when dates change
+  }, [availableDates]); 
 
-  // Set default contract if empty
   useEffect(() => {
       if (!evolutionContract && allContractMonths.length > 0) {
           setEvolutionContract(allContractMonths[0]);
@@ -252,9 +269,8 @@ export const ForwardCurveModal: React.FC<ForwardCurveModalProps> = ({ onClose, o
   const evolutionChartData = useMemo(() => {
       if (!evolutionContract) return [];
       
-      // We want: X = Curve Date (History), Y = Price of [evolutionContract]
       const dataPoints: { date: string, price: number | null }[] = [];
-      const dates = getAvailableCurveDates().sort(); // Chronological
+      const dates = getAvailableCurveDates().sort(); 
 
       dates.forEach(curveDate => {
           const curve = getForwardCurve(curveDate);
@@ -314,14 +330,21 @@ export const ForwardCurveModal: React.FC<ForwardCurveModalProps> = ({ onClose, o
                         </div>
                         <div className="flex-1 overflow-y-auto p-2 space-y-1 custom-scrollbar">
                             {availableDates.map(date => (
-                                <div key={date} className="flex group">
+                                <div key={date} className="flex group items-center justify-between hover:bg-slate-50 rounded-lg p-1 pr-2 cursor-default">
                                     <button 
                                         onClick={() => loadCurveForDate(date)}
-                                        className={`flex-1 text-left px-3 py-2 text-sm rounded-lg transition-colors ${curveDate === date ? 'bg-blue-50 text-blue-700 font-medium' : 'text-slate-600 hover:bg-slate-50'}`}
+                                        className={`flex-1 text-left px-3 py-2 text-sm rounded-lg transition-colors ${curveDate === date ? 'bg-blue-50 text-blue-700 font-medium' : 'text-slate-600'}`}
                                     >
                                         {date}
                                     </button>
-                                    <button onClick={() => handleDelete(date)} className="opacity-0 group-hover:opacity-100 p-2 text-slate-400 hover:text-rose-500">
+                                    <button 
+                                        onClick={(e) => { 
+                                            e.stopPropagation(); 
+                                            handleDelete(date); 
+                                        }}
+                                        className="opacity-0 group-hover:opacity-100 p-2 text-slate-400 hover:text-rose-500 hover:bg-rose-50 rounded transition-all"
+                                        title="Delete Curve"
+                                    >
                                         <svg className="w-4 h-4" fill="none" stroke="currentColor" viewBox="0 0 24 24"><path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M19 7l-.867 12.142A2 2 0 0116.138 21H7.862a2 2 0 01-1.995-1.858L5 7m5 4v6m4-6v6m1-10V4a1 1 0 00-1-1h-4a1 1 0 00-1 1v3M4 7h16" /></svg>
                                     </button>
                                 </div>
@@ -376,14 +399,12 @@ export const ForwardCurveModal: React.FC<ForwardCurveModalProps> = ({ onClose, o
                             {!previewMode ? (
                                 <div className="space-y-4 h-full flex flex-col">
                                     <div className="bg-blue-50 text-blue-800 p-4 rounded-lg text-sm border border-blue-100">
-                                        <strong>Instructions:</strong> Paste your Excel data below. Ensure columns match this exact order:
-                                        <div className="mt-2 font-mono text-xs bg-white p-2 rounded border border-blue-100 overflow-x-auto">
-                                            Month | BRIPE | JCC | Dated Brent | HH | NBP | JKM | TTF | AECO | Station 2
-                                        </div>
+                                        <strong>Instructions:</strong> Paste your Excel data below. Columns must match exactly:<br/>
+                                        <span className="font-mono text-xs opacity-80 mt-1 block">Month | BRIPE | JCC | Dated Brent | HH | NBP | JKM | TTF | AECO | Station 2</span>
                                     </div>
                                     <textarea 
-                                        className="flex-1 w-full p-4 border border-slate-300 rounded-lg font-mono text-sm focus:ring-2 focus:ring-blue-500/20 focus:border-blue-500 whitespace-pre"
-                                        placeholder={`Nov-25\t80.5\t82.1\t...\nDec-25\t81.0\t83.5\t...`}
+                                        className="flex-1 w-full p-4 border border-slate-300 rounded-lg font-mono text-xs focus:ring-2 focus:ring-blue-500/20 focus:border-blue-500 whitespace-pre leading-relaxed"
+                                        placeholder={`Nov-25\t80.5\t82.1\t...\nDec-25\t81.0\t0.000\t...`}
                                         value={inputText}
                                         onChange={(e) => setInputText(e.target.value)}
                                     />
@@ -391,20 +412,22 @@ export const ForwardCurveModal: React.FC<ForwardCurveModalProps> = ({ onClose, o
                             ) : (
                                 <div className="overflow-x-auto border border-slate-200 rounded-lg shadow-sm">
                                     <table className="w-full text-sm text-left bg-white">
-                                        <thead className="text-xs text-slate-500 uppercase bg-slate-100 border-b border-slate-200">
+                                        <thead className="text-xs text-slate-500 uppercase bg-slate-100 border-b border-slate-200 sticky top-0">
                                             <tr>
-                                                {COLUMNS.map(col => <th key={col} className="px-4 py-3 font-bold">{col}</th>)}
+                                                {COLUMNS.map(col => <th key={col} className="px-4 py-3 font-bold whitespace-nowrap">{col}</th>)}
                                             </tr>
                                         </thead>
                                         <tbody className="divide-y divide-slate-100">
                                             {parsedData.map((row, i) => (
                                                 <tr key={i} className="hover:bg-slate-50">
-                                                    <td className="px-4 py-2 font-mono font-medium text-slate-700">{row.month}</td>
+                                                    <td className="px-4 py-2 font-mono font-bold text-slate-700">{row.month}</td>
                                                     {COLUMNS.slice(1).map((col, idx) => {
                                                         const key = col === 'Station 2' ? 'STN 2' : col;
+                                                        const val = row.prices[key];
+                                                        const hasVal = val !== undefined;
                                                         return (
-                                                            <td key={col} className="px-4 py-2 text-slate-600">
-                                                                {row.prices[key] !== undefined ? row.prices[key].toFixed(2) : '-'}
+                                                            <td key={col} className={`px-4 py-2 ${hasVal ? 'text-slate-600' : 'text-slate-300 italic'}`}>
+                                                                {hasVal ? val.toFixed(3) : '-'}
                                                             </td>
                                                         );
                                                     })}
