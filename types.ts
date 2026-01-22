@@ -1,4 +1,3 @@
-
 export enum PnLBucket {
   Realized = 'Realized',
   Unrealized = 'Unrealized',
@@ -36,65 +35,63 @@ export interface CargoProfile {
   volumeUnit?: string;
   pricingEndDate?: string;
   
+  // Manual Overrides & Rounding
+  isBuyPriceManual?: boolean;
+  isSellPriceManual?: boolean;
+  buyPriceRounding?: number;
+  sellPriceRounding?: number;
+  
   loadingWindowStart?: string;
   loadingWindowEnd?: string;
   deliveryWindowStart?: string;
   deliveryWindowEnd?: string;
 
-  // --- Jarvis Specific Detail Columns ---
+  // --- Jarvis Specific Granular Pricing Columns ---
   // Purchase Components
-  buyPrice1Weightage?: string;
-  buyPrice1Slope?: string;
+  buyPrice1Weightage?: number;
+  buyPrice1Slope?: number;
   buyPriceIndex1?: string;
   buyPrice1MonthDef?: string;
-  buyPrice1Constant?: string;
-  buyPrice2Weightage?: string;
-  buyPrice2Slope?: string;
+  buyPrice1Constant?: number;
+  
+  buyPrice2Weightage?: number;
+  buyPrice2Slope?: number;
   buyPriceIndex2?: string;
   buyPrice2MonthDef?: string;
-  buyPrice2Constant?: string;
+  buyPrice2Constant?: number;
+
+  buyPrice3Weightage?: number;
+  buyPrice3Slope?: number;
+  buyPriceIndex3?: string;
+  buyPrice3MonthDef?: string;
+  buyPrice3Constant?: number;
+
+  buyPriceOverallConstant?: number;
+  buyPriceOverallConstantWeightage?: number;
 
   // Sales Components
-  sellPrice1Weightage?: string;
-  sellPrice1Value?: number;
-  sellPrice1Slope?: string;
+  sellPrice1Weightage?: number;
+  sellPrice1Slope?: number;
   sellPriceIndex1?: string;
   sellPrice1MonthDef?: string;
-  sellPrice1Constant?: string;
-  sellPrice2Weightage?: string;
-  sellPrice2Value?: number;
-  sellPrice2Slope?: string;
+  sellPrice1Constant?: number;
+  
+  sellPrice2Weightage?: number;
+  sellPrice2Slope?: number;
   sellPriceIndex2?: string;
   sellPrice2MonthDef?: string;
-  sellPrice2Constant?: string;
+  sellPrice2Constant?: number;
+
+  sellPrice3Weightage?: number;
+  sellPrice3Slope?: number;
+  sellPriceIndex3?: string;
+  sellPrice3MonthDef?: string;
+  sellPrice3Constant?: number;
+
+  sellPriceOverallConstant?: number;
+  sellPriceOverallConstantWeightage?: number;
   
   jarvisNo?: string;
-}
-
-export interface DealLeg {
-  id: string;
-  type: 'Buy' | 'Sell';
-  counterparty: string;
-  date: string;
-  volume: number;
-  formula: string;
-  absolutePrice: number;
-  totalValue: number;
-  volumeUnit: string;
-  status: PnLBucket;
-  incoterms?: string;
-  windowStart?: string;
-  windowEnd?: string;
-}
-
-export interface ShipmentStrategy {
-  id: string;
-  strategyName: string;
-  manualGroup?: string;
-  pnlBucket: PnLBucket;
-  buyLeg: DealLeg;
-  sellLeg: DealLeg;
-  totalPnL: number;
 }
 
 export const EmptyCargoProfile: Omit<CargoProfile, 'id'> = {
@@ -128,5 +125,9 @@ export const EmptyCargoProfile: Omit<CargoProfile, 'id'> = {
   loadingWindowStart: '',
   loadingWindowEnd: '',
   deliveryWindowStart: '',
-  deliveryWindowEnd: ''
+  deliveryWindowEnd: '',
+  isBuyPriceManual: false,
+  isSellPriceManual: false,
+  buyPriceRounding: 3,
+  sellPriceRounding: 3
 };

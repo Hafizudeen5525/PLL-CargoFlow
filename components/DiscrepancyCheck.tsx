@@ -121,7 +121,7 @@ export const DiscrepancyCheck: React.FC<DiscrepancyCheckProps> = ({ profiles }) 
           const cleanRow: any = {};
           WHITELIST_COLUMNS.forEach(col => {
             if (row[col] !== undefined) {
-                 // FIX: Prevent React Error #31 by stringifying Date objects
+                 // Fix: Ensure Date objects are stringified for React rendering
                  if (row[col] instanceof Date) {
                      cleanRow[col] = row[col].toISOString().split('T')[0];
                  } else {
@@ -429,7 +429,8 @@ export const DiscrepancyCheck: React.FC<DiscrepancyCheckProps> = ({ profiles }) 
                               <div className="max-h-[300px] overflow-y-auto custom-scrollbar pr-2">
                                 {strategyHierarchy ? (
                                     <div className="space-y-1">
-                                        {Object.entries(strategyHierarchy).map(([category, names]) => {
+                                        {/* Fix: Cast Object.entries result to access names properly as any[] */}
+                                        {(Object.entries(strategyHierarchy) as [string, any[]][]).map(([category, names]) => {
                                             if (names.length === 0) return null;
                                             const categoryId = `cat-${category}`;
                                             const isExpanded = expandedNodes.has(categoryId);
@@ -460,7 +461,8 @@ export const DiscrepancyCheck: React.FC<DiscrepancyCheckProps> = ({ profiles }) 
                                     </div>
                                 ) : dateHierarchy ? (
                                     <div className="space-y-1">
-                                        {Object.entries(dateHierarchy).map(([year, months]) => {
+                                        {/* Fix: Explicitly cast hierarchical structures as Records to avoid 'unknown' errors */}
+                                        {(Object.entries(dateHierarchy as Record<string, Record<string, any[]>>)).map(([year, months]) => {
                                             const yearId = `year-${year}`;
                                             const isYearExpanded = expandedNodes.has(yearId);
                                             const allYearValues = Object.values(months).flat();
@@ -476,7 +478,7 @@ export const DiscrepancyCheck: React.FC<DiscrepancyCheckProps> = ({ profiles }) 
                                                     </div>
                                                     {isYearExpanded && (
                                                         <div className="ml-5 space-y-1 border-l border-slate-100 pl-2">
-                                                            {Object.entries(months).map(([month, days]) => {
+                                                            {(Object.entries(months) as [string, any[]][]).map(([month, days]) => {
                                                                 const monthId = `${yearId}-${month}`;
                                                                 const isMonthExpanded = expandedNodes.has(monthId);
                                                                 const monthSelected = days.every(d => activeFilters[header]?.has(d));
@@ -548,7 +550,7 @@ export const DiscrepancyCheck: React.FC<DiscrepancyCheckProps> = ({ profiles }) 
                         return (
                           <div 
                             key={header} 
-                            className={`px-4 py-3 text-slate-600 whitespace-nowrap shrink-0 truncate text-[11px] border-r border-slate-50 last:border-r-0 ${isFirst ? `sticky left-0 z-20 shadow-[2px_0_5px_rgba(0,0,0,0.05)] ${rowBg}` : ''}`} 
+                            className={`px-4 py-3 text-slate-600 whitespace-nowrap shrink-0 truncate text-[11px] border-r border-slate-50 last:border-r-0 ${isFirst ? `sticky left-0 z-20 shadow-[2px_0_5_rgba(0,0,0,0.05)] ${rowBg}` : ''}`} 
                             style={{ width: COLUMN_WIDTH }}
                           >
                             {String(row[header] ?? '-')}

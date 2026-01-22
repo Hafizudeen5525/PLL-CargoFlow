@@ -1,6 +1,6 @@
 
 import React, { useState, useEffect, useMemo } from 'react';
-import { saveForwardCurve, getForwardCurve, getAvailableCurveDates, deleteForwardCurve, ForwardCurveRow } from '../services/calculationService';
+import { saveForwardCurve, getForwardCurve, getAvailableCurveDates, deleteForwardCurve, ForwardCurveRow, getHistoricalCurve, saveHistoricalCurve } from '../services/calculationService';
 import { toast } from 'react-hot-toast';
 import { LineChart, Line, XAxis, YAxis, CartesianGrid, Tooltip, Legend, ResponsiveContainer } from 'recharts';
 
@@ -14,7 +14,7 @@ const COLUMNS = ['Month', 'BRIPE', 'JCC', 'Dated Brent', 'HH', 'NBP', 'JKM', 'TT
 const INDICES = COLUMNS.slice(1);
 
 export const ForwardCurveModal: React.FC<ForwardCurveModalProps> = ({ onClose, onSave }) => {
-  const [activeTab, setActiveTab] = useState<'manage' | 'analyze' | 'evolution'>('manage');
+  const [activeTab, setActiveTab] = useState<'manage' | 'analyze' | 'evolution' | 'historical'>('manage');
   
   // Manage Tab State
   const [curveDate, setCurveDate] = useState<string>(new Date().toISOString().split('T')[0]);
@@ -22,6 +22,11 @@ export const ForwardCurveModal: React.FC<ForwardCurveModalProps> = ({ onClose, o
   const [availableDates, setAvailableDates] = useState<string[]>([]);
   const [parsedData, setParsedData] = useState<ForwardCurveRow[]>([]);
   const [previewMode, setPreviewMode] = useState(false);
+
+  // Historical Tab State
+  const [historicalInput, setHistoricalInput] = useState('');
+  const [historicalParsed, setHistoricalParsed] = useState<ForwardCurveRow[]>([]);
+  const [historicalPreview, setHistoricalPreview] = useState(false);
 
   // Analyze Tab State
   const [compareDateA, setCompareDateA] = useState<string>('');
@@ -35,6 +40,7 @@ export const ForwardCurveModal: React.FC<ForwardCurveModalProps> = ({ onClose, o
   useEffect(() => {
     refreshDates();
     loadCurveForDate(new Date().toISOString().split('T')[0]);
+    loadHistorical();
   }, []);
 
   const refreshDates = () => {
@@ -48,9 +54,7 @@ export const ForwardCurveModal: React.FC<ForwardCurveModalProps> = ({ onClose, o
   const loadCurveForDate = (date: string) => {
       const data = getForwardCurve(date);
       if (data && data.length > 0) {
-          // Convert back to TSV for editing
           const tsv = data.map(row => {
-              // Create a row with placeholders for missing data to maintain column alignment
               const vals = INDICES.map(idx => row.prices[idx] !== undefined ? row.prices[idx] : '');
               return `${row.month}\t${vals.join('\t')}`;
           }).join('\n');
@@ -65,7 +69,19 @@ export const ForwardCurveModal: React.FC<ForwardCurveModalProps> = ({ onClose, o
       setCurveDate(date);
   };
 
-  // Robust date parser for "Nov-25", "Nov 25", "11/25" -> "2025-11"
+  const loadHistorical = () => {
+      const data = getHistoricalCurve();
+      if (data && data.length > 0) {
+          const tsv = data.map(row => {
+              const vals = INDICES.map(idx => row.prices[idx] !== undefined ? row.prices[idx] : '');
+              return `${row.month}\t${vals.join('\t')}`;
+          }).join('\n');
+          setHistoricalInput(tsv);
+          setHistoricalParsed(data);
+          setHistoricalPreview(true);
+      }
+  };
+
   const parseCurveDate = (raw: string): string => {
     const str = raw.trim();
     if (!str) return '';
@@ -85,7 +101,7 @@ export const ForwardCurveModal: React.FC<ForwardCurveModalProps> = ({ onClose, o
         
         if (month) {
             let year = parseInt(yStr);
-            if (year < 100) year += 2000; // Assume 21st century logic
+            if (year < 100) year += 2000;
             return `${year}-${month}`;
         }
     }
@@ -108,22 +124,18 @@ export const ForwardCurveModal: React.FC<ForwardCurveModalProps> = ({ onClose, o
     return '';
   };
 
-  const handleParse = () => {
-    if (!inputText.trim()) {
+  const handleGenericParse = (input: string, setter: (data: ForwardCurveRow[]) => void, previewSetter: (val: boolean) => void) => {
+    if (!input.trim()) {
         toast.error("Please paste some data first.");
         return;
     }
 
     try {
-        const rawRows = inputText.trim().split('\n');
+        const rawRows = input.trim().split('\n');
         const curveData: ForwardCurveRow[] = [];
-
-        // Detect delimiter: Check first row for tab vs comma
         const firstRow = rawRows[0];
         const hasTab = firstRow.includes('\t');
         const delimiter = hasTab ? '\t' : ',';
-
-        // Try to identify if first row is header. If it contains "Month" or "Price", skip it.
         let startIndex = 0;
         if (firstRow.toLowerCase().includes('month') || firstRow.toLowerCase().includes('date')) {
             startIndex = 1;
@@ -132,45 +144,23 @@ export const ForwardCurveModal: React.FC<ForwardCurveModalProps> = ({ onClose, o
         for (let i = startIndex; i < rawRows.length; i++) {
             const line = rawRows[i].trim();
             if (!line) continue;
-            
-            // Smart Split
-            // If using comma, be careful of "1,200". But standard curves usually simple decimals.
             const values = line.split(delimiter).map(v => v.trim());
-            
-            // Need at least Month + 1 value (or placeholder)
             if (values.length < 2) continue;
-
-            // Parse Date (Column 0)
             const rawDate = values[0];
             const formattedMonth = parseCurveDate(rawDate);
-
-            if (!formattedMonth) {
-                 // Siletly skip invalid date rows (could be footer text)
-                 continue;
-            }
+            if (!formattedMonth) continue;
 
             const prices: Record<string, number> = {};
-            
-            // Map remaining columns to Indices
-            // Order: BRIPE (1), JCC (2), Dated Brent (3), HH (4), NBP (5), JKM (6), TTF (7), AECO (8), STN 2 (9)
-            // Using 1-based index for values array
-            
             const mapVal = (idx: number, key: string) => {
                 if (values[idx]) {
-                    // Remove currency symbols, keep negative signs and decimals
                     const numStr = values[idx].replace(/[^0-9.-]/g, '');
-                    if (!numStr) return; // Empty cell
-
+                    if (!numStr) return;
                     const num = parseFloat(numStr);
-                    
-                    // CRITICAL: Treat 0 or 0.000 as "No Data" for sparse curves
-                    // This allows falling back to spot or treating as gap, rather than free cargo.
                     if (!isNaN(num) && Math.abs(num) > 0.0001) {
                         prices[key] = num;
                     }
                 }
             };
-
             mapVal(1, 'BRIPE');
             mapVal(2, 'JCC');
             mapVal(3, 'Dated Brent');
@@ -183,16 +173,13 @@ export const ForwardCurveModal: React.FC<ForwardCurveModalProps> = ({ onClose, o
 
             curveData.push({ month: formattedMonth, prices });
         }
-
         if (curveData.length === 0) {
             toast.error("Could not parse valid rows. Check date format.");
             return;
         }
-
-        setParsedData(curveData);
-        setPreviewMode(true);
+        setter(curveData);
+        previewSetter(true);
         toast.success(`Parsed ${curveData.length} rows successfully.`);
-
     } catch (e) {
         console.error(e);
         toast.error("Error parsing data. Check format.");
@@ -210,8 +197,13 @@ export const ForwardCurveModal: React.FC<ForwardCurveModalProps> = ({ onClose, o
     onSave(); 
   };
 
+  const handleSaveHistorical = () => {
+    saveHistoricalCurve(historicalParsed);
+    toast.success("Historical Market Data updated.");
+    onSave();
+  };
+
   const handleDelete = (date: string) => {
-      // Logic inside the click handler to prevent parent bubbling
       if (window.confirm(`Are you sure you want to delete the curve for ${date}?`)) {
           deleteForwardCurve(date);
           refreshDates();
@@ -225,21 +217,16 @@ export const ForwardCurveModal: React.FC<ForwardCurveModalProps> = ({ onClose, o
       }
   };
 
-  // --- ANALYSIS DATA ---
   const analysisChartData = useMemo(() => {
       const curveA = getForwardCurve(compareDateA);
       const curveB = getForwardCurve(compareDateB);
-      
       const allMonths = new Set([...curveA.map(r => r.month), ...curveB.map(r => r.month)]);
       const sortedMonths = Array.from(allMonths).sort();
-      
       return sortedMonths.map(month => {
           const rowA = curveA.find(r => r.month === month);
           const rowB = curveB.find(r => r.month === month);
-          
           const valA = rowA?.prices[selectedAnalysisIndex] || null;
           const valB = rowB?.prices[selectedAnalysisIndex] || null;
-          
           return {
               month,
               [`Curve A (${compareDateA})`]: valA,
@@ -249,7 +236,6 @@ export const ForwardCurveModal: React.FC<ForwardCurveModalProps> = ({ onClose, o
       });
   }, [compareDateA, compareDateB, selectedAnalysisIndex]);
 
-  // --- EVOLUTION DATA (Seasonality) ---
   const allContractMonths = useMemo(() => {
       const dates = getAvailableCurveDates();
       const contracts = new Set<string>();
@@ -260,18 +246,10 @@ export const ForwardCurveModal: React.FC<ForwardCurveModalProps> = ({ onClose, o
       return Array.from(contracts).sort();
   }, [availableDates]); 
 
-  useEffect(() => {
-      if (!evolutionContract && allContractMonths.length > 0) {
-          setEvolutionContract(allContractMonths[0]);
-      }
-  }, [allContractMonths]);
-
   const evolutionChartData = useMemo(() => {
       if (!evolutionContract) return [];
-      
       const dataPoints: { date: string, price: number | null }[] = [];
       const dates = getAvailableCurveDates().sort(); 
-
       dates.forEach(curveDate => {
           const curve = getForwardCurve(curveDate);
           const row = curve.find(r => r.month === evolutionContract);
@@ -285,12 +263,10 @@ export const ForwardCurveModal: React.FC<ForwardCurveModalProps> = ({ onClose, o
       return dataPoints;
   }, [evolutionContract, evolutionIndex, availableDates]);
 
-
   return (
     <div className="fixed inset-0 bg-slate-900/60 backdrop-blur-sm flex items-center justify-center p-4 z-50">
       <div className="bg-white rounded-xl shadow-2xl w-full max-w-6xl max-h-[95vh] flex flex-col overflow-hidden">
         
-        {/* Header with Tabs */}
         <div className="p-0 border-b border-slate-200 bg-white flex flex-col">
             <div className="flex justify-between items-center p-6 pb-2">
                 <h2 className="text-xl font-bold text-slate-800">Forward Curve Manager</h2>
@@ -303,7 +279,13 @@ export const ForwardCurveModal: React.FC<ForwardCurveModalProps> = ({ onClose, o
                     onClick={() => setActiveTab('manage')}
                     className={`pb-3 px-2 text-sm font-bold border-b-2 transition-colors ${activeTab === 'manage' ? 'border-blue-500 text-blue-600' : 'border-transparent text-slate-500 hover:text-slate-700'}`}
                 >
-                    Manage & Upload
+                    Projected Curves
+                </button>
+                <button 
+                    onClick={() => setActiveTab('historical')}
+                    className={`pb-3 px-2 text-sm font-bold border-b-2 transition-colors ${activeTab === 'historical' ? 'border-blue-500 text-blue-600' : 'border-transparent text-slate-500 hover:text-slate-700'}`}
+                >
+                    Historical Prices
                 </button>
                 <button 
                     onClick={() => setActiveTab('analyze')}
@@ -323,7 +305,6 @@ export const ForwardCurveModal: React.FC<ForwardCurveModalProps> = ({ onClose, o
         <div className="flex-1 overflow-hidden bg-slate-50 flex">
             {activeTab === 'manage' && (
                 <>
-                     {/* Sidebar: History */}
                     <div className="w-64 bg-white border-r border-slate-200 flex flex-col">
                         <div className="p-4 border-b border-slate-100 bg-slate-50">
                             <h3 className="text-xs font-bold text-slate-500 uppercase">Available Dates</h3>
@@ -338,12 +319,8 @@ export const ForwardCurveModal: React.FC<ForwardCurveModalProps> = ({ onClose, o
                                         {date}
                                     </button>
                                     <button 
-                                        onClick={(e) => { 
-                                            e.stopPropagation(); 
-                                            handleDelete(date); 
-                                        }}
+                                        onClick={(e) => { e.stopPropagation(); handleDelete(date); }}
                                         className="opacity-0 group-hover:opacity-100 p-2 text-slate-400 hover:text-rose-500 hover:bg-rose-50 rounded transition-all"
-                                        title="Delete Curve"
                                     >
                                         <svg className="w-4 h-4" fill="none" stroke="currentColor" viewBox="0 0 24 24"><path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M19 7l-.867 12.142A2 2 0 0116.138 21H7.862a2 2 0 01-1.995-1.858L5 7m5 4v6m4-6v6m1-10V4a1 1 0 00-1-1h-4a1 1 0 00-1 1v3M4 7h16" /></svg>
                                     </button>
@@ -352,104 +329,61 @@ export const ForwardCurveModal: React.FC<ForwardCurveModalProps> = ({ onClose, o
                         </div>
                     </div>
 
-                    {/* Main Edit Area */}
                     <div className="flex-1 flex flex-col overflow-hidden">
                         <div className="p-4 bg-white border-b border-slate-200 flex items-center justify-between gap-4">
                             <div className="flex items-center gap-2">
                                 <label className="text-sm font-bold text-slate-700">Editing Curve As Of:</label>
-                                <input 
-                                    type="date" 
-                                    value={curveDate} 
-                                    onChange={(e) => {
-                                        setCurveDate(e.target.value);
-                                        const existing = getForwardCurve(e.target.value);
-                                        if (existing.length > 0) {
-                                             loadCurveForDate(e.target.value);
-                                        }
-                                    }}
-                                    className="border border-slate-300 rounded-lg px-3 py-1.5 text-sm" 
-                                />
+                                <input type="date" value={curveDate} onChange={(e) => setCurveDate(e.target.value)} className="border border-slate-300 rounded-lg px-3 py-1.5 text-sm" />
                             </div>
                             <div className="flex gap-2">
-                                <button 
-                                    onClick={() => { setPreviewMode(false); setInputText(''); setParsedData([]); }}
-                                    className="px-3 py-1.5 text-sm font-medium text-slate-600 hover:bg-slate-100 rounded-lg"
-                                >
-                                    Clear
-                                </button>
+                                <button onClick={() => { setPreviewMode(false); setInputText(''); setParsedData([]); }} className="px-3 py-1.5 text-sm font-medium text-slate-600 hover:bg-slate-100 rounded-lg">Clear</button>
                                 {previewMode ? (
-                                     <button 
-                                        onClick={() => setPreviewMode(false)}
-                                        className="px-4 py-1.5 text-sm font-medium text-blue-600 bg-blue-50 hover:bg-blue-100 rounded-lg border border-blue-200"
-                                    >
-                                        Edit Raw Data
-                                    </button>
+                                     <button onClick={() => setPreviewMode(false)} className="px-4 py-1.5 text-sm font-medium text-blue-600 bg-blue-50 hover:bg-blue-100 rounded-lg border border-blue-200">Edit Raw Data</button>
                                 ) : (
-                                     <button 
-                                        onClick={handleParse}
-                                        className="px-4 py-1.5 text-sm font-medium text-white bg-blue-600 hover:bg-blue-700 rounded-lg"
-                                    >
-                                        Parse
-                                    </button>
+                                     <button onClick={() => handleGenericParse(inputText, setParsedData, setPreviewMode)} className="px-4 py-1.5 text-sm font-medium text-white bg-blue-600 hover:bg-blue-700 rounded-lg">Parse</button>
                                 )}
                             </div>
                         </div>
-
                         <div className="flex-1 overflow-y-auto p-6">
                             {!previewMode ? (
-                                <div className="space-y-4 h-full flex flex-col">
-                                    <div className="bg-blue-50 text-blue-800 p-4 rounded-lg text-sm border border-blue-100">
-                                        <strong>Instructions:</strong> Paste your Excel data below. Columns must match exactly:<br/>
-                                        <span className="font-mono text-xs opacity-80 mt-1 block">Month | BRIPE | JCC | Dated Brent | HH | NBP | JKM | TTF | AECO | Station 2</span>
-                                    </div>
-                                    <textarea 
-                                        className="flex-1 w-full p-4 border border-slate-300 rounded-lg font-mono text-xs focus:ring-2 focus:ring-blue-500/20 focus:border-blue-500 whitespace-pre leading-relaxed"
-                                        placeholder={`Nov-25\t80.5\t82.1\t...\nDec-25\t81.0\t0.000\t...`}
-                                        value={inputText}
-                                        onChange={(e) => setInputText(e.target.value)}
-                                    />
-                                </div>
+                                <textarea className="flex-1 w-full h-full p-4 border border-slate-300 rounded-lg font-mono text-xs focus:ring-2 focus:ring-blue-500/20 focus:border-blue-500 whitespace-pre leading-relaxed" placeholder="Month | BRIPE | JCC | Dated Brent | HH | NBP | JKM | TTF | AECO | Station 2" value={inputText} onChange={(e) => setInputText(e.target.value)} />
                             ) : (
-                                <div className="overflow-x-auto border border-slate-200 rounded-lg shadow-sm">
-                                    <table className="w-full text-sm text-left bg-white">
-                                        <thead className="text-xs text-slate-500 uppercase bg-slate-100 border-b border-slate-200 sticky top-0">
-                                            <tr>
-                                                {COLUMNS.map(col => <th key={col} className="px-4 py-3 font-bold whitespace-nowrap">{col}</th>)}
-                                            </tr>
-                                        </thead>
-                                        <tbody className="divide-y divide-slate-100">
-                                            {parsedData.map((row, i) => (
-                                                <tr key={i} className="hover:bg-slate-50">
-                                                    <td className="px-4 py-2 font-mono font-bold text-slate-700">{row.month}</td>
-                                                    {COLUMNS.slice(1).map((col, idx) => {
-                                                        const key = col === 'Station 2' ? 'STN 2' : col;
-                                                        const val = row.prices[key];
-                                                        const hasVal = val !== undefined;
-                                                        return (
-                                                            <td key={col} className={`px-4 py-2 ${hasVal ? 'text-slate-600' : 'text-slate-300 italic'}`}>
-                                                                {hasVal ? val.toFixed(3) : '-'}
-                                                            </td>
-                                                        );
-                                                    })}
-                                                </tr>
-                                            ))}
-                                        </tbody>
-                                    </table>
-                                </div>
+                                <PreviewTable data={parsedData} />
                             )}
                         </div>
-
-                         <div className="p-4 border-t border-slate-200 bg-white flex justify-end">
-                            <button 
-                                onClick={handleSaveCurve}
-                                disabled={!previewMode}
-                                className="px-6 py-2 bg-emerald-600 hover:bg-emerald-700 text-white font-medium rounded-lg shadow-lg disabled:opacity-50 disabled:cursor-not-allowed"
-                            >
-                                Permanently Save Curve
-                            </button>
+                        <div className="p-4 border-t border-slate-200 bg-white flex justify-end">
+                            <button onClick={handleSaveCurve} disabled={!previewMode} className="px-6 py-2 bg-emerald-600 hover:bg-emerald-700 text-white font-medium rounded-lg shadow-lg disabled:opacity-50">Save Current Projection</button>
                         </div>
                     </div>
                 </>
+            )}
+
+            {activeTab === 'historical' && (
+                <div className="flex-1 flex flex-col overflow-hidden">
+                    <div className="p-4 bg-white border-b border-slate-200 flex items-center justify-between gap-4">
+                        <div className="flex items-center gap-2">
+                            <label className="text-sm font-bold text-slate-800">Historical Market Realized Prices</label>
+                            <p className="text-xs text-slate-500">(Monthly averages for realized months)</p>
+                        </div>
+                        <div className="flex gap-2">
+                            {historicalPreview ? (
+                                 <button onClick={() => setHistoricalPreview(false)} className="px-4 py-1.5 text-sm font-medium text-blue-600 bg-blue-50 hover:bg-blue-100 rounded-lg border border-blue-200">Edit Raw Data</button>
+                            ) : (
+                                 <button onClick={() => handleGenericParse(historicalInput, setHistoricalParsed, setHistoricalPreview)} className="px-4 py-1.5 text-sm font-medium text-white bg-blue-600 hover:bg-blue-700 rounded-lg">Parse</button>
+                            )}
+                        </div>
+                    </div>
+                    <div className="flex-1 overflow-y-auto p-6">
+                        {!historicalPreview ? (
+                            <textarea className="flex-1 w-full h-full p-4 border border-slate-300 rounded-lg font-mono text-xs focus:ring-2 focus:ring-blue-500/20 focus:border-blue-500 whitespace-pre leading-relaxed" placeholder="Month | BRIPE | JCC | Dated Brent | HH | NBP | JKM | TTF | AECO | Station 2" value={historicalInput} onChange={(e) => setHistoricalInput(e.target.value)} />
+                        ) : (
+                            <PreviewTable data={historicalParsed} />
+                        )}
+                    </div>
+                    <div className="p-4 border-t border-slate-200 bg-white flex justify-end">
+                        <button onClick={handleSaveHistorical} disabled={!historicalPreview} className="px-6 py-2 bg-emerald-600 hover:bg-emerald-700 text-white font-medium rounded-lg shadow-lg disabled:opacity-50">Update Historical Data</button>
+                    </div>
+                </div>
             )}
 
             {activeTab === 'analyze' && (
@@ -457,40 +391,19 @@ export const ForwardCurveModal: React.FC<ForwardCurveModalProps> = ({ onClose, o
                     <div className="flex flex-wrap gap-4 items-end bg-white p-4 rounded-xl border border-slate-200 shadow-sm">
                         <div className="flex flex-col gap-1">
                             <label className="text-xs font-bold text-slate-400 uppercase">Index</label>
-                            <select 
-                                value={selectedAnalysisIndex} 
-                                onChange={(e) => setSelectedAnalysisIndex(e.target.value)}
-                                className="border border-slate-300 rounded-lg px-3 py-2 text-sm font-bold text-slate-700"
-                            >
-                                {INDICES.map(idx => <option key={idx} value={idx}>{idx}</option>)}
-                            </select>
+                            <select value={selectedAnalysisIndex} onChange={(e) => setSelectedAnalysisIndex(e.target.value)} className="border border-slate-300 rounded-lg px-3 py-2 text-sm font-bold text-slate-700">{INDICES.map(idx => <option key={idx} value={idx}>{idx}</option>)}</select>
                         </div>
                         <div className="flex flex-col gap-1">
                             <label className="text-xs font-bold text-slate-400 uppercase">Curve A (Baseline)</label>
-                            <select 
-                                value={compareDateA} 
-                                onChange={(e) => setCompareDateA(e.target.value)}
-                                className="border border-slate-300 rounded-lg px-3 py-2 text-sm"
-                            >
-                                {availableDates.map(d => <option key={d} value={d}>{d}</option>)}
-                            </select>
+                            <select value={compareDateA} onChange={(e) => setCompareDateA(e.target.value)} className="border border-slate-300 rounded-lg px-3 py-2 text-sm">{availableDates.map(d => <option key={d} value={d}>{d}</option>)}</select>
                         </div>
-                         <div className="flex flex-col gap-1">
+                        <div className="flex flex-col gap-1">
                             <label className="text-xs font-bold text-slate-400 uppercase">Curve B (Comparison)</label>
-                            <select 
-                                value={compareDateB} 
-                                onChange={(e) => setCompareDateB(e.target.value)}
-                                className="border border-slate-300 rounded-lg px-3 py-2 text-sm"
-                            >
-                                {availableDates.map(d => <option key={d} value={d}>{d}</option>)}
-                            </select>
+                            <select value={compareDateB} onChange={(e) => setCompareDateB(e.target.value)} className="border border-slate-300 rounded-lg px-3 py-2 text-sm">{availableDates.map(d => <option key={d} value={d}>{d}</option>)}</select>
                         </div>
                     </div>
-
                     <div className="grid grid-cols-1 lg:grid-cols-3 gap-6">
-                        {/* Chart */}
                         <div className="lg:col-span-2 bg-white p-4 rounded-xl border border-slate-200 shadow-sm h-[400px]">
-                            <h3 className="text-sm font-bold text-slate-700 mb-4">{selectedAnalysisIndex} Curve Comparison</h3>
                             <ResponsiveContainer width="100%" height="100%">
                                 <LineChart data={analysisChartData}>
                                     <CartesianGrid strokeDasharray="3 3" vertical={false} stroke="#f1f5f9" />
@@ -503,117 +416,24 @@ export const ForwardCurveModal: React.FC<ForwardCurveModalProps> = ({ onClose, o
                                 </LineChart>
                             </ResponsiveContainer>
                         </div>
-
-                        {/* Delta Table */}
-                        <div className="lg:col-span-1 bg-white rounded-xl border border-slate-200 shadow-sm overflow-hidden flex flex-col h-[400px]">
-                            <div className="p-3 bg-slate-50 border-b border-slate-100 font-bold text-sm text-slate-700">Price Change Delta</div>
-                            <div className="flex-1 overflow-y-auto custom-scrollbar">
-                                <table className="w-full text-xs text-left">
-                                    <thead className="bg-white sticky top-0">
-                                        <tr className="border-b border-slate-100 text-slate-500">
-                                            <th className="px-4 py-2">Month</th>
-                                            <th className="px-4 py-2 text-right">Diff</th>
-                                            <th className="px-4 py-2 text-right">%</th>
-                                        </tr>
-                                    </thead>
-                                    <tbody className="divide-y divide-slate-50">
-                                        {analysisChartData.map(row => {
-                                            const valA = row[`Curve A (${compareDateA})`] as number;
-                                            const diff = row.diff;
-                                            const pct = (valA && diff) ? (diff / valA) * 100 : 0;
-                                            
-                                            if (diff === null || diff === 0) return null;
-
-                                            return (
-                                                <tr key={row.month}>
-                                                    <td className="px-4 py-2 font-mono">{row.month}</td>
-                                                    <td className={`px-4 py-2 text-right font-bold ${diff > 0 ? 'text-emerald-600' : 'text-rose-600'}`}>
-                                                        {diff > 0 ? '+' : ''}{diff.toFixed(2)}
-                                                    </td>
-                                                     <td className={`px-4 py-2 text-right ${diff > 0 ? 'text-emerald-600' : 'text-rose-600'}`}>
-                                                        {diff > 0 ? '+' : ''}{pct.toFixed(1)}%
-                                                    </td>
-                                                </tr>
-                                            );
-                                        })}
-                                    </tbody>
-                                </table>
-                            </div>
-                        </div>
                     </div>
                 </div>
             )}
 
             {activeTab === 'evolution' && (
                 <div className="flex-1 flex flex-col p-6 space-y-6 overflow-y-auto">
-                    <div className="bg-blue-50 border border-blue-100 p-4 rounded-xl mb-2">
-                        <h3 className="text-blue-800 font-bold text-sm mb-1">Contract Evolution (Seasonality Analysis)</h3>
-                        <p className="text-xs text-blue-600">
-                            Monitor how the market valuation for a specific delivery month (e.g. "Dec-2025") has changed over time.
-                        </p>
-                    </div>
-
-                    <div className="flex flex-wrap gap-6 items-end bg-white p-4 rounded-xl border border-slate-200 shadow-sm">
-                        <div className="flex flex-col gap-1 w-48">
-                            <label className="text-xs font-bold text-slate-400 uppercase">Select Index</label>
-                            <select 
-                                value={evolutionIndex} 
-                                onChange={(e) => setEvolutionIndex(e.target.value)}
-                                className="border border-slate-300 rounded-lg px-3 py-2 text-sm font-bold text-slate-700"
-                            >
-                                {INDICES.map(idx => <option key={idx} value={idx}>{idx}</option>)}
-                            </select>
-                        </div>
-                        <div className="flex flex-col gap-1 w-48">
-                            <label className="text-xs font-bold text-slate-400 uppercase">Contract Month</label>
-                            <select 
-                                value={evolutionContract} 
-                                onChange={(e) => setEvolutionContract(e.target.value)}
-                                className="border border-slate-300 rounded-lg px-3 py-2 text-sm font-mono"
-                            >
-                                {allContractMonths.map(m => <option key={m} value={m}>{m}</option>)}
-                            </select>
-                        </div>
-                    </div>
-
-                    <div className="flex-1 bg-white p-6 rounded-xl border border-slate-200 shadow-sm min-h-[400px]">
-                        <h3 className="text-sm font-bold text-slate-700 mb-4 text-center">
-                            Price History: {evolutionIndex} for {evolutionContract} Delivery
-                        </h3>
+                    <div className="bg-white p-6 rounded-xl border border-slate-200 shadow-sm min-h-[400px]">
                         {evolutionChartData.length > 0 ? (
                             <ResponsiveContainer width="100%" height="100%">
-                                <LineChart data={evolutionChartData} margin={{ top: 10, right: 30, left: 20, bottom: 20 }}>
+                                <LineChart data={evolutionChartData}>
                                     <CartesianGrid strokeDasharray="3 3" vertical={false} stroke="#f1f5f9" />
-                                    <XAxis 
-                                        dataKey="date" 
-                                        tick={{fontSize: 11, fill: '#64748b'}} 
-                                        label={{ value: 'Curve Date (When price was recorded)', position: 'bottom', offset: 0, fontSize: 12, fill: '#94a3b8' }}
-                                    />
-                                    <YAxis 
-                                        domain={['auto', 'auto']} 
-                                        tick={{fontSize: 11, fill: '#64748b'}}
-                                        label={{ value: 'Price', angle: -90, position: 'insideLeft', style: { fill: '#94a3b8' } }} 
-                                    />
-                                    <Tooltip 
-                                        contentStyle={{ borderRadius: '8px', border: '1px solid #e2e8f0' }}
-                                        formatter={(val: number) => [val.toFixed(3), 'Price']}
-                                        labelFormatter={(label) => `Date: ${label}`}
-                                    />
-                                    <Line 
-                                        type="monotone" 
-                                        dataKey="price" 
-                                        stroke="#8b5cf6" 
-                                        strokeWidth={3} 
-                                        dot={{ r: 4, fill: '#8b5cf6', strokeWidth: 2, stroke: '#fff' }}
-                                        activeDot={{ r: 7 }}
-                                    />
+                                    <XAxis dataKey="date" tick={{fontSize: 11}} />
+                                    <YAxis domain={['auto', 'auto']} />
+                                    <Tooltip />
+                                    <Line type="monotone" dataKey="price" stroke="#8b5cf6" strokeWidth={3} />
                                 </LineChart>
                             </ResponsiveContainer>
-                        ) : (
-                             <div className="h-full flex items-center justify-center text-slate-400">
-                                 No data available for {evolutionContract}. Try selecting another month or uploading more historical curves.
-                             </div>
-                        )}
+                        ) : <div className="flex items-center justify-center h-full text-slate-400">No evolutionary data.</div>}
                     </div>
                 </div>
             )}
@@ -622,3 +442,25 @@ export const ForwardCurveModal: React.FC<ForwardCurveModalProps> = ({ onClose, o
     </div>
   );
 };
+
+const PreviewTable = ({ data }: { data: ForwardCurveRow[] }) => (
+    <div className="overflow-x-auto border border-slate-200 rounded-lg shadow-sm">
+        <table className="w-full text-sm text-left bg-white">
+            <thead className="text-xs text-slate-500 uppercase bg-slate-100 border-b border-slate-200 sticky top-0">
+                <tr>{COLUMNS.map(col => <th key={col} className="px-4 py-3 font-bold">{col}</th>)}</tr>
+            </thead>
+            <tbody className="divide-y divide-slate-100">
+                {data.map((row, i) => (
+                    <tr key={i} className="hover:bg-slate-50">
+                        <td className="px-4 py-2 font-mono font-bold text-slate-700">{row.month}</td>
+                        {COLUMNS.slice(1).map((col) => {
+                            const key = col === 'Station 2' ? 'STN 2' : col;
+                            const val = row.prices[key];
+                            return <td key={col} className={`px-4 py-2 ${val !== undefined ? 'text-slate-600' : 'text-slate-300 italic'}`}>{val !== undefined ? val.toFixed(3) : '-'}</td>;
+                        })}
+                    </tr>
+                ))}
+            </tbody>
+        </table>
+    </div>
+);

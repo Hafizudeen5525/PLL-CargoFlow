@@ -1,4 +1,3 @@
-
 import React, { useState, useEffect, useMemo, useRef } from 'react';
 import { CargoProfile, PnLBucket } from '../types';
 import { estimatePricingDate, detectUnit } from '../services/calculationService';
@@ -8,7 +7,7 @@ interface ExposureViewProps {
     profiles: CargoProfile[];
 }
 
-// Helper to determine Index Type (still hardcoded as indices are standard market data)
+// Helper to determine Index Type
 const getIndexType = (formula: string) => {
     const f = (formula || '').toUpperCase();
     if (f.includes('HH')) return 'HH';
@@ -85,7 +84,6 @@ export const ExposureView: React.FC<ExposureViewProps> = ({ profiles }) => {
     const formatDate = (ts: number) => new Date(ts).toLocaleDateString('en-US', { month: 'short', year: 'numeric', day: 'numeric' });
 
     // 3. Dynamic Source Categorization Logic
-    // We calculate frequencies based on ALL profiles so categories don't jump around
     const getDynamicSourceCategory = useMemo(() => {
         const counts: Record<string, number> = {};
         profiles.forEach(p => {
@@ -126,7 +124,7 @@ export const ExposureView: React.FC<ExposureViewProps> = ({ profiles }) => {
             // Normalize Volume
             let vol = p.deliveredVolume || 0;
             const unit = p.volumeUnit || detectUnit(p.sellFormula || p.buyFormula);
-            let displayVol = vol; // Keep original for display
+            let displayVol = vol;
             
             // Normalize for aggregation (MMBtu)
             if (unit === 'bbl') vol *= 5.8;
@@ -146,9 +144,7 @@ export const ExposureView: React.FC<ExposureViewProps> = ({ profiles }) => {
             }
         });
 
-        // Sort floating by urgency (pricing soonest)
         floating.sort((a, b) => a._daysToFix - b._daysToFix);
-        // Sort fixed by recency
         fixed.sort((a, b) => b._daysToFix - a._daysToFix);
 
         return { floatingCargoes: floating, fixedCargoes: fixed, totalExposure: exposure };
@@ -160,7 +156,7 @@ export const ExposureView: React.FC<ExposureViewProps> = ({ profiles }) => {
         const indicesSet = new Set<string>();
 
         floatingCargoes.forEach((p: any) => {
-            const cat = getProfileCategory(p); // Use dynamic logic
+            const cat = getProfileCategory(p);
             if (!groups[cat]) groups[cat] = { total: 0, indices: {} };
             
             const idx = getIndexType(p.sellFormula || p.buyFormula);
@@ -171,7 +167,6 @@ export const ExposureView: React.FC<ExposureViewProps> = ({ profiles }) => {
             groups[cat].indices[idx] = (groups[cat].indices[idx] || 0) + vol;
         });
 
-        // Sort: High volume first, but force "Others" to the bottom
         const sortedGroups = Object.entries(groups).sort((a, b) => {
             if (a[0] === 'Others') return 1;
             if (b[0] === 'Others') return -1;
@@ -200,7 +195,18 @@ export const ExposureView: React.FC<ExposureViewProps> = ({ profiles }) => {
         });
     }, [fixedCargoes, selectedCategory, selectedIndex, groupByMode, getDynamicSourceCategory]);
 
-    // Color helpers
+    const getIndexColorStr = (idx: string) => {
+         if (!idx) return 'bg-slate-400';
+         const f = idx.toUpperCase();
+         if (f === 'JKM') return 'bg-emerald-500';
+         if (f === 'TTF') return 'bg-blue-500';
+         if (f === 'NBP') return 'bg-indigo-500';
+         if (f === 'HH') return 'bg-amber-500';
+         if (f === 'BRENT') return 'bg-rose-500';
+         if (f === 'JCC') return 'bg-orange-500';
+         return 'bg-slate-400';
+    };
+
     const getIndexColor = (formula: string) => {
         const f = (formula || '').toUpperCase();
         if (f.includes('JKM')) return 'bg-emerald-500 border-emerald-400';
@@ -212,24 +218,9 @@ export const ExposureView: React.FC<ExposureViewProps> = ({ profiles }) => {
         return 'bg-slate-500 border-slate-400';
     };
 
-    const getIndexColorStr = (idx: string) => {
-         const f = idx.toUpperCase();
-         if (f === 'JKM') return 'bg-emerald-500';
-         if (f === 'TTF') return 'bg-blue-500';
-         if (f === 'NBP') return 'bg-indigo-500';
-         if (f === 'HH') return 'bg-amber-500';
-         if (f === 'BRENT') return 'bg-rose-500';
-         if (f === 'JCC') return 'bg-orange-500';
-         return 'bg-slate-400';
-    };
-
     return (
         <div className="h-full flex flex-col md:flex-row gap-6 p-2 overflow-hidden">
-            
-            {/* LEFT SIDEBAR: Control Center (Category Matrix + Filters) */}
             <div className="w-full md:w-[380px] flex flex-col gap-4 h-full min-w-0">
-                
-                {/* 1. Global Index Filter */}
                 <div className="bg-white p-5 rounded-xl border border-slate-200 shadow-sm flex-shrink-0">
                     <div className="flex justify-between items-center mb-3">
                          <h3 className="text-xs font-bold text-slate-500 uppercase tracking-wide">Filter by Index</h3>
@@ -265,7 +256,6 @@ export const ExposureView: React.FC<ExposureViewProps> = ({ profiles }) => {
                     </div>
                 </div>
 
-                {/* 2. Exposure Matrix (Prominent) */}
                 <div className="flex-1 bg-white rounded-xl border border-slate-200 shadow-sm flex flex-col overflow-hidden">
                      <div className="p-4 border-b border-slate-100 bg-slate-50/50 flex flex-col gap-3">
                         <div className="flex justify-between items-start">
@@ -280,7 +270,6 @@ export const ExposureView: React.FC<ExposureViewProps> = ({ profiles }) => {
                             </div>
                             
                             <div className="flex items-center gap-2">
-                                {/* Mode Toggle */}
                                 <div className="flex bg-white p-0.5 rounded-lg border border-slate-200">
                                     <button 
                                         onClick={() => setGroupByMode('group')}
@@ -308,7 +297,6 @@ export const ExposureView: React.FC<ExposureViewProps> = ({ profiles }) => {
                             </div>
                         </div>
 
-                        {/* Config Panel */}
                         <AnimatePresence>
                             {showConfig && (
                                 <motion.div 
@@ -368,7 +356,6 @@ export const ExposureView: React.FC<ExposureViewProps> = ({ profiles }) => {
                                             </div>
                                         </div>
                                         
-                                        {/* Mini Index Bars */}
                                         <div className="flex h-1.5 w-full rounded-full overflow-hidden bg-slate-100 mb-3">
                                             {Object.entries(data.indices).map(([idx, vol], i) => (
                                                 <div 
@@ -398,10 +385,7 @@ export const ExposureView: React.FC<ExposureViewProps> = ({ profiles }) => {
                 </div>
             </div>
 
-            {/* RIGHT MAIN AREA: Timeline & Cargo Lists */}
             <div className="flex-1 flex flex-col gap-4 min-w-0 h-full">
-                
-                {/* 1. Timeline Control Deck */}
                 <div className="bg-white p-3 rounded-xl border border-slate-200 shadow-sm flex items-center gap-4 flex-shrink-0">
                     <button 
                         onClick={() => setIsPlaying(!isPlaying)}
@@ -435,10 +419,7 @@ export const ExposureView: React.FC<ExposureViewProps> = ({ profiles }) => {
                     </div>
                 </div>
 
-                {/* 2. Split Views: Priority Floating vs Secondary Fixed */}
                 <div className="flex-1 flex gap-4 min-h-0 overflow-hidden">
-                    
-                    {/* PRIORITY: Floating List (Takes more space) */}
                     <div className={`flex-[2] bg-white/60 rounded-xl border flex flex-col relative overflow-hidden backdrop-blur-sm transition-all shadow-sm ${
                         (selectedCategory || selectedIndex) ? 'border-blue-300 ring-1 ring-blue-100' : 'border-slate-200'
                     }`}>
@@ -473,7 +454,6 @@ export const ExposureView: React.FC<ExposureViewProps> = ({ profiles }) => {
                         </div>
                     </div>
 
-                    {/* SECONDARY: Fixed Price List */}
                     <div className="flex-1 bg-slate-50 rounded-xl border border-slate-200 flex flex-col relative overflow-hidden">
                         <div className="bg-slate-100/50 p-4 border-b border-slate-200 flex justify-between items-center sticky top-0 z-10">
                             <h3 className="text-xs font-bold text-slate-500 uppercase flex items-center gap-2">
@@ -504,7 +484,6 @@ export const ExposureView: React.FC<ExposureViewProps> = ({ profiles }) => {
     );
 };
 
-// --- Subcomponent: The Animated Card ---
 const CargoCard: React.FC<{ profile: any, status: 'floating' | 'fixed', colorClass: string }> = ({ profile, status, colorClass }) => {
     return (
         <motion.div
@@ -518,7 +497,6 @@ const CargoCard: React.FC<{ profile: any, status: 'floating' | 'fixed', colorCla
                 : 'bg-white/80 border-slate-200 opacity-80 min-h-[70px]'
             }`}
         >
-            {/* Visual Flair Bar */}
             <div className={`absolute left-0 top-0 bottom-0 w-1.5 ${colorClass.split(' ')[0]}`}></div>
             
             <div className="flex items-center gap-4 pl-3">

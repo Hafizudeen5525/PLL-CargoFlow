@@ -56,7 +56,8 @@ const App: React.FC = () => {
         newProfiles[idx] = profile;
         return newProfiles;
       } else {
-        return [...prev, { ...profile, id: profile.id || Date.now().toString() }];
+        // Fix: Cast to object to avoid "Spread types may only be created from object types" error
+        return [...prev, { ...(profile as object), id: profile.id || Date.now().toString() } as CargoProfile];
       }
     });
     setIsEditing(false);
@@ -78,7 +79,8 @@ const App: React.FC = () => {
   const handleBulkUpdate = (ids: Set<string>, updates: Partial<CargoProfile>) => {
     setProfiles(prev => prev.map(p => {
       if (ids.has(p.id)) {
-        return recalculateProfile({ ...p, ...updates }, p.pnlBucket !== PnLBucket.Realized) as CargoProfile;
+        // Fix: Cast to object to avoid "Spread types may only be created from object types" error
+        return recalculateProfile({ ...(p as object), ...(updates as object) }, p.pnlBucket !== PnLBucket.Realized) as CargoProfile;
       }
       return p;
     }));
@@ -91,7 +93,8 @@ const App: React.FC = () => {
             // If strategy exists, merge updates, otherwise add new
             const existing = existingMap.get(np.strategyName);
             if (existing) {
-                existingMap.set(np.strategyName, { ...existing, ...np });
+                // Fix: Cast to object to avoid "Spread types may only be created from object types" error
+                existingMap.set(np.strategyName, { ...(existing as object), ...(np as object) } as CargoProfile);
             } else {
                 existingMap.set(np.strategyName, np);
             }
@@ -109,7 +112,8 @@ const App: React.FC = () => {
   };
 
   const handleMatch = (buy: CargoProfile, sell: CargoProfile) => {
-    const updatedBuy = { ...buy, buyer: sell.buyer, pnlBucket: PnLBucket.Realized }; 
+    // Fix: Cast to object to avoid "Spread types may only be created from object types" error
+    const updatedBuy = { ...(buy as object), buyer: sell.buyer, pnlBucket: PnLBucket.Realized }; 
     handleSaveProfile(updatedBuy as CargoProfile); 
     alert(`Matched ${buy.strategyName} with ${sell.strategyName}`);
   };
