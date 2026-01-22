@@ -1,8 +1,8 @@
-
-import { GoogleGenAI, Type, Schema } from "@google/genai";
+import { GoogleGenAI, Type } from "@google/genai";
 import { CargoProfile } from "../types";
 
-const parseCargoSchema: Schema = {
+// Fix: Removed deprecated Schema type import and use a standard object for schema definition
+const parseCargoSchema = {
   type: Type.OBJECT,
   properties: {
     source: { type: Type.STRING },
@@ -50,10 +50,11 @@ export async function parseKTSDocument(
       throw new Error("API Key is missing.");
     }
 
+    // Fix: Correct initialization using named parameter object
     const ai = new GoogleGenAI({ apiKey });
     
-    // Gemini 2.5 Flash is efficient for document extraction
-    const modelId = "gemini-2.5-flash";
+    // Fix: Updated to 'gemini-3-flash-preview' for extraction tasks as per guidelines
+    const modelId = "gemini-3-flash-preview";
 
     const prompt = `
       Analyze the provided KTS (Key Terms Sheet) or logistics document data. 
@@ -97,6 +98,7 @@ export async function parseKTSDocument(
       }
     });
 
+    // Fix: Use response.text property directly as per guidelines
     const text = response.text;
     if (!text) throw new Error("No response from AI");
 

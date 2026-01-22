@@ -43,6 +43,34 @@ export interface CargoProfile {
   deliveryWindowEnd?: string;
 }
 
+// Added missing DealLeg interface for the Deal Register component
+export interface DealLeg {
+  id: string;
+  type: 'Buy' | 'Sell';
+  counterparty: string;
+  date: string;
+  volume: number;
+  formula: string;
+  absolutePrice: number;
+  totalValue: number;
+  volumeUnit: string;
+  status: PnLBucket;
+  incoterms?: string;
+  windowStart?: string;
+  windowEnd?: string;
+}
+
+// Added missing ShipmentStrategy interface for strategy-level views
+export interface ShipmentStrategy {
+  id: string;
+  strategyName: string;
+  manualGroup?: string;
+  pnlBucket: PnLBucket;
+  buyLeg: DealLeg;
+  sellLeg: DealLeg;
+  totalPnL: number;
+}
+
 export const EmptyCargoProfile: Omit<CargoProfile, 'id'> = {
   source: '',
   strategyName: '',

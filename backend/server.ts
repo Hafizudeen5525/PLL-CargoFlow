@@ -1,13 +1,13 @@
 import express from 'express';
 import cors from 'cors';
-import bodyParser from 'body-parser';
 // import { OpenAIClient, AzureKeyCredential } from "@azure/openai";
 
 const app = express();
 const PORT = process.env.PORT || 3001;
 
 app.use(cors());
-app.use(bodyParser.json({ limit: '10mb' }));
+// Fix: Use express.json() built-in middleware and cast to any to resolve the type mismatch between NextHandleFunction and RequestHandler
+app.use(express.json({ limit: '10mb' }) as any);
 
 // --- AZURE OPENAI CONFIGURATION (Placeholder) ---
 // const endpoint = process.env.AZURE_OPENAI_ENDPOINT || "";

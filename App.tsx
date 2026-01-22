@@ -9,6 +9,7 @@ import { TradeMatching } from './components/TradeMatching';
 import { ForwardCurveModal } from './components/ForwardCurveModal';
 import { BulkImportModal } from './components/BulkImportModal';
 import { ExposureView } from './components/ExposureView';
+import { DiscrepancyCheck } from './components/DiscrepancyCheck';
 import { CargoProfile, PnLBucket } from './types';
 import { getMarketData, getForwardCurve, recalculateProfile, getPortfolioYear } from './services/calculationService';
 
@@ -18,6 +19,7 @@ const NAV_ITEMS = [
   { id: 'cargos', label: 'Cargo List', icon: 'M9 5H7a2 2 0 00-2 2v12a2 2 0 002 2h10a2 2 0 002-2V7a2 2 0 00-2-2h-2M9 5a2 2 0 002 2h2a2 2 0 002-2M9 5a2 2 0 012-2h2a2 2 0 012 2' },
   { id: 'matching', label: 'Trade Matching', icon: 'M8 7h12m0 0l-4-4m4 4l-4 4m0 6H4m0 0l4 4m-4-4l4-4' },
   { id: 'exposure', label: 'Exposure View', icon: 'M9 19v-6a2 2 0 00-2-2H5a2 2 0 00-2 2v6a2 2 0 002 2h2a2 2 0 002-2zm0 0V9a2 2 0 012-2h2a2 2 0 012 2v10m-6 0a2 2 0 002 2h2a2 2 0 002-2m0 0V5a2 2 0 012-2h2a2 2 0 012 2v14a2 2 0 002 2h2a2 2 0 002-2v-6a2 2 0 01-2-2h-2a2 2 0 01-2 2v6' },
+  { id: 'discrepancy', label: 'TRMS Reconcile', icon: 'M9 5H7a2 2 0 00-2 2v12a2 2 0 002 2h10a2 2 0 002-2V7a2 2 0 00-2-2h-2M9 5a2 2 0 002 2h2a2 2 0 002-2M9 5a2 2 0 012-2h2a2 2 0 012 2m-3 7h3m-3 4h3m-6-4h.01M9 16h.01' },
 ];
 
 const App: React.FC = () => {
@@ -93,12 +95,9 @@ const App: React.FC = () => {
   };
 
   const handleMatch = (buy: CargoProfile, sell: CargoProfile) => {
-    // Logic to "match" them, e.g., setting buyer/seller fields or creating a deal record
-    // Implementing a simple merge for now:
+    // Logic to "match" them
     const updatedBuy = { ...buy, buyer: sell.buyer, pnlBucket: PnLBucket.Realized }; 
-    const updatedSell = { ...sell, source: buy.source, pnlBucket: PnLBucket.Realized }; 
     handleSaveProfile(updatedBuy as CargoProfile); 
-    // Ideally we merge them into one or link IDs, but here we just update one and alert
     alert(`Matched ${buy.strategyName} with ${sell.strategyName}`);
   };
 
@@ -179,19 +178,23 @@ const App: React.FC = () => {
             <h1 className="text-xl font-bold text-slate-800 capitalize">{NAV_ITEMS.find(n => n.id === view)?.label}</h1>
             
             <div className="flex items-center gap-4">
-                <button 
-                    onClick={() => setIsImporting(true)}
-                    className="text-slate-500 hover:text-blue-600 text-sm font-medium transition-colors"
-                >
-                    Bulk Import
-                </button>
-                <button 
-                    onClick={() => handleEdit()}
-                    className="bg-blue-600 hover:bg-blue-700 text-white px-4 py-2 rounded-lg text-sm font-medium shadow-sm transition-all flex items-center gap-2"
-                >
-                    <svg className="w-4 h-4" fill="none" stroke="currentColor" viewBox="0 0 24 24"><path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M12 4v16m8-8H4" /></svg>
-                    New Cargo
-                </button>
+                {view !== 'discrepancy' && (
+                  <>
+                    <button 
+                        onClick={() => setIsImporting(true)}
+                        className="text-slate-500 hover:text-blue-600 text-sm font-medium transition-colors"
+                    >
+                        Bulk Import
+                    </button>
+                    <button 
+                        onClick={() => handleEdit()}
+                        className="bg-blue-600 hover:bg-blue-700 text-white px-4 py-2 rounded-lg text-sm font-medium shadow-sm transition-all flex items-center gap-2"
+                    >
+                        <svg className="w-4 h-4" fill="none" stroke="currentColor" viewBox="0 0 24 24"><path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M12 4v16m8-8H4" /></svg>
+                        New Cargo
+                    </button>
+                  </>
+                )}
             </div>
         </header>
 
@@ -228,6 +231,10 @@ const App: React.FC = () => {
                     <motion.div key="exposure" initial={{opacity:0, x:-20}} animate={{opacity:1, x:0}} exit={{opacity:0, x:20}} className="h-full">
                          <ExposureView profiles={filteredProfiles} />
                     </motion.div>
+                ) : view === 'discrepancy' ? (
+                    <motion.div key="discrepancy" initial={{opacity:0, x:-20}} animate={{opacity:1, x:0}} exit={{opacity:0, x:20}} className="h-full">
+                         <DiscrepancyCheck profiles={profiles} />
+                    </motion.div>
                 ) : null}
             </AnimatePresence>
         </div>
@@ -249,7 +256,6 @@ const App: React.FC = () => {
                     onClose={() => setIsImporting(false)}
                     onImport={(newProfiles) => {
                         setProfiles(prev => {
-                            // Merge logic: update if ID exists, else add
                             const map = new Map(prev.map(p => [p.id, p]));
                             newProfiles.forEach(p => map.set(p.id, p));
                             return Array.from(map.values());
@@ -262,7 +268,6 @@ const App: React.FC = () => {
                     onClose={() => setIsForwardCurveOpen(false)}
                     onSave={() => {
                         handleMarketRefresh(); 
-                        // Do not close automatically on save/delete to allow managing multiple curves
                     }}
                 />
             )}
