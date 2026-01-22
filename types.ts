@@ -9,7 +9,7 @@ export interface CargoProfile {
   id: string;
   source: string;
   strategyName: string;
-  manualGroup?: string; // New field for manual grouping
+  manualGroup?: string;
   buyer: string;
   optimized: boolean;
   deliveryDate: string;
@@ -24,7 +24,7 @@ export interface CargoProfile {
   buyFormula: string;
   absoluteBuyPrice: number;
   incoterms: string;
-  src: string; // Assuming SRC is a code or identifier
+  src: string;
   pnlBucket: PnLBucket;
   reconciledPurchaseCost: number;
   finalSalesRevenue: number;
@@ -36,14 +36,41 @@ export interface CargoProfile {
   volumeUnit?: string;
   pricingEndDate?: string;
   
-  // Date Windows
   loadingWindowStart?: string;
   loadingWindowEnd?: string;
   deliveryWindowStart?: string;
   deliveryWindowEnd?: string;
+
+  // --- Jarvis Specific Detail Columns ---
+  // Purchase Components
+  buyPrice1Weightage?: string;
+  buyPrice1Slope?: string;
+  buyPriceIndex1?: string;
+  buyPrice1MonthDef?: string;
+  buyPrice1Constant?: string;
+  buyPrice2Weightage?: string;
+  buyPrice2Slope?: string;
+  buyPriceIndex2?: string;
+  buyPrice2MonthDef?: string;
+  buyPrice2Constant?: string;
+
+  // Sales Components
+  sellPrice1Weightage?: string;
+  sellPrice1Value?: number;
+  sellPrice1Slope?: string;
+  sellPriceIndex1?: string;
+  sellPrice1MonthDef?: string;
+  sellPrice1Constant?: string;
+  sellPrice2Weightage?: string;
+  sellPrice2Value?: number;
+  sellPrice2Slope?: string;
+  sellPriceIndex2?: string;
+  sellPrice2MonthDef?: string;
+  sellPrice2Constant?: string;
+  
+  jarvisNo?: string;
 }
 
-// Added missing DealLeg interface for the Deal Register component
 export interface DealLeg {
   id: string;
   type: 'Buy' | 'Sell';
@@ -60,7 +87,6 @@ export interface DealLeg {
   windowEnd?: string;
 }
 
-// Added missing ShipmentStrategy interface for strategy-level views
 export interface ShipmentStrategy {
   id: string;
   strategyName: string;

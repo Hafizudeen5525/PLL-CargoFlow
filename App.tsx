@@ -37,7 +37,6 @@ const App: React.FC = () => {
 
   // Load initial data
   useEffect(() => {
-    // Load profiles from localStorage if needed, or use mock/empty
     const saved = localStorage.getItem('cargo_profiles');
     if (saved) {
       setProfiles(JSON.parse(saved));
@@ -85,17 +84,31 @@ const App: React.FC = () => {
     }));
   };
 
+  const handleBulkImport = (newProfiles: CargoProfile[]) => {
+    setProfiles(prev => {
+        const existingMap = new Map(prev.map(p => [p.strategyName, p]));
+        newProfiles.forEach(np => {
+            // If strategy exists, merge updates, otherwise add new
+            const existing = existingMap.get(np.strategyName);
+            if (existing) {
+                existingMap.set(np.strategyName, { ...existing, ...np });
+            } else {
+                existingMap.set(np.strategyName, np);
+            }
+        });
+        return Array.from(existingMap.values());
+    });
+  };
+
   const handleMarketRefresh = () => {
     setMarketData(getMarketData());
     setForwardCurve(getForwardCurve());
-    // Recalculate unrealized profiles with new market data
     setProfiles(prev => prev.map(p => 
       p.pnlBucket === PnLBucket.Realized ? p : (recalculateProfile(p, true) as CargoProfile)
     ));
   };
 
   const handleMatch = (buy: CargoProfile, sell: CargoProfile) => {
-    // Logic to "match" them
     const updatedBuy = { ...buy, buyer: sell.buyer, pnlBucket: PnLBucket.Realized }; 
     handleSaveProfile(updatedBuy as CargoProfile); 
     alert(`Matched ${buy.strategyName} with ${sell.strategyName}`);
@@ -111,7 +124,6 @@ const App: React.FC = () => {
     return profiles.filter(p => getPortfolioYear(p).toString() === portfolioYear);
   }, [profiles, portfolioYear]);
 
-  // Extract available years
   const availableYears = useMemo(() => {
       const years = new Set<string>();
       profiles.forEach(p => years.add(getPortfolioYear(p).toString()));
@@ -123,7 +135,6 @@ const App: React.FC = () => {
     <div className="flex h-screen bg-slate-100 font-sans text-slate-900 overflow-hidden">
       <Toaster position="top-right" />
       
-      {/* Sidebar */}
       <aside className="w-64 bg-slate-900 text-slate-300 flex flex-col flex-shrink-0">
         <div className="p-6 flex items-center gap-3 text-white">
           <div className="w-8 h-8 bg-blue-600 rounded-lg flex items-center justify-center font-bold text-lg shadow-lg shadow-blue-900/50">C</div>
@@ -171,9 +182,7 @@ const App: React.FC = () => {
         </div>
       </aside>
 
-      {/* Main Content */}
       <main className="flex-1 flex flex-col min-w-0 overflow-hidden relative">
-        {/* Top Header */}
         <header className="h-16 bg-white border-b border-slate-200 flex justify-between items-center px-6 flex-shrink-0 z-10">
             <h1 className="text-xl font-bold text-slate-800 capitalize">{NAV_ITEMS.find(n => n.id === view)?.label}</h1>
             
@@ -198,7 +207,6 @@ const App: React.FC = () => {
             </div>
         </header>
 
-        {/* View Content */}
         <div className="flex-1 overflow-y-auto custom-scrollbar p-6 bg-slate-100">
             <AnimatePresence mode="wait">
                 {view === 'dashboard' ? (
@@ -221,6 +229,7 @@ const App: React.FC = () => {
                             onActualize={(p) => handleSaveProfile({...p, pnlBucket: PnLBucket.Realized})}
                             onBulkDelete={handleBulkDelete}
                             onBulkUpdate={handleBulkUpdate}
+                            onBulkImport={handleBulkImport}
                         />
                     </motion.div>
                 ) : view === 'matching' ? (
@@ -239,7 +248,6 @@ const App: React.FC = () => {
             </AnimatePresence>
         </div>
 
-        {/* Modals */}
         <AnimatePresence>
             {isEditing && (
                 <div className="fixed inset-0 bg-slate-900/50 backdrop-blur-sm z-50 flex items-center justify-center p-4">

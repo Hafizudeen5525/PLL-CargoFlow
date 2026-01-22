@@ -120,7 +120,14 @@ export const DiscrepancyCheck: React.FC<DiscrepancyCheckProps> = ({ profiles }) 
         rawData.forEach((row: any) => {
           const cleanRow: any = {};
           WHITELIST_COLUMNS.forEach(col => {
-            if (row[col] !== undefined) cleanRow[col] = row[col];
+            if (row[col] !== undefined) {
+                 // FIX: Prevent React Error #31 by stringifying Date objects
+                 if (row[col] instanceof Date) {
+                     cleanRow[col] = row[col].toISOString().split('T')[0];
+                 } else {
+                     cleanRow[col] = row[col];
+                 }
+            }
           });
 
           const cflowType = String(row['Cflow Type'] || '').trim();
@@ -563,7 +570,7 @@ export const DiscrepancyCheck: React.FC<DiscrepancyCheckProps> = ({ profiles }) 
               ) : (
                 <div className="text-center max-w-xs">
                    <div className="w-16 h-16 bg-slate-50 rounded-full flex items-center justify-center mx-auto mb-4 border border-slate-100">
-                      <svg className="w-8 h-8 text-slate-200" fill="none" stroke="currentColor" viewBox="0 0 24 24"><path strokeLinecap="round" strokeLinejoin="round" strokeWidth={1.5} d="M9 17v-2m3 2v-4m3 2v-6m-9-9H5a2 2 0 00-2 2v12a2 2 0 002 2h10a2 2 0 002-2V7a2 2 0 00-2-2h-2M9 5a2 2 0 002 2h2a2 2 0 002-2M9 5a2 2 0 012-2h2a2 2 0 012 2" /></svg>
+                      <svg className="w-8 h-8 text-slate-200" fill="none" stroke="currentColor" viewBox="0 0 24 24"><path strokeLinecap="round" strokeLinejoin="round" strokeWidth={1.5} d="M9 17v-2m3 2v-4m3 2v-6m-9-9H5a2 2 0 00-2 2v12a2 2 0 002 2h10a2 2 0 002-2V7a2 2 0 00-2-2h-2M9 5a2 2 0 022 2h2a2 2 0 002-2M9 5a2 2 0 012-2h2a2 2 0 012 2" /></svg>
                    </div>
                    <p className="font-bold text-slate-600">Dataset Empty</p>
                    <p className="text-xs mt-1">Upload a TRMS extract to populate these tables with prioritized columns.</p>
