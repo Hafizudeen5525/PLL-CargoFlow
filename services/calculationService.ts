@@ -1,5 +1,5 @@
 
-import { CargoProfile, PnLBucket } from '../types';
+import { CargoProfile, PnLBucket, EmptyCargoProfile } from '../types';
 
 export interface ForwardCurveRow {
     month: string; // YYYY-MM
@@ -203,8 +203,20 @@ function applyRounding(val: number, decimals: number | undefined): number {
     return Math.round(val * factor) / factor;
 }
 
+function formatMonthStr(dateStr: string): string {
+    if (!dateStr) return '';
+    try {
+        const d = new Date(dateStr);
+        if (isNaN(d.getTime())) return '';
+        const monthShort = d.toLocaleString('en-US', { month: 'short' });
+        const yearShort = d.getFullYear().toString().slice(2);
+        return `${monthShort}-${yearShort}`;
+    } catch { return ''; }
+}
+
 export function recalculateProfile(p: Partial<CargoProfile>, useMarket: boolean = true, curveDate?: string): Partial<CargoProfile> {
-    const up = { ...p } as CargoProfile;
+    // Merge with EmptyCargoProfile to ensure all mandatory fields exist during calculation
+    const up = { ...EmptyCargoProfile, ...p } as CargoProfile;
     
     if (up.pnlBucket !== PnLBucket.Realized && useMarket) {
         // TIER 1
@@ -234,6 +246,10 @@ export function recalculateProfile(p: Partial<CargoProfile>, useMarket: boolean 
             up.tier2LoadedVolume = 0;
         }
     }
+
+    // Standardize Month strings
+    up.deliveryMonth = formatMonthStr(up.deliveryDate);
+    up.loadingMonth = formatMonthStr(up.loadingDate);
 
     // Revenue
     const t1Revenue = (up.deliveredVolume || 0) * (up.absoluteSellPrice || 0);
