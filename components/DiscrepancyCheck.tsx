@@ -50,8 +50,6 @@ const PRIORITY_COLUMNS = [
   'Change_in_Total_PnL'
 ];
 
-const STRATEGY_CATEGORIES = ['Cheniere', 'LNGC', 'PL9SB', 'PFLNG1', 'PFLNG2', 'Spot'];
-
 export const DiscrepancyCheck: React.FC<DiscrepancyCheckProps> = ({ profiles }) => {
   const [dataSets, setDataSets] = useState<{
     src: any[];
@@ -121,12 +119,14 @@ export const DiscrepancyCheck: React.FC<DiscrepancyCheckProps> = ({ profiles }) 
           const cleanRow: any = {};
           WHITELIST_COLUMNS.forEach(col => {
             if (row[col] !== undefined) {
-                 // FIX: Ensure Date objects use local components to prevent timezone shift
                  if (row[col] instanceof Date) {
+                     // CRITICAL FIX: Add 12 hours to shift date into the middle of the intended day 
+                     // before UTC extraction. This bypasses timezone-induced shifts.
                      const dObj = row[col];
-                     const y = dObj.getFullYear();
-                     const m = String(dObj.getMonth() + 1).padStart(2, '0');
-                     const d = String(dObj.getDate()).padStart(2, '0');
+                     const adjustedDate = new Date(dObj.getTime() + (12 * 60 * 60 * 1000));
+                     const y = adjustedDate.getUTCFullYear();
+                     const m = String(adjustedDate.getUTCMonth() + 1).padStart(2, '0');
+                     const d = String(adjustedDate.getUTCDate()).padStart(2, '0');
                      cleanRow[col] = `${y}-${m}-${d}`;
                  } else {
                      cleanRow[col] = row[col];
@@ -295,47 +295,6 @@ export const DiscrepancyCheck: React.FC<DiscrepancyCheckProps> = ({ profiles }) 
     return uniques.filter(v => String(v).toLowerCase().includes(lower));
   }, [openFilterMenu, activeTab, dataSets, menuSearch]);
 
-  const strategyHierarchy = useMemo(() => {
-    if (openFilterMenu !== 'Strategy Name') return null;
-    const uniques = dataSets.uniqueValues[activeTab]['Strategy Name'] || [];
-    const groups: Record<string, any[]> = {};
-    STRATEGY_CATEGORIES.forEach(cat => groups[cat] = []);
-    groups['Others'] = [];
-
-    uniques.forEach(val => {
-        const lower = String(val).toLowerCase();
-        let matched = false;
-        for (const cat of STRATEGY_CATEGORIES) {
-            if (lower.includes(cat.toLowerCase())) {
-                groups[cat].push(val);
-                matched = true;
-                break;
-            }
-        }
-        if (!matched) groups['Others'].push(val);
-    });
-    return groups;
-  }, [openFilterMenu, activeTab, dataSets]);
-
-  const dateHierarchy = useMemo(() => {
-    if (!openFilterMenu || !['Start Date', 'End Date', 'Trade Date', 'Payment Date', 'EOD_Date'].includes(openFilterMenu)) return null;
-    const uniques = dataSets.uniqueValues[activeTab][openFilterMenu] || [];
-    const hierarchy: Record<string, Record<string, any[]>> = {};
-
-    uniques.forEach(val => {
-        if (!val) return;
-        const d = new Date(val);
-        if (isNaN(d.getTime())) return;
-        const year = d.getFullYear().toString();
-        const month = d.toLocaleString('default', { month: 'long' });
-        if (!hierarchy[year]) hierarchy[year] = {};
-        if (!hierarchy[year][month]) hierarchy[year][month] = [];
-        hierarchy[year][month].push(val);
-    });
-
-    return hierarchy;
-  }, [openFilterMenu, activeTab, dataSets]);
-
   const isAnyFilterActive = Object.keys(activeFilters).length > 0 || searchTerm !== '';
 
   return (
@@ -431,98 +390,14 @@ export const DiscrepancyCheck: React.FC<DiscrepancyCheckProps> = ({ profiles }) 
                               <input autoFocus type="text" placeholder="Search values..." value={menuSearch} onChange={(e) => setMenuSearch(e.target.value)} className="w-full text-[10px] px-2 py-1.5 border border-slate-200 rounded bg-slate-50 focus:ring-1 focus:ring-indigo-500" />
                               
                               <div className="max-h-[300px] overflow-y-auto custom-scrollbar pr-2">
-                                {strategyHierarchy ? (
-                                    <div className="space-y-1">
-                                        {(Object.entries(strategyHierarchy) as [string, any[]][]).map(([category, names]) => {
-                                            if (names.length === 0) return null;
-                                            const categoryId = `cat-${category}`;
-                                            const isExpanded = expandedNodes.has(categoryId);
-                                            const allSelected = names.every(n => activeFilters[header]?.has(n));
-                                            return (
-                                                <div key={category} className="space-y-1">
-                                                    <div className="flex items-center gap-2 p-1 hover:bg-slate-50 rounded group cursor-pointer">
-                                                        <button onClick={(e) => { e.stopPropagation(); toggleNode(categoryId); }} className="w-4 h-4 flex items-center justify-center text-slate-400">
-                                                            <svg className={`w-3 h-3 transition-transform ${isExpanded ? 'rotate-90' : ''}`} fill="none" stroke="currentColor" viewBox="0 0 24 24"><path strokeLinecap="round" strokeLinejoin="round" strokeWidth={3} d="M9 5l7 7-7 7" /></svg>
-                                                        </button>
-                                                        <input type="checkbox" checked={allSelected} onChange={() => bulkToggleGroup(header, names)} className="rounded border-slate-300 text-indigo-600 w-3 h-3" />
-                                                        <span className="text-[10px] font-bold text-slate-800 flex-1" onClick={() => toggleNode(categoryId)}>{category}</span>
-                                                        <span className="text-[9px] text-slate-400 font-mono pr-1">{names.length}</span>
-                                                    </div>
-                                                    {isExpanded && (
-                                                        <div className="ml-6 space-y-0.5 border-l border-slate-100 pl-2">
-                                                            {names.map(name => (
-                                                                <label key={name} className="flex items-center gap-2 px-1 py-0.5 hover:bg-slate-50 rounded cursor-pointer">
-                                                                    <input type="checkbox" checked={activeFilters[header]?.has(name)} onChange={() => toggleValueFilter(header, name)} className="rounded border-slate-300 text-indigo-600 w-2.5 h-2.5" />
-                                                                    <span className="text-[9px] truncate text-slate-600">{String(name)}</span>
-                                                                </label>
-                                                            ))}
-                                                        </div>
-                                                    )}
-                                                </div>
-                                            );
-                                        })}
-                                    </div>
-                                ) : dateHierarchy ? (
-                                    <div className="space-y-1">
-                                        {(Object.entries(dateHierarchy as Record<string, Record<string, any[]>>)).map(([year, months]) => {
-                                            const yearId = `year-${year}`;
-                                            const isYearExpanded = expandedNodes.has(yearId);
-                                            const allYearValues = Object.values(months).flat();
-                                            const yearSelected = allYearValues.every(v => activeFilters[header]?.has(v));
-                                            return (
-                                                <div key={year} className="space-y-1">
-                                                    <div className="flex items-center gap-2 p-1 hover:bg-slate-50 rounded group cursor-pointer">
-                                                        <button onClick={(e) => { e.stopPropagation(); toggleNode(yearId); }} className="w-4 h-4 flex items-center justify-center text-slate-400">
-                                                            <svg className={`w-3 h-3 transition-transform ${isYearExpanded ? 'rotate-90' : ''}`} fill="none" stroke="currentColor" viewBox="0 0 24 24"><path strokeLinecap="round" strokeLinejoin="round" strokeWidth={3} d="M9 5l7 7-7 7" /></svg>
-                                                        </button>
-                                                        <input type="checkbox" checked={yearSelected} onChange={() => bulkToggleGroup(header, allYearValues)} className="rounded border-slate-300 text-indigo-600 w-3 h-3" />
-                                                        <span className="text-[10px] font-bold text-slate-800 flex-1" onClick={() => toggleNode(yearId)}>{year}</span>
-                                                    </div>
-                                                    {isYearExpanded && (
-                                                        <div className="ml-5 space-y-1 border-l border-slate-100 pl-2">
-                                                            {(Object.entries(months) as [string, any[]][]).map(([month, days]) => {
-                                                                const monthId = `${yearId}-${month}`;
-                                                                const isMonthExpanded = expandedNodes.has(monthId);
-                                                                const monthSelected = days.every(d => activeFilters[header]?.has(d));
-                                                                return (
-                                                                    <div key={month} className="space-y-0.5">
-                                                                        <div className="flex items-center gap-2 p-1 hover:bg-slate-50 rounded group cursor-pointer">
-                                                                            <button onClick={(e) => { e.stopPropagation(); toggleNode(monthId); }} className="w-3 h-3 flex items-center justify-center text-slate-400">
-                                                                                <svg className={`w-2.5 h-2.5 transition-transform ${isMonthExpanded ? 'rotate-90' : ''}`} fill="none" stroke="currentColor" viewBox="0 0 24 24"><path strokeLinecap="round" strokeLinejoin="round" strokeWidth={3} d="M9 5l7 7-7 7" /></svg>
-                                                                            </button>
-                                                                            <input type="checkbox" checked={monthSelected} onChange={() => bulkToggleGroup(header, days)} className="rounded border-slate-300 text-indigo-600 w-2.5 h-2.5" />
-                                                                            <span className="text-[10px] font-medium text-slate-700 flex-1" onClick={() => toggleNode(monthId)}>{month}</span>
-                                                                        </div>
-                                                                        {isMonthExpanded && (
-                                                                            <div className="ml-5 space-y-0.5 border-l border-slate-100 pl-2">
-                                                                                {days.map(day => (
-                                                                                    <label key={day} className="flex items-center gap-2 px-1 py-0.5 hover:bg-slate-50 rounded cursor-pointer">
-                                                                                        <input type="checkbox" checked={activeFilters[header]?.has(day)} onChange={() => toggleValueFilter(header, day)} className="rounded border-slate-300 text-indigo-600 w-2.5 h-2.5" />
-                                                                                        <span className="text-[9px] text-slate-500">{String(day)}</span>
-                                                                                    </label>
-                                                                                ))}
-                                                                            </div>
-                                                                        )}
-                                                                    </div>
-                                                                );
-                                                            })}
-                                                        </div>
-                                                    )}
-                                                </div>
-                                            );
-                                        })}
-                                    </div>
-                                ) : (
-                                    menuValues.map(v => (
-                                        <label key={v} className="flex items-center gap-2 px-1 py-1 hover:bg-slate-50 rounded cursor-pointer">
-                                          <input type="checkbox" checked={(activeFilters[header] as Set<any> | undefined)?.has(v)} onChange={() => toggleValueFilter(header, v)} className="rounded border-slate-300 text-indigo-600 w-3 h-3" />
-                                          <span className="text-[10px] truncate">{String(v ?? '(Blank)')}</span>
-                                        </label>
-                                      ))
-                                )}
+                                {menuValues.map(v => (
+                                    <label key={v} className="flex items-center gap-2 px-1 py-1 hover:bg-slate-50 rounded cursor-pointer">
+                                      <input type="checkbox" checked={(activeFilters[header] as Set<any> | undefined)?.has(v)} onChange={() => toggleValueFilter(header, v)} className="rounded border-slate-300 text-indigo-600 w-3 h-3" />
+                                      <span className="text-[10px] truncate">{String(v ?? '(Blank)')}</span>
+                                    </label>
+                                  ))}
                               </div>
-                              <div className="pt-2 border-t border-slate-100 flex justify-between items-center">
-                                <span className="text-[9px] text-slate-400 italic">Click chevrons to expand</span>
+                              <div className="pt-2 border-t border-slate-100 flex justify-end items-center">
                                 <button onClick={() => setOpenFilterMenu(null)} className="text-[10px] font-bold text-indigo-600 px-3 py-1 bg-indigo-50 rounded-lg hover:bg-indigo-100">Apply Filters</button>
                               </div>
                             </div>
@@ -536,15 +411,10 @@ export const DiscrepancyCheck: React.FC<DiscrepancyCheckProps> = ({ profiles }) 
 
               <div className="absolute left-0 w-full" style={{ top: ROW_HEIGHT + offsetY }}>
                 {visibleItems.map((row, i) => {
-                  const buySell = String(row['Buy_Sell'] || '').toLowerCase();
-                  const isBuy = buySell.includes('buy') || buySell.includes('purchase');
-                  const isSell = buySell.includes('sell') || buySell.includes('sale');
-                  const rowBg = isBuy ? 'bg-emerald-50/40' : isSell ? 'bg-rose-50/40' : 'bg-white';
-
                   return (
                     <div 
                       key={startIndex + i} 
-                      className={`flex border-b border-slate-100 transition-colors hover:bg-indigo-50/20 ${rowBg}`} 
+                      className="flex border-b border-slate-100 transition-colors hover:bg-indigo-50/20 bg-white" 
                       style={{ height: ROW_HEIGHT }}
                     >
                       {headers.map((header, idx) => {
@@ -552,7 +422,7 @@ export const DiscrepancyCheck: React.FC<DiscrepancyCheckProps> = ({ profiles }) 
                         return (
                           <div 
                             key={header} 
-                            className={`px-4 py-3 text-slate-600 whitespace-nowrap shrink-0 truncate text-[11px] border-r border-slate-50 last:border-r-0 ${isFirst ? `sticky left-0 z-20 shadow-[2px_0_5_rgba(0,0,0,0.05)] ${rowBg}` : ''}`} 
+                            className={`px-4 py-3 text-slate-600 whitespace-nowrap shrink-0 truncate text-[11px] border-r border-slate-50 last:border-r-0 ${isFirst ? 'sticky left-0 z-20 shadow-[2px_0_5_rgba(0,0,0,0.05)] bg-white' : ''}`} 
                             style={{ width: COLUMN_WIDTH }}
                           >
                             {String(row[header] ?? '-')}
