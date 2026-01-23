@@ -45,6 +45,16 @@ const INDEX_ALIASES: Record<string, string> = {
 const STORAGE_KEY_CURVES = 'forward_curves_data';
 const STORAGE_KEY_HISTORICAL = 'historical_market_data';
 
+export const GROUPS = ['PL9SB', 'PFLNG1', 'PFLNG2', 'LNGC', 'Spot', 'Cheniere'];
+
+export function getGroupName(strategyName: string = ''): string {
+    const sn = strategyName.toUpperCase();
+    for (const group of GROUPS) {
+        if (sn.includes(group.toUpperCase())) return group;
+    }
+    return 'Others';
+}
+
 function toMonthKey(date: Date): string {
     const y = date.getFullYear();
     const m = String(date.getMonth() + 1).padStart(2, '0');

@@ -1,7 +1,7 @@
 
 import React, { useMemo, useState, useEffect } from 'react';
 import { CargoProfile, PnLBucket } from '../types';
-import { ForwardCurveRow, detectUnit, getExposureChartData, getPortfolioYear, recalculateProfile, getAvailableCurveDates, getPricesSnapshot, getForwardCurve, explainPricing, analyzeFormulaStructure, evaluateFormula, findDataGaps, DataGap } from '../services/calculationService';
+import { ForwardCurveRow, detectUnit, getExposureChartData, getPortfolioYear, recalculateProfile, getAvailableCurveDates, getPricesSnapshot, getForwardCurve, explainPricing, analyzeFormulaStructure, evaluateFormula, findDataGaps, DataGap, getGroupName, GROUPS } from '../services/calculationService';
 import { BarChart, Bar, XAxis, YAxis, CartesianGrid, Tooltip, ResponsiveContainer, Cell, PieChart, Pie, LineChart, Line, Legend } from 'recharts';
 import { motion, AnimatePresence } from 'framer-motion';
 import { WorldMap } from './WorldMap';
@@ -75,28 +75,13 @@ export const Dashboard: React.FC<DashboardProps> = ({ profiles, forwardCurve, on
   }, [availableDates]);
 
   const availableGroups = useMemo(() => {
-      const groups = new Set<string>();
-      let hasUngrouped = false;
-      profiles.forEach(p => {
-          if (p.manualGroup && p.manualGroup.trim() !== '') {
-              groups.add(p.manualGroup);
-          } else {
-              hasUngrouped = true;
-          }
-      });
-      const sorted = Array.from(groups).sort();
-      if (hasUngrouped) sorted.push('Ungrouped');
-      return sorted;
-  }, [profiles]);
+      return ['All', ...GROUPS, 'Others'];
+  }, []);
 
   const viewProfiles = useMemo(() => {
       let filtered = profiles;
       if (groupFilter !== 'All') {
-          if (groupFilter === 'Ungrouped') {
-              filtered = profiles.filter(p => !p.manualGroup || p.manualGroup.trim() === '');
-          } else {
-              filtered = profiles.filter(p => p.manualGroup === groupFilter);
-          }
+          filtered = profiles.filter(p => getGroupName(p.strategyName) === groupFilter);
       }
 
       return filtered.map(p => {
@@ -153,8 +138,7 @@ export const Dashboard: React.FC<DashboardProps> = ({ profiles, forwardCurve, on
 
       let filtered = profiles;
       if (groupFilter !== 'All') {
-          if (groupFilter === 'Ungrouped') filtered = profiles.filter(p => !p.manualGroup || p.manualGroup.trim() === '');
-          else filtered = profiles.filter(p => p.manualGroup === groupFilter);
+          filtered = profiles.filter(p => getGroupName(p.strategyName) === groupFilter);
       }
 
       filtered.forEach(p => {
@@ -245,7 +229,7 @@ export const Dashboard: React.FC<DashboardProps> = ({ profiles, forwardCurve, on
           const baselineP = recalculateProfile(p, true, baselineDate) as CargoProfile;
           const deltaPnL = (p.finalTotalPnL || 0) - (baselineP.finalTotalPnL || 0);
           if (Math.abs(deltaPnL) < 1) return;
-          const grp = p.manualGroup || 'Ungrouped';
+          const grp = getGroupName(p.strategyName);
           groupDrivers[grp] = (groupDrivers[grp] || 0) + deltaPnL;
           indexDrivers['Market'] = (indexDrivers['Market'] || 0) + deltaPnL;
       });
@@ -258,7 +242,7 @@ export const Dashboard: React.FC<DashboardProps> = ({ profiles, forwardCurve, on
   const pnlChartData = useMemo(() => {
     const map = new Map<string, number>();
     viewProfiles.forEach(p => {
-      let key = pnlChartMode === 'Strategy' ? (p.strategyName || 'Unnamed') : pnlChartMode === 'Year' ? getPortfolioYear(p).toString() : (p.manualGroup || 'Ungrouped');
+      let key = pnlChartMode === 'Strategy' ? (p.strategyName || 'Unnamed') : pnlChartMode === 'Year' ? getPortfolioYear(p).toString() : getGroupName(p.strategyName);
       map.set(key, (map.get(key) || 0) + (p.finalTotalPnL || 0));
     });
     return Array.from(map.entries()).map(([name, value]) => ({ name, value })).sort((a, b) => pnlChartMode === 'Year' ? a.name.localeCompare(b.name) : b.value - a.value);
@@ -267,7 +251,7 @@ export const Dashboard: React.FC<DashboardProps> = ({ profiles, forwardCurve, on
   const volumeChartData = useMemo(() => {
       const map = new Map<string, number>();
       viewProfiles.forEach(p => {
-          let key = volChartMode === 'Buyer' ? (p.buyer || 'Unmatched') : (p.manualGroup || 'Ungrouped');
+          let key = volChartMode === 'Buyer' ? (p.buyer || 'Unmatched') : getGroupName(p.strategyName);
           map.set(key, (map.get(key) || 0) + (p.deliveredVolume || 0));
       });
       return Array.from(map.entries()).map(([name, value]) => ({ name, value })).sort((a, b) => b.value - a.value);
@@ -318,10 +302,9 @@ export const Dashboard: React.FC<DashboardProps> = ({ profiles, forwardCurve, on
     <motion.div className="space-y-6 relative" variants={containerVariants} initial="hidden" animate="visible">
       <div className="flex flex-col md:flex-row justify-between items-start md:items-center bg-white p-3 rounded-xl border border-slate-200 shadow-sm gap-4">
           <div className="flex items-center gap-3">
-              <span className="text-xs font-bold text-slate-500 uppercase tracking-wide">Filter:</span>
+              <span className="text-xs font-bold text-slate-500 uppercase tracking-wide">Derived Group:</span>
               <select value={groupFilter} onChange={(e) => setGroupFilter(e.target.value)} className="bg-slate-50 border border-slate-200 text-slate-700 text-sm rounded-lg p-2 pr-8 font-medium">
-                  <option value="All">All Groups</option>
-                  {availableGroups.map(g => <option key={g} value={g}>{g}</option>)}
+                  {availableGroups.map(g => <option key={g} value={g}>{g === 'All' ? 'All (Auto-mapped)' : g}</option>)}
               </select>
               {dataGaps.length > 0 && (
                   <button onClick={() => setDebugMode('gaps')} className="flex items-center gap-2 px-3 py-1.5 bg-rose-50 text-rose-600 border border-rose-200 rounded-lg text-xs font-bold animate-pulse">
@@ -525,7 +508,7 @@ const HealthColumn = ({ title, items, color }: any) => {
                 {items.map((p: any) => (
                     <div key={p.id} className="bg-white p-3 rounded-lg shadow-sm">
                         <div className="font-bold text-xs text-slate-700">{p.strategyName}</div>
-                        <div className="text-[10px] text-slate-500 mt-1">{p._msg}</div>
+                        <div className="text-[10px] text-slate-500 mt-1">{getGroupName(p.strategyName)}</div>
                     </div>
                 ))}
             </div>
@@ -546,7 +529,7 @@ const DrillDownTable = ({ profiles, metricType, onClose, targetDate, format }: a
                         <thead className="text-xs text-slate-500 uppercase bg-slate-50">
                             <tr>
                                 <th className="px-4 py-3">Strategy</th>
-                                <th className="px-4 py-3">Group</th>
+                                <th className="px-4 py-3">Auto Group</th>
                                 <th className="px-4 py-3 text-right">PnL ({targetDate})</th>
                             </tr>
                         </thead>
@@ -554,7 +537,7 @@ const DrillDownTable = ({ profiles, metricType, onClose, targetDate, format }: a
                             {profiles.map((p: any) => (
                                 <tr key={p.id} className="hover:bg-slate-50">
                                     <td className="px-4 py-3 font-bold">{p.strategyName}</td>
-                                    <td className="px-4 py-3">{p.manualGroup || '-'}</td>
+                                    <td className="px-4 py-3">{getGroupName(p.strategyName)}</td>
                                     <td className={`px-4 py-3 text-right font-mono ${p.finalTotalPnL >= 0 ? 'text-emerald-600' : 'text-rose-600'}`}>{format(p.finalTotalPnL)}</td>
                                 </tr>
                             ))}

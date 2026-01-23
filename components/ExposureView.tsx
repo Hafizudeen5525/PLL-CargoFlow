@@ -1,6 +1,7 @@
+
 import React, { useState, useEffect, useMemo, useRef } from 'react';
 import { CargoProfile, PnLBucket } from '../types';
-import { estimatePricingDate, detectUnit } from '../services/calculationService';
+import { estimatePricingDate, detectUnit, getGroupName } from '../services/calculationService';
 import { motion, AnimatePresence } from 'framer-motion';
 
 interface ExposureViewProps {
@@ -103,8 +104,8 @@ export const ExposureView: React.FC<ExposureViewProps> = ({ profiles }) => {
 
     // Unified Category Getter based on Mode
     const getProfileCategory = (p: CargoProfile) => {
-        if (groupByMode === 'group' && p.manualGroup) {
-            return p.manualGroup;
+        if (groupByMode === 'group') {
+            return getGroupName(p.strategyName);
         }
         return getDynamicSourceCategory(p.source);
     };
@@ -265,7 +266,7 @@ export const ExposureView: React.FC<ExposureViewProps> = ({ profiles }) => {
                                     Exposure Breakdown
                                 </h3>
                                 <p className="text-[10px] text-slate-500 mt-1">
-                                    By {groupByMode === 'group' ? 'Custom Group / Source' : 'Source Facility'}
+                                    By {groupByMode === 'group' ? 'Strategy Mapped Group' : 'Source Facility'}
                                 </p>
                             </div>
                             
@@ -274,9 +275,9 @@ export const ExposureView: React.FC<ExposureViewProps> = ({ profiles }) => {
                                     <button 
                                         onClick={() => setGroupByMode('group')}
                                         className={`px-2 py-1 text-[10px] font-bold rounded-md transition-all ${groupByMode === 'group' ? 'bg-indigo-50 text-indigo-600' : 'text-slate-400 hover:text-slate-600'}`}
-                                        title="Prioritize Manual Groups"
+                                        title="Auto-map by Strategy String"
                                     >
-                                        Group
+                                        Auto-Group
                                     </button>
                                     <button 
                                         onClick={() => setGroupByMode('source')}
@@ -287,18 +288,20 @@ export const ExposureView: React.FC<ExposureViewProps> = ({ profiles }) => {
                                     </button>
                                 </div>
 
-                                <button 
-                                    onClick={() => setShowConfig(!showConfig)}
-                                    className={`p-1.5 rounded transition-colors ${showConfig ? 'bg-indigo-100 text-indigo-600' : 'text-slate-400 hover:bg-slate-100'}`}
-                                    title="Grouping Settings"
-                                >
-                                    <svg className="w-4 h-4" fill="none" stroke="currentColor" viewBox="0 0 24 24"><path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M10.325 4.317c.426-1.756 2.924-1.756 3.35 0a1.724 1.724 0 002.573 1.066c1.543-.94 3.31.826 2.37 2.37a1.724 1.724 0 001.065 2.572c1.756.426 1.756 2.924 0 3.35a1.724 1.724 0 00-1.066 2.573c.94 1.543-.826 3.31-2.37 2.37a1.724 1.724 0 00-2.572 1.065c-.426 1.756-2.924 1.756-3.35 0a1.724 1.724 0 00-2.573-1.066c-1.543.94-3.31-.826-2.37-2.37a1.724 1.724 0 00-1.065-2.572c-1.756-.426-1.756-2.924 0-3.35a1.724 1.724 0 001.066-2.573c-.94-1.543.826-3.31 2.37-2.37.996.608 2.296.07 2.572-1.065z" /><path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M15 12a3 3 0 11-6 0 3 3 0 016 0z" /></svg>
-                                </button>
+                                {groupByMode === 'source' && (
+                                    <button 
+                                        onClick={() => setShowConfig(!showConfig)}
+                                        className={`p-1.5 rounded transition-colors ${showConfig ? 'bg-indigo-100 text-indigo-600' : 'text-slate-400 hover:bg-slate-100'}`}
+                                        title="Grouping Settings"
+                                    >
+                                        <svg className="w-4 h-4" fill="none" stroke="currentColor" viewBox="0 0 24 24"><path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M10.325 4.317c.426-1.756 2.924-1.756 3.35 0a1.724 1.724 0 002.573 1.066c1.543-.94 3.31.826 2.37 2.37a1.724 1.724 0 001.065 2.572c1.756.426 1.756 2.924 0 3.35a1.724 1.724 0 00-1.066 2.573c.94 1.543-.826 3.31-2.37 2.37a1.724 1.724 0 00-2.572 1.065c-.426 1.756-2.924 1.756-3.35 0a1.724 1.724 0 00-2.573-1.066-1.543.94-3.31-.826-2.37-2.37a1.724 1.724 0 00-1.065-2.572c-1.756-.426-1.756-2.924 0-3.35a1.724 1.724 0 001.066-2.573c-.94-1.543.826-3.31 2.37-2.37.996.608 2.296.07 2.572-1.065z" /><path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M15 12a3 3 0 11-6 0 3 3 0 016 0z" /></svg>
+                                    </button>
+                                )}
                             </div>
                         </div>
 
                         <AnimatePresence>
-                            {showConfig && (
+                            {showConfig && groupByMode === 'source' && (
                                 <motion.div 
                                     initial={{ height: 0, opacity: 0 }}
                                     animate={{ height: 'auto', opacity: 1 }}
@@ -347,7 +350,7 @@ export const ExposureView: React.FC<ExposureViewProps> = ({ profiles }) => {
                                             <div className="flex flex-col">
                                                 <span className={`font-bold text-base ${isSelected ? 'text-blue-700' : 'text-slate-800'}`}>{category}</span>
                                                 <span className="text-[9px] text-slate-400">
-                                                    {groupByMode === 'group' && category !== 'Others' && !category.includes('Portfolio') ? 'Source' : 'Group'}
+                                                    {groupByMode === 'group' ? 'Strategy String' : 'Facility Source'}
                                                 </span>
                                             </div>
                                             <div className="text-right">
@@ -516,7 +519,7 @@ const CargoCard: React.FC<{ profile: any, status: 'floating' | 'fixed', colorCla
                 <div className="min-w-0">
                     <div className="text-sm font-bold text-slate-800 truncate max-w-[180px]">{profile.strategyName}</div>
                     <div className="text-xs text-slate-500 flex items-center gap-1.5 mt-0.5">
-                        {profile.manualGroup && <span className="px-1.5 py-0.5 rounded bg-slate-100 text-slate-600 font-medium">{profile.manualGroup}</span>}
+                        <span className="px-1.5 py-0.5 rounded bg-slate-100 text-slate-600 font-medium">{getGroupName(profile.strategyName)}</span>
                         <span className="truncate max-w-[100px]">{profile.source}</span>
                         <span className="text-slate-300">→</span>
                         <span className="truncate max-w-[100px]">{profile.buyer}</span>

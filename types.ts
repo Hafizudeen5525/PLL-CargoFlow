@@ -9,7 +9,6 @@ export interface CargoProfile {
   id: string;
   source: string;
   strategyName: string;
-  manualGroup?: string;
   buyer: string;
   optimized: boolean;
   deliveryDate: string;
@@ -143,7 +142,6 @@ export interface CargoProfile {
 export const EmptyCargoProfile: Omit<CargoProfile, 'id'> = {
   source: '',
   strategyName: '',
-  manualGroup: '',
   buyer: '',
   optimized: false,
   deliveryDate: '',

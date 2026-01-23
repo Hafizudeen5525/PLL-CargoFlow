@@ -13,7 +13,6 @@ interface BulkImportModalProps {
 const COLUMN_MAPPING: Record<string, string[]> = {
   strategyName: ['strategy', 'name', 'deal', 'id', 'ref'],
   source: ['source', 'origin', 'load port', 'loading port'],
-  manualGroup: ['group', 'portfolio', 'category', 'bucket', 'manual group'],
   buyer: ['buyer', 'customer', 'client', 'destination', 'disport'],
   
   // Date Fields with Windows
@@ -327,7 +326,7 @@ export const BulkImportModal: React.FC<BulkImportModalProps> = ({ existingProfil
                 <div className="space-y-4 h-full flex flex-col">
                     <textarea 
                         className="flex-1 w-full p-4 border border-slate-300 rounded-lg font-mono text-xs focus:ring-2 focus:ring-blue-500/20 focus:border-blue-500 whitespace-pre"
-                        placeholder="Strategy Name | Source | Volume | Group | Status"
+                        placeholder="Strategy Name | Source | Volume | Status"
                         value={inputText}
                         onChange={(e) => setInputText(e.target.value)}
                     />
@@ -342,7 +341,6 @@ export const BulkImportModal: React.FC<BulkImportModalProps> = ({ existingProfil
                                 </th>
                                 <th className="px-4 py-3 font-bold text-center">Status</th>
                                 <th className="px-4 py-3 font-bold">Strategy</th>
-                                <th className="px-4 py-3 font-bold">Manual Group</th>
                                 <th className="px-4 py-3 font-bold">Load Win Start</th>
                                 <th className="px-4 py-3 font-bold">Load Win End</th>
                                 <th className="px-4 py-3 font-bold">Del Win Start</th>
@@ -361,7 +359,6 @@ export const BulkImportModal: React.FC<BulkImportModalProps> = ({ existingProfil
                                         <span className={`px-2 py-0.5 rounded text-[10px] font-bold uppercase tracking-wider block w-max mx-auto ${row._status === 'Update' ? 'bg-blue-100 text-blue-700' : 'bg-emerald-100 text-emerald-700'}`}>{row._status}</span>
                                     </td>
                                     <td className="px-4 py-2 font-medium text-slate-700 align-middle">{row.strategyName}</td>
-                                    <td className="px-4 py-2 align-middle"><DiffCell row={row} rowIndex={i} field="manualGroup" isIgnored={ignoredChanges[i]?.has("manualGroup")} onToggle={toggleFieldChange} /></td>
                                     <td className="px-4 py-2 align-middle"><DiffCell row={row} rowIndex={i} field="loadingWindowStart" isIgnored={ignoredChanges[i]?.has("loadingWindowStart")} onToggle={toggleFieldChange} /></td>
                                     <td className="px-4 py-2 align-middle"><DiffCell row={row} rowIndex={i} field="loadingWindowEnd" isIgnored={ignoredChanges[i]?.has("loadingWindowEnd")} onToggle={toggleFieldChange} /></td>
                                     <td className="px-4 py-2 align-middle"><DiffCell row={row} rowIndex={i} field="deliveryWindowStart" isIgnored={ignoredChanges[i]?.has("deliveryWindowStart")} onToggle={toggleFieldChange} /></td>
