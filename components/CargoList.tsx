@@ -118,7 +118,9 @@ export const CargoList: React.FC<CargoListProps> = ({
                 seenInSheetCount.set(cleanStratName, count);
 
                 let isTier2Leg = count > 1 || cleanStratName.includes('t(') || cleanStratName.endsWith('t');
-                const lookupName = cleanStratName.replace('t(', '(').replace(/t$/, '');
+                
+                // Identify the lookup name for T2 by stripping the 't' properly
+                const lookupName = cleanStratName.replace(/t(\(|$)/, '$1');
 
                 if (!mergedData[lookupName]) mergedData[lookupName] = { ...EmptyCargoProfile, strategyName: lookupName };
                 
@@ -156,8 +158,6 @@ export const CargoList: React.FC<CargoListProps> = ({
                              if (sheetName === 'Cost' && profileKey === 'reconciledSrcCost') {
                                 (mergedData[lookupName] as any)[profileKey] = ((mergedData[lookupName] as any)[profileKey] || 0) + (val as number);
                              } else if (rawVal instanceof Date) {
-                                 // CRITICAL FIX: Add 12 hours to shift date into the middle of the intended day 
-                                 // before UTC extraction. This bypasses timezone-induced shifts (e.g. for KL UTC+8).
                                  const adjustedDate = new Date(rawVal.getTime() + (12 * 60 * 60 * 1000));
                                  const y = adjustedDate.getUTCFullYear();
                                  const m = String(adjustedDate.getUTCMonth() + 1).padStart(2, '0');
@@ -227,19 +227,32 @@ export const CargoList: React.FC<CargoListProps> = ({
     const costRows: any[] = [];
 
     processedProfiles.forEach(p => {
+        // SN Naming Helper: 2026-PL9SB_91(PLL) -> 2026-PL9SB_91t(PLL)
+        // Regex looks for digits, then optionally brackets. Inserts 't' between them.
+        const getTier2SN = (name: string) => name.replace(/(\d+)(\([^)]*\))?$/, "$1t$2");
+
         const buildRow = (type: 'Buy' | 'Sell', tier: 1 | 2) => {
             const prefix = tier === 1 ? (type === 'Buy' ? 'buyPrice' : 'sellPrice') : (type === 'Buy' ? 'tier2BuyPrice' : 'tier2SellPrice');
             const volKey = tier === 1 ? (type === 'Buy' ? 'loadedVolume' : 'deliveredVolume') : (type === 'Buy' ? 'tier2LoadedVolume' : 'tier2DeliveredVolume');
             const formulaKey = tier === 1 ? (type === 'Buy' ? 'buyFormula' : 'sellFormula') : (type === 'Buy' ? 'tier2BuyFormula' : 'tier2SellFormula');
             
-            const row: any = { 'Strategy Name': p.strategyName + (tier === 2 ? 't' : '') };
+            const row: any = { 'Strategy Name': tier === 1 ? p.strategyName : getTier2SN(p.strategyName) };
+            
             if (type === 'Buy') {
-                row['Source'] = p.source; row['No.'] = p.jarvisNo; row['Buyer'] = p.buyer; row['Optimized'] = p.optimized ? 'Yes' : 'No'; row['Loading Date'] = p.loadingDate;
+                row['Source'] = p.source; 
+                row['No.'] = p.jarvisNo; 
+                row['Buyer'] = p.buyer; 
+                row['Optimized'] = p.optimized ? 'Yes' : 'No'; 
+                row['Loading Date'] = p.loadingDate;
+                row['Loaded Volume'] = (p as any)[volKey];
+                row['Buy Formula'] = (p as any)[formulaKey];
             } else {
-                row['Buyer'] = p.buyer; row['Delivery Date'] = p.deliveryDate;
+                row['Buyer'] = p.buyer; 
+                row['Delivery Date'] = p.deliveryDate;
+                row['Delivered Volume'] = (p as any)[volKey];
+                row['Sell Formula'] = (p as any)[formulaKey];
             }
-            row[`${type} Volume`] = (p as any)[volKey];
-            row[`${type} Formula`] = (p as any)[formulaKey];
+
             for (let i = 1; i <= 3; i++) {
                 row[`${type} Price ${i} Weightage`] = (p as any)[`${prefix}${i}Weightage`];
                 row[`${type} Price ${i} slope`] = (p as any)[`${prefix}${i}Slope`];
@@ -251,13 +264,18 @@ export const CargoList: React.FC<CargoListProps> = ({
             return row;
         };
 
+        // Add Tier 1 Rows
         purchaseRows.push(buildRow('Buy', 1));
         salesRows.push(buildRow('Sell', 1));
         costRows.push({ 'Strategy Name': p.strategyName, 'Incoterm': p.incoterms, 'SRC': p.reconciledSrcCost });
         
+        // Add Tier 2 Rows IF EXISTS - must add to ALL sheets to maintain symmetry
         if (p.isTieredPricing) {
+            const t2SN = getTier2SN(p.strategyName);
             purchaseRows.push(buildRow('Buy', 2));
             salesRows.push(buildRow('Sell', 2));
+            // Symmetrical Cost row (usually blank SRC for tier 2 as it's merged into tier 1 during import)
+            costRows.push({ 'Strategy Name': t2SN, 'Incoterm': p.incoterms, 'SRC': '' });
         }
     });
 
