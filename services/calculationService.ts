@@ -1,3 +1,4 @@
+
 import { CargoProfile, PnLBucket } from '../types';
 
 export interface ForwardCurveRow {
@@ -37,24 +38,19 @@ const INDEX_ALIASES: Record<string, string> = {
     'WTI': 'WTI',
     'STATION 2': 'STN 2',
     'STN 2': 'STN 2',
-    'HH LAST DAY': 'HH'
+    'HH LAST DAY': 'HH Last Day',
+    'HENRY HUB LAST DAY': 'HH Last Day'
 };
 
 const STORAGE_KEY_CURVES = 'forward_curves_data';
 const STORAGE_KEY_HISTORICAL = 'historical_market_data';
 
-/**
- * Helper to generate a YYYY-MM string from a Date object without timezone shifts
- */
 function toMonthKey(date: Date): string {
     const y = date.getFullYear();
     const m = String(date.getMonth() + 1).padStart(2, '0');
     return `${y}-${m}`;
 }
 
-/**
- * Gets the price of a specific index for a target month (or average of months)
- */
 export function getIndexPrice(index: string, refDateStr: string, monthDef: string, curveDate?: string): { price: number, details: string, monthUsed: string } {
     const curve = getForwardCurve(curveDate);
     const historical = getHistoricalCurve();
@@ -66,7 +62,6 @@ export function getIndexPrice(index: string, refDateStr: string, monthDef: strin
     
     const targetMonths: string[] = [];
     let label = monthDef || 'n';
-
     const cleanDef = (monthDef || 'n').toLowerCase().replace(/\s/g, '');
     
     const avgMatch = cleanDef.match(/\(?(\d+),(\d+),(\d+)\)?/);
@@ -124,19 +119,19 @@ export function getIndexPrice(index: string, refDateStr: string, monthDef: strin
     };
 }
 
-export function calculateLegPrice(p: CargoProfile, type: 'buy' | 'sell', curveDate?: string): number {
-    const refDate = type === 'buy' ? p.loadingDate : p.deliveryDate;
-    
-    const hasComponents = (p as any)[`${type}PriceIndex1`] || (p as any)[`${type}Price1Weightage`];
+export function calculateLegPrice(p: CargoProfile, type: 'buy' | 'sell' | 'tier2sell', curveDate?: string): number {
+    const refDate = (type === 'buy') ? p.loadingDate : p.deliveryDate;
+    const prefix = type === 'tier2sell' ? 'tier2Sell' : type;
+    const hasComponents = (p as any)[`${prefix}PriceIndex1`] || (p as any)[`${prefix}Price1Weightage`] || (p as any)[`${prefix}PriceOverallConstant`];
 
     if (hasComponents) {
         let totalPrice = 0;
         for (let i = 1; i <= 3; i++) {
-            const w = Number((p as any)[`${type}Price${i}Weightage`] ?? 0);
-            const s = Number((p as any)[`${type}Price${i}Slope`] ?? 0);
-            const idx = String((p as any)[`${type}PriceIndex${i}`] ?? '').trim();
-            const mDef = String((p as any)[`${type}Price${i}MonthDef`] ?? 'n');
-            const c = Number((p as any)[`${type}Price${i}Constant`] ?? 0);
+            const w = Number((p as any)[`${prefix}Price${i}Weightage`] ?? 0);
+            const s = Number((p as any)[`${prefix}Price${i}Slope`] ?? 0);
+            const idx = String((p as any)[`${prefix}PriceIndex${i}`] ?? '').trim();
+            const mDef = String((p as any)[`${prefix}Price${i}MonthDef`] ?? 'n');
+            const c = Number((p as any)[`${prefix}Price${i}Constant`] ?? 0);
 
             if (idx) {
                 const { price } = getIndexPrice(idx, refDate, mDef, curveDate);
@@ -146,16 +141,14 @@ export function calculateLegPrice(p: CargoProfile, type: 'buy' | 'sell', curveDa
                 totalPrice += w * c;
             }
         }
-
-        const overallC = Number((p as any)[`${type}PriceOverallConstant`] ?? 0);
-        const overallW = Number((p as any)[`${type}PriceOverallConstantWeightage`] ?? 1);
+        const overallC = Number((p as any)[`${prefix}PriceOverallConstant`] ?? 0);
+        const overallW = Number((p as any)[`${prefix}PriceOverallConstantWeightage`] ?? 1);
         totalPrice += (overallW * overallC);
-
         return totalPrice;
     }
 
-    const formula = type === 'buy' ? p.buyFormula : p.sellFormula;
-    return evaluateFormula(formula, refDate, curveDate, type === 'buy' ? p.loadedVolume : p.deliveredVolume) || 0;
+    const formula = type === 'buy' ? p.buyFormula : type === 'sell' ? p.sellFormula : p.tier2SellFormula;
+    return evaluateFormula(formula || '', refDate, curveDate, (type === 'buy' ? p.loadedVolume : type === 'sell' ? p.deliveredVolume : p.tier2DeliveredVolume) || 0) || 0;
 }
 
 export function evaluateFormula(formula: string, dateStr?: string, curveDate?: string, volume: number = 0, unit?: string): number | null {
@@ -200,15 +193,35 @@ export function recalculateProfile(p: Partial<CargoProfile>, useMarket: boolean 
             const rawSellPrice = calculateLegPrice(up, 'sell', curveDate);
             up.absoluteSellPrice = applyRounding(rawSellPrice, up.sellPriceRounding);
         }
+        if (up.isTieredPricing) {
+            if (!up.isTier2SellPriceManual) {
+                const rawTier2Price = calculateLegPrice(up, 'tier2sell', curveDate);
+                up.absoluteTier2SellPrice = applyRounding(rawTier2Price, up.tier2SellPriceRounding);
+            }
+        } else {
+            up.absoluteTier2SellPrice = 0;
+            up.tier2DeliveredVolume = 0;
+        }
     }
 
-    // Calculated Revenue and Cost
-    up.salesRevenue = (up.deliveredVolume || 0) * (up.absoluteSellPrice || 0);
+    const tier1Revenue = (up.deliveredVolume || 0) * (up.absoluteSellPrice || 0);
+    const tier2Revenue = up.isTieredPricing ? (up.tier2DeliveredVolume || 0) * (up.absoluteTier2SellPrice || 0) : 0;
+    up.salesRevenue = tier1Revenue + tier2Revenue;
+    
     const purchaseCost = (up.loadedVolume || 0) * (up.absoluteBuyPrice || 0);
 
-    // Final values respect manual reconciled overrides if they are non-zero
+    // SRC Logic: Implies unit fee if total cost is present but fee is 0
+    const totalDelVol = (up.deliveredVolume || 0) + (up.tier2DeliveredVolume || 0);
+    if (up.reconciledSrcCost && up.reconciledSrcCost > 0 && (!up.srcUnitFee || up.srcUnitFee === 0) && totalDelVol > 0) {
+        up.srcUnitFee = up.reconciledSrcCost / totalDelVol;
+    }
+
+    const calcSrcCost = (up.incoterms === 'DES') ? (up.srcUnitFee || 0) * totalDelVol : 0;
+    const finalSrcCost = (up.reconciledSrcCost && up.reconciledSrcCost > 0) ? up.reconciledSrcCost : calcSrcCost;
+
     up.finalSalesRevenue = (up.reconciledSalesRevenue > 0) ? up.reconciledSalesRevenue : up.salesRevenue;
-    up.finalTotalCost = (up.reconciledPurchaseCost > 0) ? up.reconciledPurchaseCost : purchaseCost;
+    const basePurchaseCost = (up.reconciledPurchaseCost > 0) ? up.reconciledPurchaseCost : purchaseCost;
+    up.finalTotalCost = basePurchaseCost + finalSrcCost;
 
     up.finalPhysicalPnL = up.finalSalesRevenue - up.finalTotalCost;
     up.finalTotalPnL = up.finalPhysicalPnL + (up.totalHedgingPnL || 0);
@@ -217,10 +230,7 @@ export function recalculateProfile(p: Partial<CargoProfile>, useMarket: boolean 
 }
 
 export function actualizeProfile(p: CargoProfile): CargoProfile {
-  return {
-    ...p,
-    pnlBucket: PnLBucket.Realized
-  };
+  return { ...p, pnlBucket: PnLBucket.Realized };
 }
 
 export function generateStrategyName(p: Partial<CargoProfile>): string {
@@ -236,7 +246,7 @@ export function findDataGaps(profiles: CargoProfile[], curveDate?: string): Data
     const gaps: Record<string, DataGap> = {};
     profiles.forEach(p => {
         if (p.pnlBucket === PnLBucket.Realized) return;
-        const checkComponent = (type: 'buy' | 'sell', i: number) => {
+        const checkComponent = (type: 'buy' | 'sell' | 'tier2Sell', i: number) => {
             const idx = (p as any)[`${type}PriceIndex${i}`];
             const mDef = (p as any)[`${type}Price${i}MonthDef`] || 'n';
             const date = type === 'buy' ? p.loadingDate : p.deliveryDate;
@@ -255,6 +265,7 @@ export function findDataGaps(profiles: CargoProfile[], curveDate?: string): Data
         for (let i = 1; i <= 3; i++) {
             checkComponent('buy', i);
             checkComponent('sell', i);
+            if (p.isTieredPricing) checkComponent('tier2Sell', i);
         }
     });
     return Object.values(gaps).sort((a, b) => a.month.localeCompare(b.month));
@@ -333,7 +344,7 @@ export function getExposureChartData(profiles: CargoProfile[]) {
         const month = (p.deliveryDate || p.loadingDate || '').slice(0, 7);
         if (!month) return;
         if (!map[month]) map[month] = { date: month };
-        map[month]['Exposure'] = (map[month]['Exposure'] || 0) + p.deliveredVolume;
+        map[month]['Exposure'] = (map[month]['Exposure'] || 0) + (p.deliveredVolume || 0) + (p.tier2DeliveredVolume || 0);
     });
     return Object.values(map).sort((a, b) => a.date.localeCompare(b.date));
 }

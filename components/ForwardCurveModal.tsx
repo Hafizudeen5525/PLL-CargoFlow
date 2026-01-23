@@ -9,8 +9,8 @@ interface ForwardCurveModalProps {
   onSave: () => void;
 }
 
-// The exact column order requested
-const COLUMNS = ['Month', 'BRIPE', 'JCC', 'Dated Brent', 'HH', 'NBP', 'JKM', 'TTF', 'AECO', 'STN 2'];
+// Updated exact column order as requested by user, renaming JCC Detailed to JCC
+const COLUMNS = ['Month', 'BRIPE', 'JCC', 'Dated Brent', 'HH', 'HH Last Day', 'NBP', 'JKM', 'TTF', 'AECO', 'STN 2'];
 const INDICES = COLUMNS.slice(1);
 
 export const ForwardCurveModal: React.FC<ForwardCurveModalProps> = ({ onClose, onSave }) => {
@@ -161,15 +161,18 @@ export const ForwardCurveModal: React.FC<ForwardCurveModalProps> = ({ onClose, o
                     }
                 }
             };
+            
+            // Order: Month | BRIPE | JCC | Dated Brent | HH | HH Last Day | NBP | JKM | TTF | AECO | STN 2
             mapVal(1, 'BRIPE');
             mapVal(2, 'JCC');
             mapVal(3, 'Dated Brent');
             mapVal(4, 'HH');
-            mapVal(5, 'NBP');
-            mapVal(6, 'JKM');
-            mapVal(7, 'TTF');
-            mapVal(8, 'AECO');
-            mapVal(9, 'STN 2');
+            mapVal(5, 'HH Last Day');
+            mapVal(6, 'NBP');
+            mapVal(7, 'JKM');
+            mapVal(8, 'TTF');
+            mapVal(9, 'AECO');
+            mapVal(10, 'STN 2');
 
             curveData.push({ month: formattedMonth, prices });
         }
@@ -346,7 +349,7 @@ export const ForwardCurveModal: React.FC<ForwardCurveModalProps> = ({ onClose, o
                         </div>
                         <div className="flex-1 overflow-y-auto p-6">
                             {!previewMode ? (
-                                <textarea className="flex-1 w-full h-full p-4 border border-slate-300 rounded-lg font-mono text-xs focus:ring-2 focus:ring-blue-500/20 focus:border-blue-500 whitespace-pre leading-relaxed" placeholder="Month | BRIPE | JCC | Dated Brent | HH | NBP | JKM | TTF | AECO | Station 2" value={inputText} onChange={(e) => setInputText(e.target.value)} />
+                                <textarea className="flex-1 w-full h-full p-4 border border-slate-300 rounded-lg font-mono text-xs focus:ring-2 focus:ring-blue-500/20 focus:border-blue-500 whitespace-pre leading-relaxed" placeholder="Month | BRIPE | JCC | Dated Brent | HH | HH Last Day | NBP | JKM | TTF | AECO | Station 2" value={inputText} onChange={(e) => setInputText(e.target.value)} />
                             ) : (
                                 <PreviewTable data={parsedData} />
                             )}
@@ -375,7 +378,7 @@ export const ForwardCurveModal: React.FC<ForwardCurveModalProps> = ({ onClose, o
                     </div>
                     <div className="flex-1 overflow-y-auto p-6">
                         {!historicalPreview ? (
-                            <textarea className="flex-1 w-full h-full p-4 border border-slate-300 rounded-lg font-mono text-xs focus:ring-2 focus:ring-blue-500/20 focus:border-blue-500 whitespace-pre leading-relaxed" placeholder="Month | BRIPE | JCC | Dated Brent | HH | NBP | JKM | TTF | AECO | Station 2" value={historicalInput} onChange={(e) => setHistoricalInput(e.target.value)} />
+                            <textarea className="flex-1 w-full h-full p-4 border border-slate-300 rounded-lg font-mono text-xs focus:ring-2 focus:ring-blue-500/20 focus:border-blue-500 whitespace-pre leading-relaxed" placeholder="Month | BRIPE | JCC | Dated Brent | HH | HH Last Day | NBP | JKM | TTF | AECO | STN 2" value={historicalInput} onChange={(e) => setHistoricalInput(e.target.value)} />
                         ) : (
                             <PreviewTable data={historicalParsed} />
                         )}
@@ -422,7 +425,20 @@ export const ForwardCurveModal: React.FC<ForwardCurveModalProps> = ({ onClose, o
 
             {activeTab === 'evolution' && (
                 <div className="flex-1 flex flex-col p-6 space-y-6 overflow-y-auto">
-                    <div className="bg-white p-6 rounded-xl border border-slate-200 shadow-sm min-h-[400px]">
+                    <div className="flex flex-wrap gap-4 items-end bg-white p-4 rounded-xl border border-slate-200 shadow-sm">
+                        <div className="flex flex-col gap-1">
+                            <label className="text-xs font-bold text-slate-400 uppercase">Index</label>
+                            <select value={evolutionIndex} onChange={(e) => setEvolutionIndex(e.target.value)} className="border border-slate-300 rounded-lg px-3 py-2 text-sm font-bold text-slate-700">{INDICES.map(idx => <option key={idx} value={idx}>{idx}</option>)}</select>
+                        </div>
+                        <div className="flex flex-col gap-1">
+                            <label className="text-xs font-bold text-slate-400 uppercase">Contract Month</label>
+                            <select value={evolutionContract} onChange={(e) => setEvolutionContract(e.target.value)} className="border border-slate-300 rounded-lg px-3 py-2 text-sm">
+                                <option value="">Select a Month</option>
+                                {allContractMonths.map(m => <option key={m} value={m}>{m}</option>)}
+                            </select>
+                        </div>
+                    </div>
+                    <div className="bg-white p-6 rounded-xl border border-slate-200 shadow-sm flex-1 min-h-[400px]">
                         {evolutionChartData.length > 0 ? (
                             <ResponsiveContainer width="100%" height="100%">
                                 <LineChart data={evolutionChartData}>
@@ -433,7 +449,7 @@ export const ForwardCurveModal: React.FC<ForwardCurveModalProps> = ({ onClose, o
                                     <Line type="monotone" dataKey="price" stroke="#8b5cf6" strokeWidth={3} />
                                 </LineChart>
                             </ResponsiveContainer>
-                        ) : <div className="flex items-center justify-center h-full text-slate-400">No evolutionary data.</div>}
+                        ) : <div className="flex items-center justify-center h-full text-slate-400">Select a contract month to view price evolution.</div>}
                     </div>
                 </div>
             )}
@@ -454,8 +470,7 @@ const PreviewTable = ({ data }: { data: ForwardCurveRow[] }) => (
                     <tr key={i} className="hover:bg-slate-50">
                         <td className="px-4 py-2 font-mono font-bold text-slate-700">{row.month}</td>
                         {COLUMNS.slice(1).map((col) => {
-                            const key = col === 'Station 2' ? 'STN 2' : col;
-                            const val = row.prices[key];
+                            const val = row.prices[col];
                             return <td key={col} className={`px-4 py-2 ${val !== undefined ? 'text-slate-600' : 'text-slate-300 italic'}`}>{val !== undefined ? val.toFixed(3) : '-'}</td>;
                         })}
                     </tr>

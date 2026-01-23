@@ -1,3 +1,4 @@
+
 import React, { useState, useEffect, useCallback, useMemo } from 'react';
 import { CargoProfile, EmptyCargoProfile, PnLBucket } from '../types';
 import { recalculateProfile, actualizeProfile, getMarketData, evaluateFormula, generateStrategyName, detectUnit, analyzeFormulaStructure, getIndexPrice } from '../services/calculationService';
@@ -13,7 +14,8 @@ interface CargoFormProps {
   onCancel: () => void;
 }
 
-const INDEX_OPTIONS = ['HH', 'TTF', 'JKM', 'Dated Brent', 'JCC', 'BRIPE', 'NBP', 'AECO', 'STN 2'];
+const INDEX_OPTIONS = ['HH', 'HH Last Day', 'TTF', 'JKM', 'Dated Brent', 'JCC', 'BRIPE', 'NBP', 'AECO', 'STN 2'];
+const INCOTERM_OPTIONS = ['FOB', 'DES', 'CIF', 'CFR', 'DAT'];
 
 const InputGroup: React.FC<{
     label: string;
@@ -52,7 +54,7 @@ const InputGroup: React.FC<{
 ));
 
 const ComponentRow: React.FC<{
-    type: 'buy' | 'sell';
+    type: 'buy' | 'sell' | 'tier2Sell';
     idx: number;
     formData: any;
     onChange: (e: any) => void;
@@ -63,33 +65,34 @@ const ComponentRow: React.FC<{
     const mDef = formData[`${type}Price${idx}MonthDef`];
     const c = formData[`${type}Price${idx}Constant`];
     
-    const { price } = getIndexPrice(index, type === 'buy' ? formData.loadingDate : formData.deliveryDate, mDef);
-    const componentValue = s * price + c;
+    const refDate = (type === 'buy') ? formData.loadingDate : formData.deliveryDate;
+    const { price } = getIndexPrice(index, refDate, mDef);
+    const componentValue = (Number(s) || 0) * price + (Number(c) || 0);
 
     return (
         <div className="grid grid-cols-12 gap-2 items-end bg-slate-50/50 p-3 rounded-lg border border-slate-100 mb-2">
-            <div className="col-span-1">
+            <div className="col-span-2">
                 <label className="text-[9px] font-bold text-slate-400 uppercase">Weight</label>
-                <input type="number" step="0.01" name={`${type}Price${idx}Weightage`} value={w} onChange={onChange} className="w-full text-xs p-1.5 border rounded" />
+                <input type="number" step="0.01" name={`${type}Price${idx}Weightage`} value={w} onChange={onChange} className="w-full text-xs p-1.5 border rounded bg-white" />
             </div>
-            <div className="col-span-1">
+            <div className="col-span-2">
                 <label className="text-[9px] font-bold text-slate-400 uppercase">Slope</label>
-                <input type="number" step="0.0001" name={`${type}Price${idx}Slope`} value={s} onChange={onChange} className="w-full text-xs p-1.5 border rounded" />
+                <input type="number" step="0.0001" name={`${type}Price${idx}Slope`} value={s} onChange={onChange} className="w-full text-xs p-1.5 border rounded bg-white" />
             </div>
-            <div className="col-span-3">
+            <div className="col-span-2">
                 <label className="text-[9px] font-bold text-slate-400 uppercase">Index</label>
-                <select name={`${type}PriceIndex${idx}`} value={index} onChange={onChange} className="w-full text-xs p-1.5 border rounded">
+                <select name={`${type}PriceIndex${idx}`} value={index} onChange={onChange} className="w-full text-xs p-1.5 border rounded bg-white">
                     <option value="">(None)</option>
                     {INDEX_OPTIONS.map(o => <option key={o} value={o}>{o}</option>)}
                 </select>
             </div>
-            <div className="col-span-3">
+            <div className="col-span-2">
                 <label className="text-[9px] font-bold text-slate-400 uppercase">Month Def</label>
-                <input type="text" placeholder="n, n-1, 3,0,1" name={`${type}Price${idx}MonthDef`} value={mDef} onChange={onChange} className="w-full text-xs p-1.5 border rounded" />
+                <input type="text" placeholder="n" name={`${type}Price${idx}MonthDef`} value={mDef} onChange={onChange} className="w-full text-xs p-1.5 border rounded bg-white" />
             </div>
             <div className="col-span-2">
                 <label className="text-[9px] font-bold text-slate-400 uppercase">Constant</label>
-                <input type="number" step="0.01" name={`${type}Price${idx}Constant`} value={c} onChange={onChange} className="w-full text-xs p-1.5 border rounded" />
+                <input type="number" step="0.01" name={`${type}Price${idx}Constant`} value={c} onChange={onChange} className="w-full text-xs p-1.5 border rounded bg-white" />
             </div>
             <div className="col-span-2 text-right">
                 <div className="text-[9px] font-bold text-slate-400 uppercase">Result</div>
@@ -107,7 +110,7 @@ export const CargoForm: React.FC<CargoFormProps> = ({ initialData, onSave, onCan
   useEffect(() => {
     if (initialData) {
       setFormData({ ...initialData });
-      if (initialData.buyPriceIndex1 || initialData.sellPriceIndex1) {
+      if (initialData.buyPriceIndex1 || initialData.sellPriceIndex1 || initialData.tier2SellPriceIndex1) {
           setPricingMode('component');
       }
     }
@@ -124,8 +127,8 @@ export const CargoForm: React.FC<CargoFormProps> = ({ initialData, onSave, onCan
     });
   }, []);
 
-  const handleManualPriceToggle = (type: 'buy' | 'sell') => {
-      const field = type === 'buy' ? 'isBuyPriceManual' : 'isSellPriceManual';
+  const handleManualPriceToggle = (type: 'buy' | 'sell' | 'tier2sell') => {
+      const field = type === 'buy' ? 'isBuyPriceManual' : type === 'sell' ? 'isSellPriceManual' : 'isTier2SellPriceManual';
       setFormData((prev: any) => {
           const up = { ...prev, [field]: !prev[field] };
           return recalculateProfile(up);
@@ -161,6 +164,9 @@ export const CargoForm: React.FC<CargoFormProps> = ({ initialData, onSave, onCan
 
   const formatCurrency = (val: number) => new Intl.NumberFormat('en-US', { style: 'currency', currency: 'USD' }).format(val);
 
+  const totalDeliveredVolume = (formData.deliveredVolume || 0) + (formData.tier2DeliveredVolume || 0);
+  const calculatedSrcCost = formData.incoterms === 'DES' ? (formData.srcUnitFee || 0) * totalDeliveredVolume : 0;
+
   return (
     <motion.div initial={{ opacity: 0, scale: 0.95 }} animate={{ opacity: 1, scale: 1 }} className="bg-white rounded-xl shadow-2xl border border-slate-200 flex flex-col w-full max-w-5xl max-h-[90vh] overflow-hidden">
       <div className="p-6 border-b border-slate-100 flex justify-between items-center">
@@ -183,20 +189,45 @@ export const CargoForm: React.FC<CargoFormProps> = ({ initialData, onSave, onCan
                 <InputGroup label="Delivery Date" name="deliveryDate" type="date" value={formData.deliveryDate} onChange={handleChange} />
                 <InputGroup label="Volume Unit" name="volumeUnit" value={formData.volumeUnit} onChange={handleChange} />
                 <InputGroup label="Loaded Vol" name="loadedVolume" type="number" value={formData.loadedVolume} onChange={handleChange} />
-                <InputGroup label="Delivered Vol" name="deliveredVolume" type="number" value={formData.deliveredVolume} onChange={handleChange} />
+                <InputGroup label="Delivered Vol (Tier 1)" name="deliveredVolume" type="number" value={formData.deliveredVolume} onChange={handleChange} />
+                <div className="flex flex-col">
+                  <label className="text-[10px] font-bold text-slate-400 uppercase tracking-wide mb-1.5 ml-1">Incoterms</label>
+                  <select name="incoterms" value={formData.incoterms} onChange={handleChange} className="w-full px-3 py-2.5 rounded-lg border border-slate-200 text-sm bg-white focus:ring-2 focus:ring-blue-500/20 focus:border-blue-500">
+                    {INCOTERM_OPTIONS.map(opt => <option key={opt} value={opt}>{opt}</option>)}
+                  </select>
+                </div>
             </div>
         </div>
 
-        {/* Pricing Section */}
-        <div className="bg-white p-6 rounded-xl border border-slate-100 space-y-6 shadow-sm">
-            <div className="flex justify-between items-center">
-                <h3 className="text-sm font-bold text-slate-800">Pricing Definition</h3>
-                <div className="flex bg-slate-100 p-1 rounded-lg text-[10px] font-bold">
-                    <button type="button" onClick={() => setPricingMode('formula')} className={`px-3 py-1 rounded ${pricingMode === 'formula' ? 'bg-white shadow-sm text-indigo-600' : 'text-slate-500'}`}>Text Formula</button>
-                    <button type="button" onClick={() => setPricingMode('component')} className={`px-3 py-1 rounded ${pricingMode === 'component' ? 'bg-white shadow-sm text-indigo-600' : 'text-slate-500'}`}>Advanced Components</button>
+        {/* Two-Tier Pricing Toggle */}
+        <div className="bg-indigo-50/50 p-4 rounded-xl border border-indigo-100 flex items-center justify-between">
+            <div className="flex items-center gap-3">
+                <div className={`w-10 h-10 rounded-full flex items-center justify-center ${formData.isTieredPricing ? 'bg-indigo-600 text-white' : 'bg-slate-200 text-slate-400'}`}>
+                    <svg className="w-5 h-5" fill="none" stroke="currentColor" viewBox="0 0 24 24"><path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M19 11H5m14 0a2 2 0 012 2v6a2 2 0 01-2 2H5a2 2 0 01-2-2v-6a2 2 0 012-2m14 0V9a2 2 0 00-2-2M5 11V9a2 2 0 012-2m0 0V5a2 2 0 012-2h6a2 2 0 012 2v2M7 7h10" /></svg>
+                </div>
+                <div>
+                    <h4 className="text-sm font-bold text-slate-800">Two-Tier Pricing</h4>
+                    <p className="text-[10px] text-slate-500 uppercase font-bold">Split one physical cargo into multiple pricing rules</p>
                 </div>
             </div>
+            <label className="relative inline-flex items-center cursor-pointer">
+                <input type="checkbox" name="isTieredPricing" checked={formData.isTieredPricing} onChange={handleChange} className="sr-only peer" />
+                <div className="w-11 h-6 bg-slate-200 peer-focus:outline-none peer-focus:ring-4 peer-focus:ring-indigo-300 rounded-full peer peer-checked:after:translate-x-full peer-checked:after:border-white after:content-[''] after:absolute after:top-[2px] after:left-[2px] after:bg-white after:border-gray-300 after:border after:rounded-full after:h-5 after:w-5 after:transition-all peer-checked:bg-indigo-600"></div>
+            </label>
+        </div>
 
+        {/* Pricing Mode Selection (Moved up to affect both Tiers) */}
+        <div className="flex justify-between items-center bg-white p-4 rounded-xl border border-slate-100 shadow-sm">
+            <h3 className="text-sm font-bold text-slate-800">Pricing Configuration Mode</h3>
+            <div className="flex bg-slate-100 p-1 rounded-lg text-[10px] font-bold">
+                <button type="button" onClick={() => setPricingMode('formula')} className={`px-4 py-1.5 rounded-md transition-all ${pricingMode === 'formula' ? 'bg-white shadow-sm text-indigo-600' : 'text-slate-500'}`}>Text Formula</button>
+                <button type="button" onClick={() => setPricingMode('component')} className={`px-4 py-1.5 rounded-md transition-all ${pricingMode === 'component' ? 'bg-white shadow-sm text-indigo-600' : 'text-slate-500'}`}>Advanced Components</button>
+            </div>
+        </div>
+
+        {/* Pricing Definition (Tier 1) */}
+        <div className="bg-white p-6 rounded-xl border border-slate-100 space-y-6 shadow-sm">
+            <h3 className="text-sm font-bold text-slate-800">Pricing Definition {formData.isTieredPricing && '(Tier 1)'}</h3>
             <div className="grid grid-cols-1 md:grid-cols-2 gap-8">
                 {/* Buy Side */}
                 <div className="space-y-6">
@@ -240,31 +271,13 @@ export const CargoForm: React.FC<CargoFormProps> = ({ initialData, onSave, onCan
                         >
                             {!formData.isBuyPriceManual && <div className="absolute right-3 top-2.5 text-[10px] text-emerald-400 font-bold">CALCULATED</div>}
                         </InputGroup>
-                        
-                        <div className="border-t border-emerald-100 pt-3 flex justify-between items-center">
-                            <div>
-                                <p className="text-[10px] font-bold text-emerald-600 uppercase">Calculated Cost</p>
-                                <p className="text-sm font-mono font-bold text-emerald-800">{formatCurrency(formData.salesRevenue / (formData.absoluteSellPrice || 1) * (formData.absoluteBuyPrice || 0))}</p>
-                            </div>
-                            <div className="text-right">
-                                <p className="text-[10px] font-bold text-amber-600 uppercase">Reconciled Cost Override</p>
-                                <input 
-                                    type="number" 
-                                    name="reconciledPurchaseCost" 
-                                    value={formData.reconciledPurchaseCost} 
-                                    onChange={handleChange} 
-                                    placeholder="Enter total cost..."
-                                    className="bg-white border border-amber-200 rounded p-1 text-xs w-32 font-mono text-right focus:ring-1 focus:ring-amber-300"
-                                />
-                            </div>
-                        </div>
                     </div>
                 </div>
 
-                {/* Sell Side */}
+                {/* Sell Side (Tier 1) */}
                 <div className="space-y-6">
                     <div className="flex justify-between items-center">
-                        <h4 className="text-xs font-bold text-blue-600 uppercase border-l-2 border-blue-500 pl-2">Sales Side (Sell)</h4>
+                        <h4 className="text-xs font-bold text-blue-600 uppercase border-l-2 border-blue-500 pl-2">Sales Side (Sell) {formData.isTieredPricing && 'Tier 1'}</h4>
                         <div className="flex items-center gap-2">
                             <label className="text-[10px] font-bold text-slate-400">ROUNDING</label>
                             <input type="number" name="sellPriceRounding" value={formData.sellPriceRounding} onChange={handleChange} className="w-12 text-xs border rounded p-1" min="0" max="6" />
@@ -303,28 +316,95 @@ export const CargoForm: React.FC<CargoFormProps> = ({ initialData, onSave, onCan
                         >
                             {!formData.isSellPriceManual && <div className="absolute right-3 top-2.5 text-[10px] text-blue-400 font-bold">CALCULATED</div>}
                         </InputGroup>
-
-                        <div className="border-t border-blue-100 pt-3 flex justify-between items-center">
-                            <div>
-                                <p className="text-[10px] font-bold text-blue-600 uppercase">Calculated Revenue</p>
-                                <p className="text-sm font-mono font-bold text-blue-800">{formatCurrency(formData.salesRevenue)}</p>
-                            </div>
-                            <div className="text-right">
-                                <p className="text-[10px] font-bold text-amber-600 uppercase">Reconciled Sales Override</p>
-                                <input 
-                                    type="number" 
-                                    name="reconciledSalesRevenue" 
-                                    value={formData.reconciledSalesRevenue} 
-                                    onChange={handleChange} 
-                                    placeholder="Enter total revenue..."
-                                    className="bg-white border border-amber-200 rounded p-1 text-xs w-32 font-mono text-right focus:ring-1 focus:ring-amber-300"
-                                />
-                            </div>
-                        </div>
                     </div>
                 </div>
             </div>
         </div>
+
+        {/* Tier 2 Specific Inputs */}
+        {formData.isTieredPricing && (
+            <motion.div initial={{ opacity: 0, y: -10 }} animate={{ opacity: 1, y: 0 }} className="bg-white p-6 rounded-xl border border-indigo-200 space-y-6 shadow-sm border-dashed">
+                <div className="flex justify-between items-center">
+                    <h3 className="text-sm font-bold text-indigo-800">Sales Tier 2 Definition</h3>
+                    <div className="flex items-center gap-2">
+                        <label className="text-[10px] font-bold text-slate-400">ROUNDING</label>
+                        <input type="number" name="tier2SellPriceRounding" value={formData.tier2SellPriceRounding} onChange={handleChange} className="w-12 text-xs border rounded p-1" min="0" max="6" />
+                    </div>
+                </div>
+
+                <div className="grid grid-cols-1 md:grid-cols-2 gap-8">
+                    <div className="space-y-6">
+                        <InputGroup label="Tier 2 Delivered Volume" name="tier2DeliveredVolume" type="number" value={formData.tier2DeliveredVolume} onChange={handleChange} />
+                        
+                        {pricingMode === 'formula' ? (
+                            <InputGroup label="Tier 2 Formula" name="tier2SellFormula" value={formData.tier2SellFormula} onChange={handleChange} hint="e.g. TTF + 1.20" />
+                        ) : (
+                            <div className="space-y-3">
+                                {[1, 2, 3].map(i => <ComponentRow key={i} idx={i} type="tier2Sell" formData={formData} onChange={handleChange} />)}
+                                <InputGroup label="Overall Tier 2 Constant" name="tier2SellPriceOverallConstant" type="number" step="0.001" value={formData.tier2SellPriceOverallConstant} onChange={handleChange} />
+                            </div>
+                        )}
+                    </div>
+
+                    <div className="flex flex-col justify-end">
+                        <div className="p-4 bg-indigo-50 border border-indigo-100 rounded-xl space-y-4">
+                            <div className="flex justify-between items-center">
+                                <label className="text-[10px] font-bold text-indigo-700 uppercase">Tier 2 Unit Price ($/Unit)</label>
+                                <button 
+                                    type="button" 
+                                    onClick={() => handleManualPriceToggle('tier2sell')}
+                                    className={`text-[9px] px-2 py-0.5 rounded font-bold uppercase transition-colors ${formData.isTier2SellPriceManual ? 'bg-amber-100 text-amber-700' : 'bg-white text-indigo-600 border border-indigo-200'}`}
+                                >
+                                    {formData.isTier2SellPriceManual ? 'Manual Mode' : 'Switch to Manual'}
+                                </button>
+                            </div>
+                            <InputGroup 
+                                label="" 
+                                name="absoluteTier2SellPrice" 
+                                type="number" 
+                                step="0.0001" 
+                                value={formData.absoluteTier2SellPrice} 
+                                onChange={handleChange} 
+                                disabled={!formData.isTier2SellPriceManual}
+                                className="!mb-0"
+                            >
+                                {!formData.isTier2SellPriceManual && <div className="absolute right-3 top-2.5 text-[10px] text-indigo-400 font-bold">CALCULATED</div>}
+                            </InputGroup>
+                        </div>
+                    </div>
+                </div>
+            </motion.div>
+        )}
+
+        {/* SRC Section (DES Only) */}
+        {formData.incoterms === 'DES' && (
+          <div className="bg-white p-6 rounded-xl border border-blue-100 space-y-4 shadow-sm relative overflow-hidden">
+            <div className="absolute top-0 right-0 p-2 bg-blue-50 text-blue-600 text-[10px] font-bold uppercase rounded-bl-lg">DES Specific Cost</div>
+            <h3 className="text-sm font-bold text-slate-800">Shipping Related Cost (SRC)</h3>
+            <div className="grid grid-cols-1 md:grid-cols-3 gap-6 items-end">
+              <InputGroup label="SRC Unit Fee ($/Unit)" name="srcUnitFee" type="number" step="0.001" value={formData.srcUnitFee} onChange={handleChange} />
+              
+              <div className="flex flex-col">
+                <label className="text-[10px] font-bold text-slate-400 uppercase mb-1.5">Calculated Total SRC</label>
+                <div className="px-3 py-2.5 bg-slate-50 border border-slate-200 rounded-lg text-sm font-mono font-bold text-slate-700">
+                  {formatCurrency(calculatedSrcCost)}
+                </div>
+              </div>
+
+              <div className="flex flex-col">
+                <label className="text-[10px] font-bold text-amber-600 uppercase mb-1.5">Reconciled SRC (Override)</label>
+                <input 
+                  type="number" 
+                  name="reconciledSrcCost" 
+                  value={formData.reconciledSrcCost} 
+                  onChange={handleChange} 
+                  placeholder="Invoice amount..."
+                  className="w-full px-3 py-2.5 bg-white border border-amber-200 rounded-lg text-sm focus:ring-2 focus:ring-amber-500/20 focus:border-amber-500"
+                />
+              </div>
+            </div>
+          </div>
+        )}
 
         {/* Summary Footer Section */}
         <div className="bg-slate-900 text-white p-6 rounded-xl shadow-xl border border-slate-800 flex justify-between items-center">
@@ -344,17 +424,19 @@ export const CargoForm: React.FC<CargoFormProps> = ({ initialData, onSave, onCan
                     </p>
                 </div>
             </div>
-            <div className="text-right">
-                <p className="text-[10px] font-bold text-indigo-400 uppercase tracking-widest">Pricing Bucket</p>
-                <select 
-                    name="pnlBucket" 
-                    value={formData.pnlBucket} 
-                    onChange={handleChange} 
-                    className="bg-slate-800 border-none rounded text-sm font-bold text-white focus:ring-1 focus:ring-indigo-500 mt-1"
-                >
-                    <option value={PnLBucket.Unrealized}>Unrealized</option>
-                    <option value={PnLBucket.Realized}>Realized</option>
-                </select>
+            <div className="text-right flex items-center gap-6">
+                <div>
+                    <p className="text-[10px] font-bold text-amber-400 uppercase tracking-widest">Pricing Bucket</p>
+                    <select 
+                        name="pnlBucket" 
+                        value={formData.pnlBucket} 
+                        onChange={handleChange} 
+                        className="bg-slate-800 border-none rounded text-sm font-bold text-white focus:ring-1 focus:ring-indigo-500 mt-1"
+                    >
+                        <option value={PnLBucket.Unrealized}>Unrealized</option>
+                        <option value={PnLBucket.Realized}>Realized</option>
+                    </select>
+                </div>
             </div>
         </div>
       </form>

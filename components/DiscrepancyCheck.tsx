@@ -121,9 +121,13 @@ export const DiscrepancyCheck: React.FC<DiscrepancyCheckProps> = ({ profiles }) 
           const cleanRow: any = {};
           WHITELIST_COLUMNS.forEach(col => {
             if (row[col] !== undefined) {
-                 // Fix: Ensure Date objects are stringified for React rendering
+                 // FIX: Ensure Date objects use local components to prevent timezone shift
                  if (row[col] instanceof Date) {
-                     cleanRow[col] = row[col].toISOString().split('T')[0];
+                     const dObj = row[col];
+                     const y = dObj.getFullYear();
+                     const m = String(dObj.getMonth() + 1).padStart(2, '0');
+                     const d = String(dObj.getDate()).padStart(2, '0');
+                     cleanRow[col] = `${y}-${m}-${d}`;
                  } else {
                      cleanRow[col] = row[col];
                  }
@@ -399,7 +403,7 @@ export const DiscrepancyCheck: React.FC<DiscrepancyCheckProps> = ({ profiles }) 
                   return (
                     <div 
                       key={header} 
-                      className={`px-4 py-3 bg-slate-50 border-r border-slate-100 last:border-r-0 flex items-center justify-between gap-2 relative group shrink-0 ${isFirst ? 'sticky left-0 z-50 bg-slate-100 shadow-[2px_0_5px_rgba(0,0,0,0.05)]' : ''}`}
+                      className={`px-4 py-3 bg-slate-50 border-r border-slate-100 last:border-r-0 flex items-center justify-between gap-2 relative group shrink-0 ${isFirst ? 'sticky left-0 z-50 bg-slate-100 shadow-[2px_0_5_rgba(0,0,0,0.05)]' : ''}`}
                       style={{ width: COLUMN_WIDTH }}
                     >
                       <span className={`font-bold truncate uppercase tracking-tight text-[10px] ${isSorted ? 'text-indigo-600' : 'text-slate-600'}`}>{header}</span>
@@ -429,7 +433,6 @@ export const DiscrepancyCheck: React.FC<DiscrepancyCheckProps> = ({ profiles }) 
                               <div className="max-h-[300px] overflow-y-auto custom-scrollbar pr-2">
                                 {strategyHierarchy ? (
                                     <div className="space-y-1">
-                                        {/* Fix: Cast Object.entries result to access names properly as any[] */}
                                         {(Object.entries(strategyHierarchy) as [string, any[]][]).map(([category, names]) => {
                                             if (names.length === 0) return null;
                                             const categoryId = `cat-${category}`;
@@ -461,7 +464,6 @@ export const DiscrepancyCheck: React.FC<DiscrepancyCheckProps> = ({ profiles }) 
                                     </div>
                                 ) : dateHierarchy ? (
                                     <div className="space-y-1">
-                                        {/* Fix: Explicitly cast hierarchical structures as Records to avoid 'unknown' errors */}
                                         {(Object.entries(dateHierarchy as Record<string, Record<string, any[]>>)).map(([year, months]) => {
                                             const yearId = `year-${year}`;
                                             const isYearExpanded = expandedNodes.has(yearId);

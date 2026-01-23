@@ -1,7 +1,8 @@
+
 import { GoogleGenAI, Type } from "@google/genai";
 import { CargoProfile } from "../types";
 
-// Fix: Removed deprecated Schema type import and use a standard object for schema definition
+// Schema definition for the expected JSON output
 const parseCargoSchema = {
   type: Type.OBJECT,
   properties: {
@@ -28,13 +29,9 @@ const parseCargoSchema = {
     incoterms: { type: Type.STRING },
     src: { type: Type.STRING },
     pnlBucket: { type: Type.STRING, enum: ['Realized', 'Unrealized', 'Unspecified'] },
-    reconciledPurchaseCost: { type: Type.NUMBER },
-    finalSalesRevenue: { type: Type.NUMBER },
-    reconciledSalesRevenue: { type: Type.NUMBER },
-    finalTotalCost: { type: Type.NUMBER },
-    finalPhysicalPnL: { type: Type.NUMBER },
-    totalHedgingPnL: { type: Type.NUMBER },
-    finalTotalPnL: { type: Type.NUMBER },
+    isTieredPricing: { type: Type.BOOLEAN },
+    tier2DeliveredVolume: { type: Type.NUMBER },
+    tier2SellFormula: { type: Type.STRING },
     volumeUnit: { type: Type.STRING, enum: ['MMBtu', 'm3', 'MT', 'bbl'] },
   },
 };
@@ -50,10 +47,7 @@ export async function parseKTSDocument(
       throw new Error("API Key is missing.");
     }
 
-    // Fix: Correct initialization using named parameter object
     const ai = new GoogleGenAI({ apiKey });
-    
-    // Fix: Updated to 'gemini-3-flash-preview' for extraction tasks as per guidelines
     const modelId = "gemini-3-flash-preview";
 
     const prompt = `
@@ -61,19 +55,28 @@ export async function parseKTSDocument(
       Extract the available cargo information into a structured JSON format.
       
       Instructions:
-      1. If a field is not explicitly present, exclude it or return null. Do NOT force data creation.
+      1. If a field is not explicitly present, exclude it or return null.
       2. For Boolean 'optimized', infer from context (Yes=true, No=false).
       3. For dates, standardize to YYYY-MM-DD.
-      4. Look for Date Windows (e.g. "January 15-17"). Split into Start and End dates.
-      5. For Pricing Formulas (Sell Formula / Buy Formula):
+      4. For Pricing Formulas (Sell Formula / Buy Formula):
          - Extract the MATHEMATICAL logic.
-         - Convert standard indices to their codes: "Henry Hub" -> "HH", "Dutch TTF" -> "TTF", "Brent" -> "Dated Brent", "NBP" -> "NBP", "JKM" -> "JKM".
-         - CLEANUP: Remove currency symbols ($), contract periods like '(n)' or '(m)', and non-numeric variables like 'Alpha' or 'Beta' unless a value is defined.
-         - Example: "95% NBP(n) - $0.88 +/- Alpha" should be extracted as "95% NBP - 0.88".
+         - Convert standard indices to their codes: 
+           "Henry Hub Last Day" or "HH Last Day" -> "HH Last Day"
+           "Henry Hub" -> "HH"
+           "Dutch TTF" -> "TTF"
+           "Brent" -> "Dated Brent"
+           "NBP" -> "NBP"
+           "JKM" -> "JKM"
+         - IMPORTANT: Distinguish between "Henry Hub" (daily/average) and "Henry Hub Last Day" (settlement).
+         - CLEANUP: Remove currency symbols ($) and contract periods like '(n)' or '(m)'.
+      5. TWO-TIER PRICING:
+         - If the document mentions multiple volumes with different pricing (e.g., "First X units at Formula A, then remainder at Formula B"), 
+           set 'isTieredPricing' to true.
+         - Extract the first volume and formula into 'deliveredVolume' and 'sellFormula'.
+         - Extract the second tier volume and formula into 'tier2DeliveredVolume' and 'tier2SellFormula'.
       6. Extract Volume Unit (MMBtu, m3, MT, bbl) if explicitly stated.
     `;
 
-    // Prepare contents based on whether we have raw text (from DOCX) or a file blob (PDF/Image)
     const contents = {
       parts: [
         { text: prompt },
@@ -94,11 +97,10 @@ export async function parseKTSDocument(
       config: {
         responseMimeType: "application/json",
         responseSchema: parseCargoSchema,
-        temperature: 0.1, // Low temperature for factual extraction
+        temperature: 0.1,
       }
     });
 
-    // Fix: Use response.text property directly as per guidelines
     const text = response.text;
     if (!text) throw new Error("No response from AI");
 

@@ -1,3 +1,4 @@
+
 import React, { useMemo, useState, useEffect } from 'react';
 import { CargoProfile, PnLBucket } from '../types';
 import { ForwardCurveRow, detectUnit, getExposureChartData, getPortfolioYear, recalculateProfile, getAvailableCurveDates, getPricesSnapshot, getForwardCurve, explainPricing, analyzeFormulaStructure, evaluateFormula, findDataGaps, DataGap } from '../services/calculationService';
@@ -16,12 +17,13 @@ interface DashboardProps {
 }
 
 const COLORS = ['#0088FE', '#00C49F', '#FFBB28', '#FF8042', '#8884d8', '#ec4899', '#6366f1'];
-const GAS_INDICES = ['HH', 'TTF', 'JKM', 'NBP', 'AECO', 'STN 2'];
+const GAS_INDICES = ['HH', 'HH Last Day', 'TTF', 'JKM', 'NBP', 'AECO', 'STN 2'];
 const OIL_INDICES = ['Dated Brent', 'JCC', 'BRIPE'];
 const ALL_INDICES = [...GAS_INDICES, ...OIL_INDICES];
 
 const LINE_COLORS: Record<string, string> = {
     'HH': '#f59e0b',
+    'HH Last Day': '#fbbf24',
     'TTF': '#3b82f6',
     'JKM': '#10b981',
     'NBP': '#8b5cf6',

@@ -1,3 +1,4 @@
+
 export enum PnLBucket {
   Realized = 'Realized',
   Unrealized = 'Unrealized',
@@ -41,10 +42,43 @@ export interface CargoProfile {
   buyPriceRounding?: number;
   sellPriceRounding?: number;
   
+  // SRC (Shipping Related Cost) for DES cargoes
+  srcUnitFee?: number;
+  reconciledSrcCost?: number;
+  
   loadingWindowStart?: string;
   loadingWindowEnd?: string;
   deliveryWindowStart?: string;
   deliveryWindowEnd?: string;
+
+  // --- Two-Tier Pricing Support ---
+  isTieredPricing?: boolean;
+  tier2DeliveredVolume?: number;
+  tier2SellFormula?: string;
+  absoluteTier2SellPrice?: number;
+  tier2SellPriceRounding?: number;
+  isTier2SellPriceManual?: boolean;
+
+  // Tier 2 Granular Components
+  tier2SellPrice1Weightage?: number;
+  tier2SellPrice1Slope?: number;
+  tier2SellPriceIndex1?: string;
+  tier2SellPrice1MonthDef?: string;
+  tier2SellPrice1Constant?: number;
+  
+  tier2SellPrice2Weightage?: number;
+  tier2SellPrice2Slope?: number;
+  tier2SellPriceIndex2?: string;
+  tier2SellPrice2MonthDef?: string;
+  tier2SellPrice2Constant?: number;
+
+  tier2SellPrice3Weightage?: number;
+  tier2SellPrice3Slope?: number;
+  tier2SellPriceIndex3?: string;
+  tier2SellPrice3MonthDef?: string;
+  tier2SellPrice3Constant?: number;
+
+  tier2SellPriceOverallConstant?: number;
 
   // --- Jarvis Specific Granular Pricing Columns ---
   // Purchase Components
@@ -111,7 +145,7 @@ export const EmptyCargoProfile: Omit<CargoProfile, 'id'> = {
   loadingMonth: '',
   buyFormula: '',
   absoluteBuyPrice: 0,
-  incoterms: '',
+  incoterms: 'FOB',
   src: '',
   pnlBucket: PnLBucket.Unrealized,
   reconciledPurchaseCost: 0,
@@ -129,5 +163,13 @@ export const EmptyCargoProfile: Omit<CargoProfile, 'id'> = {
   isBuyPriceManual: false,
   isSellPriceManual: false,
   buyPriceRounding: 3,
-  sellPriceRounding: 3
+  sellPriceRounding: 3,
+  srcUnitFee: 0,
+  reconciledSrcCost: 0,
+  isTieredPricing: false,
+  tier2DeliveredVolume: 0,
+  tier2SellFormula: '',
+  absoluteTier2SellPrice: 0,
+  tier2SellPriceRounding: 3,
+  isTier2SellPriceManual: false
 };

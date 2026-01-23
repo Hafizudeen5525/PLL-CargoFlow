@@ -64,7 +64,6 @@ export const CargoList: React.FC<CargoListProps> = ({
       const lower = debouncedSearch.toLowerCase();
       result = result.filter(p => Object.values(p).some(v => String(v || '').toLowerCase().includes(lower)));
     }
-    // Fix: Explicitly cast selectedValues to Set<any> as Object.entries returns [string, unknown][] for Records
     Object.entries(activeFilters).forEach(([column, selectedValues]) => {
       const values = selectedValues as Set<any>;
       if (values.size > 0) {
@@ -86,14 +85,6 @@ export const CargoList: React.FC<CargoListProps> = ({
     return result;
   }, [profiles, debouncedSearch, activeFilters, sortConfig]);
 
-  const uniqueValues = useMemo(() => {
-    const uniques: Record<string, any[]> = {};
-    if (profiles.length === 0) return uniques;
-    const keys = ['strategyName', 'manualGroup', 'buyer', 'source', 'deliveryDate', 'loadingDate', 'pnlBucket'];
-    keys.forEach(k => uniques[k] = Array.from(new Set(profiles.map(p => (p as any)[k]))).sort());
-    return uniques;
-  }, [profiles]);
-
   const handleJarvisImport = (e: React.ChangeEvent<HTMLInputElement>) => {
     const file = e.target.files?.[0];
     if (!file) return;
@@ -113,7 +104,7 @@ export const CargoList: React.FC<CargoListProps> = ({
             if (json.length === 0) return;
             
             let headerRowIndex = -1;
-            for (let i = 0; i < Math.min(json.length, 50); i++) {
+            for (let i = 0; i < Math.min(json.length, 100); i++) {
                 if (json[i].some(cell => String(cell || '').toLowerCase().trim() === 'strategy name')) {
                     headerRowIndex = i;
                     break;
@@ -123,24 +114,66 @@ export const CargoList: React.FC<CargoListProps> = ({
             const headers = json[headerRowIndex].map(h => String(h || '').toLowerCase().trim());
             const dataRows = json.slice(headerRowIndex + 1);
 
+            const seenInSheet = new Set<string>();
+
             dataRows.forEach(row => {
                 const stratIdx = headers.indexOf('strategy name');
                 const stratName = row[stratIdx];
                 if (!stratName || String(stratName).trim() === '') return;
-                const cleanStratName = String(stratName).trim();
+                
+                let cleanStratName = String(stratName).trim();
+                let isTier2Leg = false;
+                
+                if (cleanStratName.includes('t(')) {
+                    isTier2Leg = true;
+                    cleanStratName = cleanStratName.replace('t(', '(');
+                } else if (cleanStratName.endsWith('t')) {
+                    isTier2Leg = true;
+                    cleanStratName = cleanStratName.slice(0, -1);
+                }
+
+                if (seenInSheet.has(cleanStratName) && (sheetName === 'Sales')) {
+                    isTier2Leg = true;
+                }
+                seenInSheet.add(cleanStratName);
+
                 if (!mergedData[cleanStratName]) mergedData[cleanStratName] = { ...EmptyCargoProfile, strategyName: cleanStratName };
+                
+                if (isTier2Leg) {
+                    mergedData[cleanStratName].isTieredPricing = true;
+                }
 
                 Object.entries(mapping).forEach(([excelHeader, profileKey]) => {
                     const idx = headers.indexOf(excelHeader.toLowerCase().trim());
                     if (idx !== -1 && row[idx] !== undefined && row[idx] !== '') {
                         const val = row[idx];
-                        if (profileKey === 'optimized') {
-                             mergedData[cleanStratName][profileKey] = String(val).toLowerCase().includes('yes') || val === true || val === 1;
+                        
+                        // Handle Tier 2 Mapping
+                        if (isTier2Leg) {
+                             if (profileKey === 'deliveredVolume') {
+                                 mergedData[cleanStratName].tier2DeliveredVolume = (mergedData[cleanStratName].tier2DeliveredVolume || 0) + (typeof val === 'number' ? val : parseFloat(String(val).replace(/[^0-9.-]/g, '')));
+                             } else if (profileKey === 'sellFormula') {
+                                 mergedData[cleanStratName].tier2SellFormula = String(val);
+                             } else if (profileKey.startsWith('sellPrice')) {
+                                 const tier2Key = profileKey.replace('sellPrice', 'tier2SellPrice');
+                                 if (typeof (EmptyCargoProfile as any)[tier2Key] !== 'undefined') {
+                                     (mergedData[cleanStratName] as any)[tier2Key] = val;
+                                 }
+                             }
+                             return; 
+                        }
+
+                        // Handle Combined Numerical Aggregation for non-Sales sheets
+                        if (sheetName !== 'Sales' && (profileKey === 'reconciledSrcCost' || profileKey === 'loadedVolume')) {
+                            const num = typeof val === 'number' ? val : parseFloat(String(val).replace(/[^0-9.-]/g, ''));
+                            (mergedData[cleanStratName] as any)[profileKey] = ((mergedData[cleanStratName] as any)[profileKey] || 0) + num;
                         } else if (val instanceof Date) {
-                             (mergedData[cleanStratName] as any)[profileKey] = val.toISOString().split('T')[0];
-                        } else if (typeof (EmptyCargoProfile as any)[profileKey] === 'number') {
-                             const num = typeof val === 'number' ? val : parseFloat(String(val).replace(/[^0-9.-]/g, ''));
-                             if (!isNaN(num)) (mergedData[cleanStratName] as any)[profileKey] = num;
+                             const y = val.getFullYear();
+                             const m = String(val.getMonth() + 1).padStart(2, '0');
+                             const d = String(val.getDate()).padStart(2, '0');
+                             (mergedData[cleanStratName] as any)[profileKey] = `${y}-${m}-${d}`;
+                        } else if (profileKey === 'optimized') {
+                             mergedData[cleanStratName][profileKey] = String(val).toLowerCase().includes('yes') || val === true;
                         } else {
                              (mergedData[cleanStratName] as any)[profileKey] = val;
                         }
@@ -149,57 +182,20 @@ export const CargoList: React.FC<CargoListProps> = ({
             });
         };
 
-        // Purchase Mapping (Following exact user formula requirements)
+        // Purchase Mapping
         extractSheetData('Purchase', {
-            'Source': 'source',
-            'No.': 'jarvisNo',
-            'Buyer': 'buyer',
-            'Optimized': 'optimized',
-            'Loading Date': 'loadingDate',
-            'Loaded Volume': 'loadedVolume',
-            'Buy Formula': 'buyFormula',
-            'Buy Price 1 Weightage': 'buyPrice1Weightage',
-            'Buy Price 1 slope': 'buyPrice1Slope',
-            'Buy Price Index 1': 'buyPriceIndex1',
-            'Buy Price 1 Month Definition': 'buyPrice1MonthDef',
-            'Buy Price 1 constant': 'buyPrice1Constant',
-            'Buy Price 2 Weightage': 'buyPrice2Weightage',
-            'Buy Price 2 slope': 'buyPrice2Slope',
-            'Buy Price Index 2': 'buyPriceIndex2',
-            'Buy Price 2 Month Definition': 'buyPrice2MonthDef',
-            'Buy Price 2 constant': 'buyPrice2Constant',
-            'Buy Price 3 Weightage': 'buyPrice3Weightage',
-            'Buy Price 3 slope': 'buyPrice3Slope',
-            'Buy Price Index 3': 'buyPriceIndex3',
-            'Buy Price 3 Month Definition': 'buyPrice3MonthDef',
-            'Buy Price 3 constant': 'buyPrice3Constant',
-            'Buy Price Overall Constant': 'buyPriceOverallConstant',
-            'Buy Price Overall Constant Weightage': 'buyPriceOverallConstantWeightage'
+            'Source': 'source', 'No.': 'jarvisNo', 'Buyer': 'buyer', 'Optimized': 'optimized', 'Loading Date': 'loadingDate', 'Loaded Volume': 'loadedVolume', 'Buy Price 1 Weightage': 'buyPrice1Weightage', 'Buy Price 1 slope': 'buyPrice1Slope', 'Buy Price Index 1': 'buyPriceIndex1', 'Buy Price 1 Month Definition': 'buyPrice1MonthDef', 'Buy Price 1 constant': 'buyPrice1Constant', 'Buy Price 2 Weightage': 'buyPrice2Weightage', 'Buy Price 2 slope': 'buyPrice2Slope', 'Buy Price Index 2': 'buyPriceIndex2', 'Buy Price 2 Month Definition': 'buyPrice2MonthDef', 'Buy Price 2 constant': 'buyPrice2Constant', 'Buy Price 3 Weightage': 'buyPrice3Weightage', 'Buy Price 3 slope': 'buyPrice3Slope', 'Buy Price Index 3': 'buyPriceIndex3', 'Buy Price 3 Month Definition': 'buyPrice3MonthDef', 'Buy Price 3 constant': 'buyPrice3Constant', 'Buy Price Overall Constant': 'buyPriceOverallConstant'
         });
 
         // Sales Mapping
         extractSheetData('Sales', {
-            'Buyer': 'buyer',
-            'Delivery Date': 'deliveryDate',
-            'Delivered Volume': 'deliveredVolume',
-            'Sell Formula': 'sellFormula',
-            'Sell Price 1 Weightage': 'sellPrice1Weightage',
-            'Sell Price 1 slope': 'sellPrice1Slope',
-            'Sell Price Index 1': 'sellPriceIndex1',
-            'Sell Price 1 Month Definition': 'sellPrice1MonthDef',
-            'Sell Price 1 constant': 'sellPrice1Constant',
-            'Sell Price 2 Weightage': 'sellPrice2Weightage',
-            'Sell Price 2 slope': 'sellPrice2Slope',
-            'Sell Price Index 2': 'sellPriceIndex2',
-            'Sell Price 2 Month Definition': 'sellPrice2MonthDef',
-            'Sell Price 2 constant': 'sellPrice2Constant',
-            'Sell Price 3 Weightage': 'sellPrice3Weightage',
-            'Sell Price 3 slope': 'sellPrice3Slope',
-            'Sell Price Index 3': 'sellPriceIndex3',
-            'Sell Price 3 Month Definition': 'sellPrice3MonthDef',
-            'Sell Price 3 constant': 'sellPrice3Constant',
-            'Sell Price Overall Constant': 'sellPriceOverallConstant',
-            'Sell Price Overall Constant Weightage': 'sellPriceOverallConstantWeightage'
+            'Buyer': 'buyer', 'Delivery Date': 'deliveryDate', 'Delivered Volume': 'deliveredVolume', 'Sell Formula': 'sellFormula', 'Sell Price 1 Weightage': 'sellPrice1Weightage', 'Sell Price 1 slope': 'sellPrice1Slope', 'Sell Price Index 1': 'sellPriceIndex1', 'Sell Price 1 Month Definition': 'sellPrice1MonthDef', 'Sell Price 1 constant': 'sellPrice1Constant', 'Sell Price 2 Weightage': 'sellPrice2Weightage', 'Sell Price 2 slope': 'sellPrice2Slope', 'Sell Price Index 2': 'sellPriceIndex2', 'Sell Price 2 Month Definition': 'sellPrice2MonthDef', 'Sell Price 2 constant': 'sellPrice2Constant', 'Sell Price 3 Weightage': 'sellPrice3Weightage', 'Sell Price 3 slope': 'sellPrice3Slope', 'Sell Price Index 3': 'sellPriceIndex3', 'Sell Price 3 Month Definition': 'sellPrice3MonthDef', 'Sell Price 3 constant': 'sellPrice3Constant', 'Sell Price Overall Constant': 'sellPriceOverallConstant'
+        });
+
+        // Cost Sheet Mapping
+        extractSheetData('Cost', {
+            'Incoterm': 'incoterms',
+            'SRC': 'reconciledSrcCost'
         });
 
         const finalProfiles = Object.values(mergedData).map(p => {
@@ -209,8 +205,9 @@ export const CargoList: React.FC<CargoListProps> = ({
         });
 
         if (onBulkImport) onBulkImport(finalProfiles);
-        toast.success(`Parsed ${finalProfiles.length} granular strategies`, { id: loadingToast });
+        toast.success(`Parsed ${finalProfiles.length} combined strategies`, { id: loadingToast });
       } catch (err) {
+        console.error(err);
         toast.error('Failed to process Jarvis Macro workbook', { id: loadingToast });
       } finally {
         setIsImportingJarvis(false);
@@ -224,41 +221,54 @@ export const CargoList: React.FC<CargoListProps> = ({
     if (profiles.length === 0) return toast.error("No data to export");
     const workbook = XLSX.utils.book_new();
 
-    const purchaseData = processedProfiles.map(p => ({
-        'Source': p.source || '', 'No.': p.jarvisNo || '', 'Strategy Name': p.strategyName || '', 'Buyer': p.buyer || '',
-        'Optimized': p.optimized ? 'Yes' : 'No', 'Loading Date': p.loadingDate || '', 'Loaded Volume': p.loadedVolume || 0,
-        'Buy Price 1 Weightage': p.buyPrice1Weightage ?? '', 'Buy Price 1 slope': p.buyPrice1Slope ?? '', 'Buy Price Index 1': p.buyPriceIndex1 ?? '', 'Buy Price 1 Month Definition': p.buyPrice1MonthDef ?? '', 'Buy Price 1 constant': p.buyPrice1Constant ?? '',
-        'Buy Price 2 Weightage': p.buyPrice2Weightage ?? '', 'Buy Price 2 slope': p.buyPrice2Slope ?? '', 'Buy Price Index 2': p.buyPriceIndex2 ?? '', 'Buy Price 2 Month Definition': p.buyPrice2MonthDef ?? '', 'Buy Price 2 constant': p.buyPrice2Constant ?? '',
-        'Buy Price 3 Weightage': p.buyPrice3Weightage ?? '', 'Buy Price 3 slope': p.buyPrice3Slope ?? '', 'Buy Price Index 3': p.buyPriceIndex3 ?? '', 'Buy Price 3 Month Definition': p.buyPrice3MonthDef ?? '', 'Buy Price 3 constant': p.buyPrice3Constant ?? '',
-        'Buy Price Overall Constant': p.buyPriceOverallConstant ?? '', 'Buy Price Overall Constant Weightage': p.buyPriceOverallConstantWeightage ?? ''
-    }));
+    const purchaseRows: any[] = [];
+    const salesRows: any[] = [];
+    const costRows: any[] = [];
 
-    const salesData = processedProfiles.map(p => ({
-        'Strategy Name': p.strategyName || '', 'Buyer': p.buyer || '', 'Delivery Date': p.deliveryDate || '', 'Delivered Volume': p.deliveredVolume || 0,
-        'Sell Price 1 Weightage': p.sellPrice1Weightage ?? '', 'Sell Price 1 slope': p.sellPrice1Slope ?? '', 'Sell Price Index 1': p.sellPriceIndex1 ?? '', 'Sell Price 1 Month Definition': p.sellPrice1MonthDef ?? '', 'Sell Price 1 constant': p.sellPrice1Constant ?? '',
-        'Sell Price 2 Weightage': p.sellPrice2Weightage ?? '', 'Sell Price 2 slope': p.sellPrice2Slope ?? '', 'Sell Price Index 2': p.sellPriceIndex2 ?? '', 'Sell Price 2 Month Definition': p.sellPrice2MonthDef ?? '', 'Sell Price 2 constant': p.sellPrice2Constant ?? '',
-        'Sell Price 3 Weightage': p.sellPrice3Weightage ?? '', 'Sell Price 3 slope': p.sellPrice3Slope ?? '', 'Sell Price Index 3': p.sellPriceIndex3 ?? '', 'Sell Price 3 Month Definition': p.sellPrice3MonthDef ?? '', 'Sell Price 3 constant': p.sellPrice3Constant ?? '',
-        'Sell Price Overall Constant': p.sellPriceOverallConstant ?? '', 'Sell Price Overall Constant Weightage': p.sellPriceOverallConstantWeightage ?? ''
-    }));
+    processedProfiles.forEach(p => {
+        const pRow = {
+            'Source': p.source || '', 'No.': p.jarvisNo || '', 'Strategy Name': p.strategyName || '', 'Buyer': p.buyer || '', 'Optimized': p.optimized ? 'Yes' : 'No', 'Loading Date': p.loadingDate || '', 'Loaded Volume': p.loadedVolume || 0, 'Buy Price 1 Weightage': p.buyPrice1Weightage ?? '', 'Buy Price 1 slope': p.buyPrice1Slope ?? '', 'Buy Price Index 1': p.buyPriceIndex1 ?? '', 'Buy Price 1 Month Definition': p.buyPrice1MonthDef ?? '', 'Buy Price 1 constant': p.buyPrice1Constant ?? '', 'Buy Price Overall Constant': p.buyPriceOverallConstant ?? ''
+        };
+        purchaseRows.push(pRow);
 
-    XLSX.utils.book_append_sheet(workbook, XLSX.utils.json_to_sheet(purchaseData), 'Purchase');
-    XLSX.utils.book_append_sheet(workbook, XLSX.utils.json_to_sheet(salesData), 'Sales');
+        const sRow = {
+            'Strategy Name': p.strategyName || '', 'Buyer': p.buyer || '', 'Delivery Date': p.deliveryDate || '', 'Delivered Volume': p.deliveredVolume || 0, 'Sell Formula': p.sellFormula || '', 'Sell Price 1 Weightage': p.sellPrice1Weightage ?? '', 'Sell Price 1 slope': p.sellPrice1Slope ?? '', 'Sell Price Index 1': p.sellPriceIndex1 ?? '', 'Sell Price 1 Month Definition': p.sellPrice1MonthDef ?? '', 'Sell Price 1 constant': p.sellPrice1Constant ?? '', 'Sell Price Overall Constant': p.sellPriceOverallConstant ?? ''
+        };
+        salesRows.push(sRow);
+
+        const cRow = {
+            'Strategy Name': p.strategyName || '', 'Incoterm': p.incoterms || '', 'SRC': p.reconciledSrcCost || 0
+        };
+        costRows.push(cRow);
+
+        if (p.isTieredPricing) {
+            const tSalesRow = {
+                'Strategy Name': p.strategyName || '', 
+                'Buyer': p.buyer || '', 
+                'Delivery Date': p.deliveryDate || '',
+                'Delivered Volume': p.tier2DeliveredVolume || 0,
+                'Sell Formula': p.tier2SellFormula || '',
+                'Sell Price 1 Weightage': p.tier2SellPrice1Weightage ?? '',
+                'Sell Price 1 slope': p.tier2SellPrice1Slope ?? '',
+                'Sell Price Index 1': p.tier2SellPriceIndex1 ?? '',
+                'Sell Price 1 Month Definition': p.tier2SellPrice1MonthDef ?? '',
+                'Sell Price 1 constant': p.tier2SellPrice1Constant ?? '',
+                'Sell Price Overall Constant': p.tier2SellPriceOverallConstant ?? '',
+                'Sell Price Overall Constant Weightage': 1
+            };
+            salesRows.push(tSalesRow);
+        }
+    });
+
+    XLSX.utils.book_append_sheet(workbook, XLSX.utils.json_to_sheet(purchaseRows), 'Purchase');
+    XLSX.utils.book_append_sheet(workbook, XLSX.utils.json_to_sheet(salesRows), 'Sales');
+    XLSX.utils.book_append_sheet(workbook, XLSX.utils.json_to_sheet(costRows), 'Cost');
     XLSX.writeFile(workbook, `Jarvis_Export_${new Date().toISOString().split('T')[0]}.xlsm`, { bookType: 'xlsm' });
   };
 
   const handleSort = (key: keyof CargoProfile) => {
     setSortConfig(prev => ({ key, direction: prev.key === key && prev.direction === 'asc' ? 'desc' : 'asc' }));
     setOpenFilterMenu(null);
-  };
-
-  const toggleValueFilter = (column: string, value: any) => {
-    setActiveFilters(prev => {
-      const next = { ...prev };
-      const currentSet = new Set(next[column] || []);
-      if (currentSet.has(value)) currentSet.delete(value); else currentSet.add(value);
-      if (currentSet.size === 0) delete next[column]; else next[column] = currentSet;
-      return next;
-    });
   };
 
   const formatCurrency = (val: number) => 
@@ -285,7 +295,7 @@ export const CargoList: React.FC<CargoListProps> = ({
                 Import Jarvis
             </button>
             <button onClick={handleJarvisExport} className="text-xs font-bold text-slate-600 bg-white px-3 py-1.5 rounded-lg border border-slate-200 hover:bg-slate-50 transition-colors flex items-center gap-2 shadow-sm">
-                <svg className="w-4 h-4" fill="none" stroke="currentColor" viewBox="0 0 24 24"><path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M4 16v1a3 3 0 003 3h10a3 3 0 003-3v-1m-4-4l-4 4m0 0l-4-4m4 4V4" /></svg>
+                <svg className="w-4 h-4" fill="none" stroke="currentColor" viewBox="0 0 24 24"><path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M4 16v1a3 3 0 003 3h10a3 3 0 003 3h10a3 3 0 003-3v-1m-4-4l-4 4m0 0l-4-4m4 4V4" /></svg>
                 Export Jarvis
             </button>
         </div>
@@ -314,7 +324,10 @@ export const CargoList: React.FC<CargoListProps> = ({
                             {processedProfiles.map((p) => (
                                 <div key={p.id} className="flex border-b border-slate-100 transition-colors hover:bg-indigo-50/30 group">
                                     <div className="px-4 py-3 border-r border-slate-100 w-12 shrink-0 flex items-center bg-white"><input type="checkbox" className="rounded border-slate-300 text-indigo-600" /></div>
-                                    <div className="px-4 py-3 shrink-0 truncate text-[11px] font-bold text-slate-900 border-r border-slate-50" style={{ width: COLUMN_WIDTH }}>{p.strategyName}</div>
+                                    <div className="px-4 py-3 shrink-0 truncate text-[11px] font-bold text-slate-900 border-r border-slate-50" style={{ width: COLUMN_WIDTH }}>
+                                        {p.strategyName}
+                                        {p.isTieredPricing && <span className="ml-2 px-1 py-0.5 bg-indigo-50 text-indigo-600 rounded text-[9px]">2 TIER</span>}
+                                    </div>
                                     <div className="px-4 py-3 shrink-0 truncate text-[11px] text-slate-600 border-r border-slate-50" style={{ width: COLUMN_WIDTH }}>{p.manualGroup || '-'}</div>
                                     <div className="px-4 py-3 shrink-0 truncate text-[11px] text-slate-600 border-r border-slate-50" style={{ width: COLUMN_WIDTH }}>{p.buyer}</div>
                                     <div className="px-4 py-3 shrink-0 truncate text-[11px] text-slate-600 border-r border-slate-50" style={{ width: COLUMN_WIDTH }}>{p.source}</div>
