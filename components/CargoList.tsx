@@ -1,3 +1,4 @@
+
 import React, { useState, useMemo, useRef, useEffect, useCallback } from 'react';
 import { CargoProfile, PnLBucket, EmptyCargoProfile } from '../types';
 import { motion, AnimatePresence } from 'framer-motion';
@@ -19,7 +20,7 @@ interface CargoListProps {
 
 type ViewMode = 'table' | 'map' | 'calendar';
 
-const COLUMN_WIDTH = 180;
+const COLUMN_WIDTH = 140;
 
 // Helper to structure dates for hierarchy
 interface DateHierarchy {
@@ -39,14 +40,14 @@ export const CargoList: React.FC<CargoListProps> = ({
   
   const [searchTerm, setSearchTerm] = useState('');
   const [debouncedSearch, setDebouncedSearch] = useState('');
-  const [sortConfig, setSortConfig] = useState<{ key: keyof CargoProfile | 'groupName' | null; direction: 'asc' | 'desc' }>({ key: null, direction: 'asc' });
+  const [sortConfig, setSortConfig] = useState<{ key: keyof CargoProfile | null; direction: 'asc' | 'desc' }>({ key: null, direction: 'asc' });
   
   // Per-column filter states
   const [activeFilters, setActiveFilters] = useState<Record<string, Set<any>>>({});
   const [openFilterMenu, setOpenFilterMenu] = useState<string | null>(null);
   const [filterSearch, setFilterSearch] = useState('');
   
-  // Track expanded nodes in date hierarchy (e.g., "deliveryDate-2025", "deliveryDate-2025-01")
+  // Track expanded nodes in date hierarchy
   const [expandedDateNodes, setExpandedDateNodes] = useState<Set<string>>(new Set());
 
   useEffect(() => {
@@ -70,7 +71,8 @@ export const CargoList: React.FC<CargoListProps> = ({
     const uniques: Record<string, any[]> = {};
     const hierarchies: Record<string, DateHierarchy> = {};
     
-    const columns = ['strategyName', 'groupName', 'buyer', 'source', 'deliveryDate', 'loadingDate', 'finalTotalPnL', 'pnlBucket'];
+    // Explicit list of filterable columns
+    const columns = ['strategyName', 'buyer', 'source', 'deliveryDate', 'loadingDate', 'pnlBucket'];
     
     columns.forEach(col => {
       const isDateCol = col === 'deliveryDate' || col === 'loadingDate';
@@ -88,13 +90,10 @@ export const CargoList: React.FC<CargoListProps> = ({
               if (!hierarchy[y][m]) hierarchy[y][m] = [];
               if (!hierarchy[y][m].includes(dateStr)) hierarchy[y][m].push(dateStr);
           });
-          // Sort hierarchy
           Object.keys(hierarchy).forEach(y => {
               Object.keys(hierarchy[y]).forEach(m => hierarchy[y][m].sort());
           });
           hierarchies[col] = hierarchy;
-      } else if (col === 'groupName') {
-          uniques[col] = Array.from(new Set(profiles.map(p => getGroupName(p.strategyName)))).sort();
       } else {
           uniques[col] = Array.from(new Set(profiles.map(p => (p as any)[col]))).sort();
       }
@@ -104,7 +103,7 @@ export const CargoList: React.FC<CargoListProps> = ({
   }, [profiles]);
 
   const processedProfiles = useMemo(() => {
-    let result = profiles.map(p => ({ ...p, groupName: getGroupName(p.strategyName) }));
+    let result = profiles.map(p => ({ ...p }));
     
     // Global search
     if (debouncedSearch) {
@@ -147,7 +146,6 @@ export const CargoList: React.FC<CargoListProps> = ({
     });
   };
 
-  // Bulk toggle for hierarchical dates
   const bulkToggleDates = (column: string, dates: string[], shouldSelect: boolean) => {
     setActiveFilters(prev => {
         const next = { ...prev };
@@ -171,7 +169,7 @@ export const CargoList: React.FC<CargoListProps> = ({
     });
   };
 
-  const handleSort = (key: keyof CargoProfile | 'groupName') => {
+  const handleSort = (key: keyof CargoProfile) => {
     setSortConfig(prev => ({ key, direction: prev.key === key && prev.direction === 'asc' ? 'desc' : 'asc' }));
   };
 
@@ -226,20 +224,15 @@ export const CargoList: React.FC<CargoListProps> = ({
                 seenInSheetCount.set(cleanStratName, count);
 
                 let isTier2Leg = count > 1 || cleanStratName.includes('t(') || cleanStratName.endsWith('t');
-                
                 const lookupName = cleanStratName.replace(/t(\(|$)/, '$1');
 
                 if (!mergedData[lookupName]) mergedData[lookupName] = { ...EmptyCargoProfile, strategyName: lookupName };
-                
-                if (isTier2Leg) {
-                    mergedData[lookupName].isTieredPricing = true;
-                }
+                if (isTier2Leg) mergedData[lookupName].isTieredPricing = true;
 
                 Object.entries(mapping).forEach(([excelHeader, profileKey]) => {
                     const idx = headers.indexOf(excelHeader.toLowerCase().trim());
                     if (idx !== -1 && row[idx] !== undefined && row[idx] !== '') {
                         const rawVal = row[idx];
-                        
                         const isStringData = 
                             profileKey.toLowerCase().includes('index') || 
                             profileKey.toLowerCase().includes('monthdef') ||
@@ -281,9 +274,7 @@ export const CargoList: React.FC<CargoListProps> = ({
             });
         };
 
-        const purchaseMap: Record<string, string> = {
-            'Source': 'source', 'No.': 'jarvisNo', 'Buyer': 'buyer', 'Optimized': 'optimized', 'Loading Date': 'loadingDate', 'Loaded Volume': 'loadedVolume', 'Buy Formula': 'buyFormula', 'Buy Price Overall Constant': 'buyPriceOverallConstant'
-        };
+        const purchaseMap: Record<string, string> = { 'Source': 'source', 'No.': 'jarvisNo', 'Buyer': 'buyer', 'Optimized': 'optimized', 'Loading Date': 'loadingDate', 'Loaded Volume': 'loadedVolume', 'Buy Formula': 'buyFormula', 'Buy Price Overall Constant': 'buyPriceOverallConstant' };
         for (let i = 1; i <= 3; i++) {
             purchaseMap[`Buy Price ${i} Weightage`] = `buyPrice${i}Weightage`;
             purchaseMap[`Buy Price ${i} slope`] = `buyPrice${i}Slope`;
@@ -293,9 +284,7 @@ export const CargoList: React.FC<CargoListProps> = ({
         }
         extractSheetData('Purchase', purchaseMap);
 
-        const salesMap: Record<string, string> = {
-            'Buyer': 'buyer', 'Delivery Date': 'deliveryDate', 'Delivered Volume': 'deliveredVolume', 'Sell Formula': 'sellFormula', 'Sell Price Overall Constant': 'sellPriceOverallConstant'
-        };
+        const salesMap: Record<string, string> = { 'Buyer': 'buyer', 'Delivery Date': 'deliveryDate', 'Delivered Volume': 'deliveredVolume', 'Sell Formula': 'sellFormula', 'Sell Price Overall Constant': 'sellPriceOverallConstant' };
         for (let i = 1; i <= 3; i++) {
             salesMap[`Sell Price ${i} Weightage`] = `sellPrice${i}Weightage`;
             salesMap[`Sell Price ${i} slope`] = `sellPrice${i}Slope`;
@@ -304,7 +293,6 @@ export const CargoList: React.FC<CargoListProps> = ({
             salesMap[`Sell Price ${i} constant`] = `sellPrice${i}Constant`;
         }
         extractSheetData('Sales', salesMap);
-
         extractSheetData('Cost', { 'Incoterm': 'incoterms', 'SRC': 'reconciledSrcCost' });
 
         const finalProfiles = Object.values(mergedData).map(p => {
@@ -314,9 +302,8 @@ export const CargoList: React.FC<CargoListProps> = ({
         });
 
         if (onBulkImport) onBulkImport(finalProfiles);
-        toast.success(`Imported ${finalProfiles.length} combined strategies with components`, { id: loadingToast });
+        toast.success(`Imported ${finalProfiles.length} combined strategies`, { id: loadingToast });
       } catch (err) {
-        console.error(err);
         toast.error('Failed to parse Jarvis Macro workbook', { id: loadingToast });
       } finally {
         setIsImportingJarvis(false);
@@ -335,29 +322,18 @@ export const CargoList: React.FC<CargoListProps> = ({
 
     processedProfiles.forEach(p => {
         const getTier2SN = (name: string) => name.replace(/(\d+)(\([^)]*\))?$/, "$1t$2");
-
         const buildRow = (type: 'Buy' | 'Sell', tier: 1 | 2) => {
             const prefix = tier === 1 ? (type === 'Buy' ? 'buyPrice' : 'sellPrice') : (type === 'Buy' ? 'tier2BuyPrice' : 'tier2SellPrice');
             const volKey = tier === 1 ? (type === 'Buy' ? 'loadedVolume' : 'deliveredVolume') : (type === 'Buy' ? 'tier2LoadedVolume' : 'tier2DeliveredVolume');
             const formulaKey = tier === 1 ? (type === 'Buy' ? 'buyFormula' : 'sellFormula') : (type === 'Buy' ? 'tier2BuyFormula' : 'tier2SellFormula');
-            
             const row: any = { 'Strategy Name': tier === 1 ? p.strategyName : getTier2SN(p.strategyName) };
-            
             if (type === 'Buy') {
-                row['Source'] = p.source; 
-                row['No.'] = p.jarvisNo; 
-                row['Buyer'] = p.buyer; 
-                row['Optimized'] = p.optimized ? 'Yes' : 'No'; 
-                row['Loading Date'] = p.loadingDate;
-                row['Loaded Volume'] = (p as any)[volKey];
-                row['Buy Formula'] = (p as any)[formulaKey];
+                row['Source'] = p.source; row['No.'] = p.jarvisNo; row['Buyer'] = p.buyer; row['Optimized'] = p.optimized ? 'Yes' : 'No'; row['Loading Date'] = p.loadingDate;
+                row['Loaded Volume'] = (p as any)[volKey]; row['Buy Formula'] = (p as any)[formulaKey];
             } else {
-                row['Buyer'] = p.buyer; 
-                row['Delivery Date'] = p.deliveryDate;
-                row['Delivered Volume'] = (p as any)[volKey];
-                row['Sell Formula'] = (p as any)[formulaKey];
+                row['Buyer'] = p.buyer; row['Delivery Date'] = p.deliveryDate;
+                row['Delivered Volume'] = (p as any)[volKey]; row['Sell Formula'] = (p as any)[formulaKey];
             }
-
             for (let i = 1; i <= 3; i++) {
                 row[`${type} Price ${i} Weightage`] = (p as any)[`${prefix}${i}Weightage`];
                 row[`${type} Price ${i} slope`] = (p as any)[`${prefix}${i}Slope`];
@@ -368,15 +344,12 @@ export const CargoList: React.FC<CargoListProps> = ({
             row[`${type} Price Overall Constant`] = (p as any)[`${prefix}OverallConstant`];
             return row;
         };
-
         purchaseRows.push(buildRow('Buy', 1));
         salesRows.push(buildRow('Sell', 1));
         costRows.push({ 'Strategy Name': p.strategyName, 'Incoterm': p.incoterms, 'SRC': p.reconciledSrcCost });
-        
         if (p.isTieredPricing) {
             const t2SN = getTier2SN(p.strategyName);
-            purchaseRows.push(buildRow('Buy', 2));
-            salesRows.push(buildRow('Sell', 2));
+            purchaseRows.push(buildRow('Buy', 2)); purchaseRows.push(buildRow('Sell', 2));
             costRows.push({ 'Strategy Name': t2SN, 'Incoterm': p.incoterms, 'SRC': '' });
         }
     });
@@ -387,8 +360,26 @@ export const CargoList: React.FC<CargoListProps> = ({
     XLSX.writeFile(workbook, `Jarvis_Export_${new Date().toISOString().split('T')[0]}.xlsm`, { bookType: 'xlsm' });
   };
 
-  const formatCurrency = (val: number) => 
-    new Intl.NumberFormat('en-US', { style: 'currency', currency: 'USD', minimumFractionDigits: 0, maximumFractionDigits: 0 }).format(val);
+  const formatCurrency = (val: number, decimals: number = 0) => 
+    new Intl.NumberFormat('en-US', { style: 'currency', currency: 'USD', minimumFractionDigits: decimals, maximumFractionDigits: decimals }).format(val);
+
+  // New Table Column Definitions
+  const columns = [
+    { id: 'strategyName', label: 'STRATEGY', width: 220 },
+    { id: 'buyer', label: 'BUYER', width: 140 },
+    { id: 'source', label: 'SOURCE', width: 140 },
+    { id: 'deliveryDate', label: 'DEL DATE', width: 120 },
+    { id: 'loadingDate', label: 'LOAD DATE', width: 120 },
+    { id: 'absoluteBuyPrice', label: 'BUY PRICE', width: 100, align: 'right' },
+    { id: 'absoluteSellPrice', label: 'SELL PRICE', width: 100, align: 'right' },
+    { id: 'loadedVolume', label: 'BUY VOL', width: 100, align: 'right' },
+    { id: 'deliveredVolume', label: 'SELL VOL', width: 100, align: 'right' },
+    { id: 'reconciledPurchaseCost', label: 'PURCHASE VAL', width: 130, align: 'right' },
+    { id: 'salesRevenue', label: 'SALES VAL', width: 130, align: 'right' },
+    { id: 'reconciledSrcCost', label: 'SRC', width: 100, align: 'right' },
+    { id: 'finalTotalPnL', label: 'NET P&L', width: 130, align: 'right' },
+    { id: 'pnlBucket', label: 'STATUS', width: 110, align: 'center' }
+  ];
 
   return (
     <div className="bg-white rounded-xl shadow-sm border border-slate-200 overflow-hidden flex flex-col h-full">
@@ -407,11 +398,11 @@ export const CargoList: React.FC<CargoListProps> = ({
         <div className="flex items-center gap-2">
             <input type="file" ref={fileInputRef} accept=".xlsm, .xlsx" onChange={handleJarvisImport} className="hidden" />
             <button onClick={() => fileInputRef.current?.click()} className="text-xs font-bold text-indigo-600 bg-indigo-50 px-3 py-1.5 rounded-lg border border-indigo-100 hover:bg-indigo-100 transition-colors flex items-center gap-2 shadow-sm">
-                <svg className="w-4 h-4" fill="none" stroke="currentColor" viewBox="0 0 24 24"><path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M4 16v1a3 3 0 003 3h10a3 3 0 003 3h10a3 3 0 003-3v-1m-4-8l-4-4m0 0L8 8m4-4v12" /></svg>
+                <svg className="w-4 h-4" fill="none" stroke="currentColor" viewBox="0 0 24 24"><path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M4 16v1a3 3 0 003 3h10a3 3 0 003-3v-1m-4-8l-4-4m0 0L8 8m4-4v12" /></svg>
                 Import Jarvis
             </button>
             <button onClick={handleJarvisExport} className="text-xs font-bold text-slate-600 bg-white px-3 py-1.5 rounded-lg border border-slate-200 hover:bg-slate-50 transition-colors flex items-center gap-2 shadow-sm">
-                <svg className="w-4 h-4" fill="none" stroke="currentColor" viewBox="0 0 24 24"><path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M4 16v1a3 3 0 003 3h10a3 3 0 003 3h10a3 3 0 003-3v-1m-4-4l-4 4m0 0l-4-4m4 4V4" /></svg>
+                <svg className="w-4 h-4" fill="none" stroke="currentColor" viewBox="0 0 24 24"><path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M4 16v1a3 3 0 003 3h10a3 3 0 003-3v-1m-4-4l-4 4m0 0l-4-4m4 4V4" /></svg>
                 Export Jarvis
             </button>
         </div>
@@ -426,48 +417,39 @@ export const CargoList: React.FC<CargoListProps> = ({
                             <div className="px-4 py-3 bg-slate-50 border-r border-slate-200 flex items-center w-12 shrink-0">
                                 <input type="checkbox" className="rounded border-slate-300 text-indigo-600" />
                             </div>
-                            {['strategyName', 'groupName', 'buyer', 'source', 'deliveryDate', 'loadingDate', 'finalTotalPnL', 'pnlBucket'].map((field) => {
+                            {columns.map((col) => {
+                                const field = col.id;
                                 const hasActiveFilter = (activeFilters[field] as Set<any> | undefined)?.size ?? 0 > 0;
                                 const isSorted = sortConfig.key === field;
-                                const label = field === 'strategyName' ? 'STRATEGY' : field === 'groupName' ? 'GROUP' : field === 'finalTotalPnL' ? 'P&L' : field === 'pnlBucket' ? 'STATUS' : field.toUpperCase();
                                 const isDateCol = field === 'deliveryDate' || field === 'loadingDate';
 
                                 return (
-                                    <div key={field} className="px-4 py-3 bg-slate-50 border-r border-slate-100 flex items-center justify-between gap-2 relative shrink-0" style={{ width: field === 'finalTotalPnL' ? 140 : field === 'pnlBucket' ? 120 : COLUMN_WIDTH }}>
-                                        <span className={`font-bold truncate uppercase tracking-tight text-[10px] ${isSorted ? 'text-indigo-600' : 'text-slate-600'}`}>{label}</span>
+                                    <div key={field} className={`px-4 py-3 bg-slate-50 border-r border-slate-100 flex items-center justify-between gap-2 relative shrink-0 ${col.align === 'right' ? 'flex-row-reverse' : ''}`} style={{ width: col.width }}>
+                                        <span className={`font-bold truncate uppercase tracking-tight text-[10px] ${isSorted ? 'text-indigo-600' : 'text-slate-600'}`}>{col.label}</span>
                                         <div className="flex items-center gap-1">
-                                          <button 
-                                            onClick={() => setOpenFilterMenu(field === openFilterMenu ? null : field)}
-                                            className={`p-1 rounded transition-colors ${hasActiveFilter ? 'bg-indigo-100 text-indigo-600' : 'text-slate-400 hover:bg-slate-200 opacity-50'}`}
-                                          >
-                                            <svg className="w-3 h-3" fill="none" stroke="currentColor" viewBox="0 0 24 24"><path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M3 4a1 1 0 011-1h16a1 1 0 011 1v2.586a1 1 0 01-.293.707l-6.414 6.414a1 1 0 00-.293.707V17l-4 4v-6.586a1 1 0 00-.293-.707L3.293 7.293A1 1 0 013 6.586V4z" /></svg>
-                                          </button>
+                                          {filterData.uniques[field] || filterData.hierarchies[field] ? (
+                                            <button 
+                                              onClick={() => setOpenFilterMenu(field === openFilterMenu ? null : field)}
+                                              className={`p-1 rounded transition-colors ${hasActiveFilter ? 'bg-indigo-100 text-indigo-600' : 'text-slate-400 hover:bg-slate-200 opacity-50'}`}
+                                            >
+                                              <svg className="w-3 h-3" fill="none" stroke="currentColor" viewBox="0 0 24 24"><path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M3 4a1 1 0 011-1h16a1 1 0 011 1v2.586a1 1 0 01-.293.707l-6.414 6.414a1 1 0 00-.293.707V17l-4 4v-6.586a1 1 0 00-.293-.707L3.293 7.293A1 1 0 013 6.586V4z" /></svg>
+                                            </button>
+                                          ) : (
+                                            <button onClick={() => handleSort(field as any)} className={`p-1 rounded ${isSorted ? 'text-indigo-600' : 'text-slate-300'}`}>
+                                              <svg className="w-3 h-3" fill="none" stroke="currentColor" viewBox="0 0 24 24"><path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M7 16V4m0 0L3 8m4-4l4 4m6 0v12m0 0l4-4m-4 4l-4-4" /></svg>
+                                            </button>
+                                          )}
                                         </div>
 
                                         <AnimatePresence>
                                           {openFilterMenu === field && (
-                                            <motion.div 
-                                              ref={filterMenuRef}
-                                              initial={{ opacity: 0, y: 5 }} 
-                                              animate={{ opacity: 1, y: 0 }} 
-                                              exit={{ opacity: 0, y: 5 }} 
-                                              className="absolute top-full left-0 mt-1 w-64 bg-white border border-slate-200 shadow-2xl rounded-xl p-3 z-50 text-slate-700 font-normal normal-case"
-                                            >
+                                            <motion.div ref={filterMenuRef} initial={{ opacity: 0, y: 5 }} animate={{ opacity: 1, y: 0 }} exit={{ opacity: 0, y: 5 }} className="absolute top-full left-0 mt-1 w-64 bg-white border border-slate-200 shadow-2xl rounded-xl p-3 z-50 text-slate-700 font-normal normal-case">
                                               <div className="space-y-3">
                                                 <div className="flex border-b border-slate-100 pb-2">
                                                   <button onClick={() => handleSort(field as any)} className={`flex-1 flex items-center justify-center gap-2 text-[10px] font-bold py-1 hover:text-indigo-600 ${sortConfig.key === field && sortConfig.direction === 'asc' ? 'text-indigo-600' : 'text-slate-500'}`}>Sort Asc</button>
                                                   <button onClick={() => handleSort(field as any)} className={`flex-1 flex items-center justify-center gap-2 text-[10px] font-bold py-1 hover:text-indigo-600 ${sortConfig.key === field && sortConfig.direction === 'desc' ? 'text-indigo-600' : 'text-slate-500'}`}>Sort Desc</button>
                                                 </div>
-
-                                                <input 
-                                                  autoFocus 
-                                                  type="text" 
-                                                  placeholder="Search..." 
-                                                  value={filterSearch} 
-                                                  onChange={(e) => setFilterSearch(e.target.value)} 
-                                                  className="w-full text-[10px] px-2 py-1.5 border border-slate-200 rounded bg-slate-50 focus:ring-1 focus:ring-indigo-500" 
-                                                />
-                                                
+                                                <input autoFocus type="text" placeholder="Search..." value={filterSearch} onChange={(e) => setFilterSearch(e.target.value)} className="w-full text-[10px] px-2 py-1.5 border border-slate-200 rounded bg-slate-50 focus:ring-1 focus:ring-indigo-500" />
                                                 <div className="max-h-[300px] overflow-y-auto custom-scrollbar pr-1">
                                                   {isDateCol ? (
                                                     <div className="space-y-1">
@@ -478,23 +460,15 @@ export const CargoList: React.FC<CargoListProps> = ({
                                                             const currentSet = activeFilters[field] || new Set();
                                                             const allYearSelected = allDatesInYear.every(d => currentSet.has(d));
                                                             const someYearSelected = allDatesInYear.some(d => currentSet.has(d));
-
                                                             return (
                                                                 <div key={year} className="text-[10px]">
                                                                     <div className="flex items-center gap-2 px-1 py-1 hover:bg-slate-50 rounded group">
                                                                         <button onClick={() => toggleDateNode(`${field}-${year}`)} className="p-0.5 hover:bg-slate-200 rounded text-slate-400">
                                                                             <svg className={`w-3 h-3 transition-transform ${isYearExpanded ? 'rotate-90' : ''}`} fill="none" stroke="currentColor" viewBox="0 0 24 24"><path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M9 5l7 7-7 7" /></svg>
                                                                         </button>
-                                                                        <input 
-                                                                            type="checkbox" 
-                                                                            checked={allYearSelected}
-                                                                            ref={el => el && (el.indeterminate = someYearSelected && !allYearSelected)}
-                                                                            onChange={() => bulkToggleDates(field, allDatesInYear, !allYearSelected)}
-                                                                            className="rounded border-slate-300 text-indigo-600 w-3 h-3" 
-                                                                        />
+                                                                        <input type="checkbox" checked={allYearSelected} ref={el => el && (el.indeterminate = someYearSelected && !allYearSelected)} onChange={() => bulkToggleDates(field, allDatesInYear, !allYearSelected)} className="rounded border-slate-300 text-indigo-600 w-3 h-3" />
                                                                         <span className="font-bold cursor-pointer" onClick={() => toggleDateNode(`${field}-${year}`)}>{year}</span>
                                                                     </div>
-                                                                    
                                                                     {isYearExpanded && (
                                                                         <div className="ml-4 border-l border-slate-200 pl-2">
                                                                             {Object.keys(monthsInYear).sort().map(month => {
@@ -503,33 +477,20 @@ export const CargoList: React.FC<CargoListProps> = ({
                                                                                 const allMonthSelected = datesInMonth.every(d => currentSet.has(d));
                                                                                 const someMonthSelected = datesInMonth.some(d => currentSet.has(d));
                                                                                 const monthName = new Date(parseInt(year), parseInt(month)-1, 1).toLocaleString('default', { month: 'short' });
-
                                                                                 return (
                                                                                     <div key={month}>
                                                                                         <div className="flex items-center gap-2 px-1 py-1 hover:bg-slate-50 rounded group">
                                                                                             <button onClick={() => toggleDateNode(`${field}-${year}-${month}`)} className="p-0.5 hover:bg-slate-200 rounded text-slate-400">
                                                                                                 <svg className={`w-2.5 h-2.5 transition-transform ${isMonthExpanded ? 'rotate-90' : ''}`} fill="none" stroke="currentColor" viewBox="0 0 24 24"><path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M9 5l7 7-7 7" /></svg>
                                                                                             </button>
-                                                                                            <input 
-                                                                                                type="checkbox" 
-                                                                                                checked={allMonthSelected}
-                                                                                                ref={el => el && (el.indeterminate = someMonthSelected && !allMonthSelected)}
-                                                                                                onChange={() => bulkToggleDates(field, datesInMonth, !allMonthSelected)}
-                                                                                                className="rounded border-slate-300 text-indigo-600 w-3 h-3" 
-                                                                                            />
+                                                                                            <input type="checkbox" checked={allMonthSelected} ref={el => el && (el.indeterminate = someMonthSelected && !allMonthSelected)} onChange={() => bulkToggleDates(field, datesInMonth, !allMonthSelected)} className="rounded border-slate-300 text-indigo-600 w-3 h-3" />
                                                                                             <span className="cursor-pointer" onClick={() => toggleDateNode(`${field}-${year}-${month}`)}>{monthName}</span>
                                                                                         </div>
-
                                                                                         {isMonthExpanded && (
                                                                                             <div className="ml-4 border-l border-slate-100 pl-2">
                                                                                                 {datesInMonth.map(date => (
                                                                                                     <label key={date} className="flex items-center gap-2 px-1 py-0.5 hover:bg-slate-50 rounded cursor-pointer">
-                                                                                                        <input 
-                                                                                                            type="checkbox" 
-                                                                                                            checked={currentSet.has(date)}
-                                                                                                            onChange={() => toggleValueFilter(field, date)}
-                                                                                                            className="rounded border-slate-300 text-indigo-600 w-2.5 h-2.5" 
-                                                                                                        />
+                                                                                                        <input type="checkbox" checked={currentSet.has(date)} onChange={() => toggleValueFilter(field, date)} className="rounded border-slate-300 text-indigo-600 w-2.5 h-2.5" />
                                                                                                         <span className="text-slate-500">{date.split('-')[2]}</span>
                                                                                                     </label>
                                                                                                 ))}
@@ -549,12 +510,7 @@ export const CargoList: React.FC<CargoListProps> = ({
                                                       ?.filter(v => String(v).toLowerCase().includes(filterSearch.toLowerCase()))
                                                       .map(v => (
                                                         <label key={v} className="flex items-center gap-2 px-1 py-1 hover:bg-slate-50 rounded cursor-pointer">
-                                                          <input 
-                                                            type="checkbox" 
-                                                            checked={(activeFilters[field] as Set<any> | undefined)?.has(v)} 
-                                                            onChange={() => toggleValueFilter(field, v)} 
-                                                            className="rounded border-slate-300 text-indigo-600 w-3 h-3" 
-                                                          />
+                                                          <input type="checkbox" checked={(activeFilters[field] as Set<any> | undefined)?.has(v)} onChange={() => toggleValueFilter(field, v)} className="rounded border-slate-300 text-indigo-600 w-3 h-3" />
                                                           <span className="text-[10px] truncate">{String(v ?? '(Blank)')}</span>
                                                         </label>
                                                       ))
@@ -570,26 +526,45 @@ export const CargoList: React.FC<CargoListProps> = ({
                                     </div>
                                 );
                             })}
-                            <div className="px-4 py-3 bg-slate-100 border-l border-slate-200 sticky right-0 z-50 w-32 shrink-0 font-bold text-[10px] text-slate-600 uppercase text-center">Actions</div>
+                            <div className="px-4 py-3 bg-slate-100 border-l border-slate-200 sticky right-0 z-50 w-24 shrink-0 font-bold text-[10px] text-slate-600 uppercase text-center">Actions</div>
                         </div>
                         <div className="bg-white">
                             {processedProfiles.map((p) => (
                                 <div key={p.id} className="flex border-b border-slate-100 transition-colors hover:bg-indigo-50/30 group">
                                     <div className="px-4 py-3 border-r border-slate-100 w-12 shrink-0 flex items-center bg-white"><input type="checkbox" className="rounded border-slate-300 text-indigo-600" /></div>
-                                    <div className="px-4 py-3 shrink-0 truncate text-[11px] font-bold text-slate-900 border-r border-slate-50" style={{ width: COLUMN_WIDTH }}>
+                                    
+                                    <div className="px-4 py-3 shrink-0 truncate text-[11px] font-bold text-slate-900 border-r border-slate-50" style={{ width: 220 }}>
                                         {p.strategyName}
                                         {p.isTieredPricing && <span className="ml-2 px-1 py-0.5 bg-indigo-50 text-indigo-600 rounded text-[9px]">2 TIER</span>}
                                     </div>
-                                    <div className="px-4 py-3 shrink-0 truncate text-[11px] text-slate-600 border-r border-slate-50" style={{ width: COLUMN_WIDTH }}>{p.groupName}</div>
-                                    <div className="px-4 py-3 shrink-0 truncate text-[11px] text-slate-600 border-r border-slate-50" style={{ width: COLUMN_WIDTH }}>{p.buyer}</div>
-                                    <div className="px-4 py-3 shrink-0 truncate text-[11px] text-slate-600 border-r border-slate-50" style={{ width: COLUMN_WIDTH }}>{p.source}</div>
-                                    <div className="px-4 py-3 shrink-0 truncate text-[11px] text-slate-600 border-r border-slate-50" style={{ width: COLUMN_WIDTH }}>{p.deliveryDate}</div>
-                                    <div className="px-4 py-3 shrink-0 truncate text-[11px] text-slate-600 border-r border-slate-50" style={{ width: COLUMN_WIDTH }}>{p.loadingDate}</div>
-                                    <div className={`px-4 py-3 shrink-0 truncate text-[11px] font-bold border-r border-slate-50 text-right ${p.finalTotalPnL >= 0 ? 'text-emerald-600' : 'text-rose-600'}`} style={{ width: 140 }}>{formatCurrency(p.finalTotalPnL)}</div>
-                                    <div className="px-4 py-3 shrink-0 text-center border-r border-slate-50" style={{ width: 120 }}><span className={`px-2 py-0.5 rounded-full font-bold text-[9px] uppercase ${p.pnlBucket === PnLBucket.Realized ? 'bg-blue-100 text-blue-700' : 'bg-amber-100 text-amber-700'}`}>{p.pnlBucket}</span></div>
-                                    <div className="px-4 py-3 border-l border-slate-100 sticky right-0 z-20 bg-white group-hover:bg-slate-50 w-32 shrink-0 flex items-center justify-center gap-1">
-                                        <button onClick={() => onEdit(p)} className="p-1 text-blue-600 hover:bg-blue-50 rounded"><svg className="w-3.5 h-3.5" fill="none" stroke="currentColor" viewBox="0 0 24 24"><path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M11 5H6a2 2 0 00-2 2v11a2 2 0 002 2h11a2 2 0 002-2v-5m-1.414-9.414a2 2 0 112.828 2.828L11.828 15H9v-2.828l8.586-8.586z" /></svg></button>
-                                        <button onClick={() => onDelete(p.id)} className="p-1 text-slate-400 hover:text-rose-600 hover:bg-rose-50 rounded"><svg className="w-3.5 h-3.5" fill="none" stroke="currentColor" viewBox="0 0 24 24"><path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M19 7l-.867 12.142A2 2 0 0116.138 21H7.862a2 2 0 01-1.995-1.858L5 7m5 4v6m4-6v6m1-10V4a1 1 0 00-1-1h-4a1 1 0 00-1 1v3M4 7h16" /></svg></button>
+                                    <div className="px-4 py-3 shrink-0 truncate text-[11px] text-slate-600 border-r border-slate-50" style={{ width: 140 }}>{p.buyer}</div>
+                                    <div className="px-4 py-3 shrink-0 truncate text-[11px] text-slate-600 border-r border-slate-50" style={{ width: 140 }}>{p.source}</div>
+                                    <div className="px-4 py-3 shrink-0 truncate text-[11px] text-slate-500 font-mono border-r border-slate-50" style={{ width: 120 }}>{p.deliveryDate || '-'}</div>
+                                    <div className="px-4 py-3 shrink-0 truncate text-[11px] text-slate-500 font-mono border-r border-slate-50" style={{ width: 120 }}>{p.loadingDate || '-'}</div>
+                                    
+                                    {/* Financial Columns */}
+                                    <div className="px-4 py-3 shrink-0 truncate text-[11px] text-slate-700 font-mono border-r border-slate-50 text-right" style={{ width: 100 }}>{p.absoluteBuyPrice ? p.absoluteBuyPrice.toFixed(3) : '-'}</div>
+                                    <div className="px-4 py-3 shrink-0 truncate text-[11px] text-slate-700 font-mono border-r border-slate-50 text-right" style={{ width: 100 }}>{p.absoluteSellPrice ? p.absoluteSellPrice.toFixed(3) : '-'}</div>
+                                    
+                                    <div className="px-4 py-3 shrink-0 truncate text-[11px] text-slate-600 font-mono border-r border-slate-50 text-right" style={{ width: 100 }}>{(p.loadedVolume || 0).toLocaleString()}</div>
+                                    <div className="px-4 py-3 shrink-0 truncate text-[11px] text-slate-600 font-mono border-r border-slate-50 text-right" style={{ width: 100 }}>{(p.deliveredVolume || 0).toLocaleString()}</div>
+                                    
+                                    <div className="px-4 py-3 shrink-0 truncate text-[11px] text-slate-900 font-mono border-r border-slate-50 text-right font-medium" style={{ width: 130 }}>{formatCurrency(p.reconciledPurchaseCost || ((p.loadedVolume||0)*(p.absoluteBuyPrice||0)))}</div>
+                                    <div className="px-4 py-3 shrink-0 truncate text-[11px] text-indigo-700 font-mono border-r border-slate-50 text-right font-medium" style={{ width: 130 }}>{formatCurrency(p.salesRevenue || ((p.deliveredVolume||0)*(p.absoluteSellPrice||0)))}</div>
+                                    
+                                    <div className="px-4 py-3 shrink-0 truncate text-[11px] text-amber-700 font-mono border-r border-slate-50 text-right" style={{ width: 100 }}>{p.reconciledSrcCost ? formatCurrency(p.reconciledSrcCost) : '-'}</div>
+
+                                    <div className={`px-4 py-3 shrink-0 truncate text-[11px] font-bold border-r border-slate-50 text-right ${p.finalTotalPnL >= 0 ? 'text-emerald-600' : 'text-rose-600'}`} style={{ width: 130 }}>{formatCurrency(p.finalTotalPnL)}</div>
+                                    
+                                    <div className="px-4 py-3 shrink-0 text-center border-r border-slate-50" style={{ width: 110 }}>
+                                        <span className={`px-2 py-0.5 rounded-full font-bold text-[9px] uppercase ${p.pnlBucket === PnLBucket.Realized ? 'bg-blue-100 text-blue-700' : 'bg-amber-100 text-amber-700'}`}>
+                                            {p.pnlBucket}
+                                        </span>
+                                    </div>
+
+                                    <div className="px-4 py-3 border-l border-slate-100 sticky right-0 z-20 bg-white group-hover:bg-slate-50 w-24 shrink-0 flex items-center justify-center gap-1">
+                                        <button onClick={() => onEdit(p)} className="p-1 text-blue-600 hover:bg-blue-50 rounded" title="Edit"><svg className="w-3.5 h-3.5" fill="none" stroke="currentColor" viewBox="0 0 24 24"><path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M11 5H6a2 2 0 00-2 2v11a2 2 0 002 2h11a2 2 0 002-2v-5m-1.414-9.414a2 2 0 112.828 2.828L11.828 15H9v-2.828l8.586-8.586z" /></svg></button>
+                                        <button onClick={() => onDelete(p.id)} className="p-1 text-slate-400 hover:text-rose-600 hover:bg-rose-50 rounded" title="Delete"><svg className="w-3.5 h-3.5" fill="none" stroke="currentColor" viewBox="0 0 24 24"><path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M19 7l-.867 12.142A2 2 0 0116.138 21H7.862a2 2 0 01-1.995-1.858L5 7m5 4v6m4-6v6m1-10V4a1 1 0 00-1-1h-4a1 1 0 00-1 1v3M4 7h16" /></svg></button>
                                     </div>
                                 </div>
                             ))}
