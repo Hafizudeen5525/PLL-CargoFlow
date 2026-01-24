@@ -1,4 +1,3 @@
-
 import React, { useState, useMemo, useRef, useEffect, useCallback } from 'react';
 import { CargoProfile, PnLBucket, EmptyCargoProfile } from '../types';
 import { motion, AnimatePresence } from 'framer-motion';

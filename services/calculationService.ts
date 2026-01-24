@@ -1,4 +1,3 @@
-
 import { CargoProfile, PnLBucket, EmptyCargoProfile } from '../types';
 
 export interface ForwardCurveRow {
@@ -152,22 +151,21 @@ export function calculateLegPrice(p: CargoProfile, type: 'buy' | 'sell' | 'tier2
             }
         }
         const overallC = Number((p as any)[`${prefix}PriceOverallConstant`] ?? 0);
-        const overallW = 1; // Defaulting to 1 for overall constants
-        totalPrice += (overallW * overallC);
+        totalPrice += overallC;
         return totalPrice;
     }
 
     const formulaMap: Record<string, string> = {
-        buy: p.buyFormula,
-        sell: p.sellFormula,
-        tier2Sell: p.tier2SellFormula,
-        tier2Buy: p.tier2BuyFormula
+        buy: p.buyFormula || '',
+        sell: p.sellFormula || '',
+        tier2Sell: p.tier2SellFormula || '',
+        tier2Buy: p.tier2BuyFormula || ''
     };
     const volMap: Record<string, number> = {
-        buy: p.loadedVolume,
-        sell: p.deliveredVolume,
-        tier2Sell: p.tier2DeliveredVolume,
-        tier2Buy: p.tier2LoadedVolume
+        buy: p.loadedVolume || 0,
+        sell: p.deliveredVolume || 0,
+        tier2Sell: p.tier2DeliveredVolume || 0,
+        tier2Buy: p.tier2LoadedVolume || 0
     };
 
     return evaluateFormula(formulaMap[type] || '', refDate, curveDate, volMap[type] || 0) || 0;
@@ -215,11 +213,9 @@ function formatMonthStr(dateStr: string): string {
 }
 
 export function recalculateProfile(p: Partial<CargoProfile>, useMarket: boolean = true, curveDate?: string): Partial<CargoProfile> {
-    // Explicitly merge with EmptyCargoProfile to ensure all mandatory fields exist during calculation
     const up: CargoProfile = { ...EmptyCargoProfile, ...(p as any), id: (p as any).id || '' };
     
     if (up.pnlBucket !== PnLBucket.Realized && useMarket) {
-        // TIER 1
         if (!up.isBuyPriceManual) {
             const rawBuyPrice = calculateLegPrice(up, 'buy', curveDate);
             up.absoluteBuyPrice = applyRounding(rawBuyPrice, up.buyPriceRounding);
@@ -229,7 +225,6 @@ export function recalculateProfile(p: Partial<CargoProfile>, useMarket: boolean 
             up.absoluteSellPrice = applyRounding(rawSellPrice, up.sellPriceRounding);
         }
         
-        // TIER 2
         if (up.isTieredPricing) {
             if (!up.isTier2SellPriceManual) {
                 const rawTier2Sell = calculateLegPrice(up, 'tier2Sell', curveDate);
@@ -247,21 +242,17 @@ export function recalculateProfile(p: Partial<CargoProfile>, useMarket: boolean 
         }
     }
 
-    // Standardize Month strings
-    up.deliveryMonth = formatMonthStr(up.deliveryDate ?? '');
-    up.loadingMonth = formatMonthStr(up.loadingDate ?? '');
+    up.deliveryMonth = formatMonthStr(up.deliveryDate) || '';
+    up.loadingMonth = formatMonthStr(up.loadingDate) || '';
 
-    // Revenue
     const t1Revenue = (up.deliveredVolume || 0) * (up.absoluteSellPrice || 0);
     const t2Revenue = up.isTieredPricing ? (up.tier2DeliveredVolume || 0) * (up.absoluteTier2SellPrice || 0) : 0;
     up.salesRevenue = t1Revenue + t2Revenue;
     
-    // Purchase Cost
     const t1PurchaseCost = (up.loadedVolume || 0) * (up.absoluteBuyPrice || 0);
     const t2PurchaseCost = up.isTieredPricing ? (up.tier2LoadedVolume || 0) * (up.absoluteTier2BuyPrice || 0) : 0;
     const totalPurchaseCost = t1PurchaseCost + t2PurchaseCost;
 
-    // SRC Logic
     const totalDelVol = (up.deliveredVolume || 0) + (up.tier2DeliveredVolume || 0);
     if (up.reconciledSrcCost && up.reconciledSrcCost > 0 && (!up.srcUnitFee || up.srcUnitFee === 0) && totalDelVol > 0) {
         up.srcUnitFee = up.reconciledSrcCost / totalDelVol;
