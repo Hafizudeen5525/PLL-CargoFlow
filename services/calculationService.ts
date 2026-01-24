@@ -215,8 +215,8 @@ function formatMonthStr(dateStr: string): string {
 }
 
 export function recalculateProfile(p: Partial<CargoProfile>, useMarket: boolean = true, curveDate?: string): Partial<CargoProfile> {
-    // Merge with EmptyCargoProfile to ensure all mandatory fields exist during calculation
-    const up = { ...EmptyCargoProfile, ...p } as CargoProfile;
+    // Explicitly merge with EmptyCargoProfile to ensure all mandatory fields exist during calculation
+    const up: CargoProfile = { ...EmptyCargoProfile, ...(p as any), id: (p as any).id || '' };
     
     if (up.pnlBucket !== PnLBucket.Realized && useMarket) {
         // TIER 1
@@ -248,8 +248,8 @@ export function recalculateProfile(p: Partial<CargoProfile>, useMarket: boolean 
     }
 
     // Standardize Month strings
-    up.deliveryMonth = formatMonthStr(up.deliveryDate);
-    up.loadingMonth = formatMonthStr(up.loadingDate);
+    up.deliveryMonth = formatMonthStr(up.deliveryDate ?? '');
+    up.loadingMonth = formatMonthStr(up.loadingDate ?? '');
 
     // Revenue
     const t1Revenue = (up.deliveredVolume || 0) * (up.absoluteSellPrice || 0);

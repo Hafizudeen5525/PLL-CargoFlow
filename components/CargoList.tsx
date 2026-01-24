@@ -47,7 +47,7 @@ export const CargoList: React.FC<CargoListProps> = ({
   const [openFilterMenu, setOpenFilterMenu] = useState<string | null>(null);
   const [filterSearch, setFilterSearch] = useState('');
   
-  // Track expanded nodes in date hierarchy (e.g., "2025", "2025-01")
+  // Track expanded nodes in date hierarchy (e.g., "deliveryDate-2025", "deliveryDate-2025-01")
   const [expandedDateNodes, setExpandedDateNodes] = useState<Set<string>>(new Set());
 
   useEffect(() => {
@@ -60,14 +60,13 @@ export const CargoList: React.FC<CargoListProps> = ({
       if (filterMenuRef.current && !filterMenuRef.current.contains(event.target as Node)) {
         setOpenFilterMenu(null);
         setFilterSearch('');
-        // We keep expansion state as it's useful if they re-open, but reset search
       }
     };
     document.addEventListener('mousedown', handleClickOutside);
     return () => document.removeEventListener('mousedown', handleClickOutside);
   }, []);
 
-  // Compute unique values for each column for the filters
+  // Compute unique values and hierarchies for filters
   const filterData = useMemo(() => {
     const uniques: Record<string, any[]> = {};
     const hierarchies: Record<string, DateHierarchy> = {};
@@ -81,8 +80,11 @@ export const CargoList: React.FC<CargoListProps> = ({
           const hierarchy: DateHierarchy = {};
           profiles.forEach(p => {
               const dateStr = (p as any)[col];
-              if (!dateStr) return;
-              const [y, m] = dateStr.split('-');
+              if (!dateStr || dateStr === '') return;
+              const parts = dateStr.split('-');
+              if (parts.length < 2) return;
+              const y = parts[0];
+              const m = parts[1];
               if (!hierarchy[y]) hierarchy[y] = {};
               if (!hierarchy[y][m]) hierarchy[y][m] = [];
               if (!hierarchy[y][m].includes(dateStr)) hierarchy[y][m].push(dateStr);
@@ -174,7 +176,6 @@ export const CargoList: React.FC<CargoListProps> = ({
     setSortConfig(prev => ({ key, direction: prev.key === key && prev.direction === 'asc' ? 'desc' : 'asc' }));
   };
 
-  // Jarvis logic...
   const handleJarvisImport = (e: React.ChangeEvent<HTMLInputElement>) => {
     const file = e.target.files?.[0];
     if (!file) return;
@@ -314,7 +315,7 @@ export const CargoList: React.FC<CargoListProps> = ({
         });
 
         if (onBulkImport) onBulkImport(finalProfiles);
-        toast.success(`Imported ${finalProfiles.length} combined strategies with combined components`, { id: loadingToast });
+        toast.success(`Imported ${finalProfiles.length} combined strategies with components`, { id: loadingToast });
       } catch (err) {
         console.error(err);
         toast.error('Failed to parse Jarvis Macro workbook', { id: loadingToast });
@@ -470,16 +471,14 @@ export const CargoList: React.FC<CargoListProps> = ({
                                                 
                                                 <div className="max-h-[300px] overflow-y-auto custom-scrollbar pr-1">
                                                   {isDateCol ? (
-                                                    // Hierarchical Date UI
                                                     <div className="space-y-1">
                                                         {Object.keys(filterData.hierarchies[field] || {}).sort().reverse().map(year => {
                                                             const monthsInYear = filterData.hierarchies[field][year];
-                                                            // Fix: Explicitly cast the flat array to string[] to resolve the 'unknown[]' type mismatch.
                                                             const allDatesInYear = Object.values(monthsInYear).flat() as string[];
                                                             const isYearExpanded = expandedDateNodes.has(`${field}-${year}`);
-                                                            const yearFilterSet = activeFilters[field] || new Set();
-                                                            const allYearSelected = allDatesInYear.every(d => yearFilterSet.has(d));
-                                                            const someYearSelected = allDatesInYear.some(d => yearFilterSet.has(d));
+                                                            const currentSet = activeFilters[field] || new Set();
+                                                            const allYearSelected = allDatesInYear.every(d => currentSet.has(d));
+                                                            const someYearSelected = allDatesInYear.some(d => currentSet.has(d));
 
                                                             return (
                                                                 <div key={year} className="text-[10px]">
@@ -491,8 +490,7 @@ export const CargoList: React.FC<CargoListProps> = ({
                                                                             type="checkbox" 
                                                                             checked={allYearSelected}
                                                                             ref={el => el && (el.indeterminate = someYearSelected && !allYearSelected)}
-                                                                            // Fix: Explicitly cast allDatesInYear to string[] when calling bulkToggleDates.
-                                                                            onChange={() => bulkToggleDates(field, allDatesInYear as string[], !allYearSelected)}
+                                                                            onChange={() => bulkToggleDates(field, allDatesInYear, !allYearSelected)}
                                                                             className="rounded border-slate-300 text-indigo-600 w-3 h-3" 
                                                                         />
                                                                         <span className="font-bold cursor-pointer" onClick={() => toggleDateNode(`${field}-${year}`)}>{year}</span>
@@ -501,11 +499,10 @@ export const CargoList: React.FC<CargoListProps> = ({
                                                                     {isYearExpanded && (
                                                                         <div className="ml-4 border-l border-slate-200 pl-2">
                                                                             {Object.keys(monthsInYear).sort().map(month => {
-                                                                                // Fix: Explicitly cast datesInMonth to string[] to resolve the 'unknown[]' type mismatch.
                                                                                 const datesInMonth = monthsInYear[month] as string[];
                                                                                 const isMonthExpanded = expandedDateNodes.has(`${field}-${year}-${month}`);
-                                                                                const allMonthSelected = datesInMonth.every(d => yearFilterSet.has(d));
-                                                                                const someMonthSelected = datesInMonth.some(d => yearFilterSet.has(d));
+                                                                                const allMonthSelected = datesInMonth.every(d => currentSet.has(d));
+                                                                                const someMonthSelected = datesInMonth.some(d => currentSet.has(d));
                                                                                 const monthName = new Date(parseInt(year), parseInt(month)-1, 1).toLocaleString('default', { month: 'short' });
 
                                                                                 return (
@@ -518,8 +515,7 @@ export const CargoList: React.FC<CargoListProps> = ({
                                                                                                 type="checkbox" 
                                                                                                 checked={allMonthSelected}
                                                                                                 ref={el => el && (el.indeterminate = someMonthSelected && !allMonthSelected)}
-                                                                                                // Fix: Explicitly cast datesInMonth to string[] when calling bulkToggleDates.
-                                                                                                onChange={() => bulkToggleDates(field, datesInMonth as string[], !allMonthSelected)}
+                                                                                                onChange={() => bulkToggleDates(field, datesInMonth, !allMonthSelected)}
                                                                                                 className="rounded border-slate-300 text-indigo-600 w-3 h-3" 
                                                                                             />
                                                                                             <span className="cursor-pointer" onClick={() => toggleDateNode(`${field}-${year}-${month}`)}>{monthName}</span>
@@ -531,7 +527,7 @@ export const CargoList: React.FC<CargoListProps> = ({
                                                                                                     <label key={date} className="flex items-center gap-2 px-1 py-0.5 hover:bg-slate-50 rounded cursor-pointer">
                                                                                                         <input 
                                                                                                             type="checkbox" 
-                                                                                                            checked={yearFilterSet.has(date)}
+                                                                                                            checked={currentSet.has(date)}
                                                                                                             onChange={() => toggleValueFilter(field, date)}
                                                                                                             className="rounded border-slate-300 text-indigo-600 w-2.5 h-2.5" 
                                                                                                         />
@@ -550,7 +546,6 @@ export const CargoList: React.FC<CargoListProps> = ({
                                                         })}
                                                     </div>
                                                   ) : (
-                                                    // Flat UI
                                                     filterData.uniques[field]
                                                       ?.filter(v => String(v).toLowerCase().includes(filterSearch.toLowerCase()))
                                                       .map(v => (
