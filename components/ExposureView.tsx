@@ -507,7 +507,8 @@ export const ExposureView: React.FC<ExposureViewProps> = ({ profiles }) => {
                                         </div>
                                         <div className="flex h-1.5 w-full rounded-full overflow-hidden bg-slate-100">
                                             {Object.entries(data.indices).map(([idx, vol], i) => (
-                                                <div key={i} className={`${getIndexColorStr(idx)} h-full`} style={{ width: `${(Math.abs(vol as number) / Object.values(data.indices).reduce((a: number, b: any) => a + Math.abs(b), 0)) * 100}%` }} />
+                                                /* // @google/genai fixes: arithmetic operation on unknown reduce result by explicitly casting to number */
+                                                <div key={i} className={`${getIndexColorStr(idx)} h-full`} style={{ width: `${(Math.abs(vol as number) / (Object.values(data.indices).reduce((a: number, b: any) => a + Math.abs(b), 0) as number)) * 100}%` }} />
                                             ))}
                                         </div>
                                     </div>

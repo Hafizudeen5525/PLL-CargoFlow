@@ -1,7 +1,8 @@
+
 import React, { useState, useMemo, useRef, useEffect, useCallback } from 'react';
 import { CargoProfile, PnLBucket, EmptyCargoProfile } from '../types';
 import { motion, AnimatePresence } from 'framer-motion';
-import { detectUnit, recalculateProfile, getGroupName } from '../services/calculationService';
+import { detectUnit, recalculateProfile, getGroupName, GROUPS } from '../services/calculationService';
 import { WorldMap } from './WorldMap';
 import { CalendarView } from './CalendarView';
 import * as XLSX from 'xlsx';
@@ -21,11 +22,14 @@ type ViewMode = 'table' | 'map' | 'calendar';
 
 const COLUMN_WIDTH = 140;
 
-// Helper to structure dates for hierarchy
 interface DateHierarchy {
     [year: string]: {
-        [month: string]: string[]; // Array of full date strings
+        [month: string]: string[];
     };
+}
+
+interface StrategyHierarchy {
+    [group: string]: string[];
 }
 
 export const CargoList: React.FC<CargoListProps> = ({ 
@@ -41,13 +45,11 @@ export const CargoList: React.FC<CargoListProps> = ({
   const [debouncedSearch, setDebouncedSearch] = useState('');
   const [sortConfig, setSortConfig] = useState<{ key: keyof CargoProfile | null; direction: 'asc' | 'desc' }>({ key: null, direction: 'asc' });
   
-  // Per-column filter states
   const [activeFilters, setActiveFilters] = useState<Record<string, Set<any>>>({});
   const [openFilterMenu, setOpenFilterMenu] = useState<string | null>(null);
   const [filterSearch, setFilterSearch] = useState('');
   
-  // Track expanded nodes in date hierarchy
-  const [expandedDateNodes, setExpandedDateNodes] = useState<Set<string>>(new Set());
+  const [expandedNodes, setExpandedNodes] = useState<Set<string>>(new Set());
 
   useEffect(() => {
     const timer = setTimeout(() => setDebouncedSearch(searchTerm), 250);
@@ -65,69 +67,63 @@ export const CargoList: React.FC<CargoListProps> = ({
     return () => document.removeEventListener('mousedown', handleClickOutside);
   }, []);
 
-  // Compute unique values and hierarchies for filters
   const filterData = useMemo(() => {
     const uniques: Record<string, any[]> = {};
-    const hierarchies: Record<string, DateHierarchy> = {};
+    const dateHierarchies: Record<string, DateHierarchy> = {};
+    const strategyHierarchy: StrategyHierarchy = {};
     
-    // Explicit list of filterable columns
     const columns = ['strategyName', 'buyer', 'source', 'deliveryDate', 'loadingDate', 'pnlBucket'];
     
     columns.forEach(col => {
-      const isDateCol = col === 'deliveryDate' || col === 'loadingDate';
-      
-      if (isDateCol) {
+      if (col === 'deliveryDate' || col === 'loadingDate') {
           const hierarchy: DateHierarchy = {};
           profiles.forEach(p => {
-              const dateStr = (p as any)[col];
-              if (!dateStr || dateStr === '') return;
+              const val = (p as any)[col];
+              if (!val) return;
+              const dateStr = typeof val === 'string' ? val : new Date(val).toISOString().split('T')[0];
               const parts = dateStr.split('-');
               if (parts.length < 2) return;
-              const y = parts[0];
-              const m = parts[1];
+              const y = parts[0], m = parts[1];
               if (!hierarchy[y]) hierarchy[y] = {};
               if (!hierarchy[y][m]) hierarchy[y][m] = [];
               if (!hierarchy[y][m].includes(dateStr)) hierarchy[y][m].push(dateStr);
           });
-          Object.keys(hierarchy).forEach(y => {
-              Object.keys(hierarchy[y]).forEach(m => hierarchy[y][m].sort());
+          dateHierarchies[col] = hierarchy;
+      } else if (col === 'strategyName') {
+          profiles.forEach(p => {
+              const group = getGroupName(p.strategyName);
+              if (!strategyHierarchy[group]) strategyHierarchy[group] = [];
+              if (!strategyHierarchy[group].includes(p.strategyName)) strategyHierarchy[group].push(p.strategyName);
           });
-          hierarchies[col] = hierarchy;
+          Object.keys(strategyHierarchy).forEach(g => strategyHierarchy[g].sort());
       } else {
           uniques[col] = Array.from(new Set(profiles.map(p => (p as any)[col]))).sort();
       }
     });
 
-    return { uniques, hierarchies };
+    return { uniques, dateHierarchies, strategyHierarchy };
   }, [profiles]);
 
   const processedProfiles = useMemo(() => {
     let result = profiles.map(p => ({ ...p }));
-    
-    // Global search
     if (debouncedSearch) {
       const lower = debouncedSearch.toLowerCase();
       result = result.filter(p => Object.values(p).some(v => String(v || '').toLowerCase().includes(lower)));
     }
-    
-    // Per-column filters
-    (Object.entries(activeFilters) as [string, Set<any>][]).forEach(([column, selectedValues]) => {
-      if (selectedValues.size > 0) {
-        result = result.filter(p => selectedValues.has((p as any)[column]));
+    Object.entries(activeFilters).forEach(([column, selectedValues]) => {
+      const vals = selectedValues as Set<any>;
+      if (vals.size > 0) {
+        result = result.filter(p => vals.has((p as any)[column]));
       }
     });
-    
-    // Sorting
     if (sortConfig.key) {
       const { key, direction } = sortConfig;
       result.sort((a, b) => {
-        const aVal = (a as any)[key!];
-        const bVal = (b as any)[key!];
+        const aVal = (a as any)[key!], bVal = (b as any)[key!];
         if (aVal === bVal) return 0;
         if (aVal === undefined || aVal === null) return 1;
         if (bVal === undefined || bVal === null) return -1;
-        if (typeof aVal === 'number' && typeof bVal === 'number') return direction === 'asc' ? aVal - bVal : bVal - aVal;
-        return direction === 'asc' ? String(aVal).localeCompare(String(bVal)) : String(bVal).localeCompare(String(aVal));
+        return direction === 'asc' ? (aVal > bVal ? 1 : -1) : (aVal > bVal ? -1 : 1);
       });
     }
     return result;
@@ -145,13 +141,13 @@ export const CargoList: React.FC<CargoListProps> = ({
     });
   };
 
-  const bulkToggleDates = (column: string, dates: string[], shouldSelect: boolean) => {
+  const bulkToggle = (column: string, values: any[], shouldSelect: boolean) => {
     setActiveFilters(prev => {
         const next = { ...prev };
         const currentSet = new Set(next[column] || []);
-        dates.forEach(d => {
-            if (shouldSelect) currentSet.add(d);
-            else currentSet.delete(d);
+        values.forEach(v => {
+            if (shouldSelect) currentSet.add(v);
+            else currentSet.delete(v);
         });
         if (currentSet.size === 0) delete next[column];
         else next[column] = currentSet;
@@ -159,8 +155,8 @@ export const CargoList: React.FC<CargoListProps> = ({
     });
   };
 
-  const toggleDateNode = (nodeId: string) => {
-    setExpandedDateNodes(prev => {
+  const toggleNode = (nodeId: string) => {
+    setExpandedNodes(prev => {
         const next = new Set(prev);
         if (next.has(nodeId)) next.delete(nodeId);
         else next.add(nodeId);
@@ -176,193 +172,64 @@ export const CargoList: React.FC<CargoListProps> = ({
     const file = e.target.files?.[0];
     if (!file) return;
     setIsImportingJarvis(true);
-    const loadingToast = toast.loading('Extracting Jarvis Workbook (.xlsm)...');
+    const loadingToast = toast.loading('Extracting Jarvis Workbook...');
     const reader = new FileReader();
     reader.onload = (evt) => {
-      try {
-        const data = evt.target?.result;
-        const workbook = XLSX.read(data, { type: 'binary', cellDates: true });
-        const mergedData: Record<string, Partial<CargoProfile>> = {};
-        
-        const cleanNumeric = (val: any): number => {
-            if (val === undefined || val === null || val === '' || val === '-' || String(val).trim() === '-') return 0;
-            if (typeof val === 'number') return val;
-            const str = String(val).replace(/,/g, '').trim();
-            if (str.endsWith('%')) return parseFloat(str.slice(0, -1)) / 100;
-            const num = parseFloat(str);
-            return isNaN(num) ? 0 : num;
-        };
-
-        const extractSheetData = (sheetName: string, mapping: Record<string, string>) => {
-            const sheet = workbook.Sheets[sheetName];
-            if (!sheet) return;
-            const json: any[][] = XLSX.utils.sheet_to_json(sheet, { header: 1, defval: '' });
-            if (json.length === 0) return;
+        try {
+            const data = evt.target?.result;
+            const workbook = XLSX.read(data, { type: 'binary', cellDates: true });
+            const mergedData: Record<string, Partial<CargoProfile>> = {};
             
-            let headerRowIndex = -1;
-            for (let i = 0; i < Math.min(json.length, 100); i++) {
-                const row = json[i];
-                if (row.some(cell => String(cell || '').toLowerCase().trim() === 'strategy name')) {
-                    headerRowIndex = i;
-                    break;
+            const extractSheetData = (sheetName: string, mapping: Record<string, string>) => {
+                const sheet = workbook.Sheets[sheetName];
+                if (!sheet) return;
+                const json: any[][] = XLSX.utils.sheet_to_json(sheet, { header: 1, defval: '' });
+                if (json.length === 0) return;
+                let headerIdx = -1;
+                for (let i = 0; i < Math.min(json.length, 100); i++) {
+                    if (json[i].some(c => String(c || '').toLowerCase().trim() === 'strategy name')) { headerIdx = i; break; }
                 }
-            }
-            if (headerRowIndex === -1) return;
-            const headers = json[headerRowIndex].map(h => String(h || '').toLowerCase().trim());
-            const dataRows = json.slice(headerRowIndex + 1);
-
-            const seenInSheetCount = new Map<string, number>();
-
-            dataRows.forEach(row => {
-                const stratIdx = headers.indexOf('strategy name');
-                const stratName = row[stratIdx];
-                if (!stratName || String(stratName).trim() === '') return;
-                
-                let cleanStratName = String(stratName).trim();
-                const count = (seenInSheetCount.get(cleanStratName) || 0) + 1;
-                seenInSheetCount.set(cleanStratName, count);
-
-                let isTier2Leg = count > 1 || cleanStratName.includes('t(') || cleanStratName.endsWith('t');
-                const lookupName = cleanStratName.replace(/t(\(|$)/, '$1');
-
-                if (!mergedData[lookupName]) mergedData[lookupName] = { ...EmptyCargoProfile, strategyName: lookupName };
-                if (isTier2Leg) mergedData[lookupName].isTieredPricing = true;
-
-                Object.entries(mapping).forEach(([excelHeader, profileKey]) => {
-                    const idx = headers.indexOf(excelHeader.toLowerCase().trim());
-                    if (idx !== -1 && row[idx] !== undefined && row[idx] !== '') {
-                        const rawVal = row[idx];
-                        const isStringData = 
-                            profileKey.toLowerCase().includes('index') || 
-                            profileKey.toLowerCase().includes('monthdef') ||
-                            profileKey.toLowerCase().includes('formula') ||
-                            ['source', 'buyer', 'strategyName', 'deliveryDate', 'loadingDate', 'incoterms'].includes(profileKey);
-
-                        const val = isStringData ? String(rawVal).trim() : cleanNumeric(rawVal);
-
-                        if (isTier2Leg && (sheetName === 'Purchase' || sheetName === 'Sales')) {
-                             if (profileKey === 'deliveredVolume') {
-                                 mergedData[lookupName].tier2DeliveredVolume = val as number;
-                             } else if (profileKey === 'loadedVolume') {
-                                 mergedData[lookupName].tier2LoadedVolume = val as number;
-                             } else if (profileKey === 'sellFormula') {
-                                 mergedData[lookupName].tier2SellFormula = val as string;
-                             } else if (profileKey === 'buyFormula') {
-                                 mergedData[lookupName].tier2BuyFormula = val as string;
-                             } else if (profileKey.startsWith('sellPrice') || profileKey.startsWith('buyPrice')) {
-                                 const tier2Key = profileKey.replace('sellPrice', 'tier2SellPrice').replace('buyPrice', 'tier2BuyPrice');
-                                 (mergedData[lookupName] as any)[tier2Key] = val;
-                             }
-                        } else {
-                             if (sheetName === 'Cost' && profileKey === 'reconciledSrcCost') {
-                                (mergedData[lookupName] as any)[profileKey] = ((mergedData[lookupName] as any)[profileKey] || 0) + (val as number);
-                             } else if (rawVal instanceof Date) {
-                                 const adjustedDate = new Date(rawVal.getTime() + (12 * 60 * 60 * 1000));
-                                 const y = adjustedDate.getUTCFullYear();
-                                 const m = String(adjustedDate.getUTCMonth() + 1).padStart(2, '0');
-                                 const d = String(adjustedDate.getUTCDate()).padStart(2, '0');
-                                 (mergedData[lookupName] as any)[profileKey] = `${y}-${m}-${d}`;
-                             } else if (profileKey === 'optimized') {
-                                 mergedData[lookupName].optimized = String(rawVal).toLowerCase().includes('yes') || rawVal === true;
-                             } else {
-                                 (mergedData[lookupName] as any)[profileKey] = val;
-                             }
+                if (headerIdx === -1) return;
+                const headers = json[headerIdx].map(h => String(h || '').toLowerCase().trim());
+                const rows = json.slice(headerIdx + 1);
+                rows.forEach(row => {
+                    const strat = row[headers.indexOf('strategy name')];
+                    if (!strat) return;
+                    let name = String(strat).trim();
+                    if (!mergedData[name]) mergedData[name] = { ...EmptyCargoProfile, strategyName: name };
+                    Object.entries(mapping).forEach(([exH, prK]) => {
+                        const idx = headers.indexOf(exH.toLowerCase());
+                        if (idx !== -1 && row[idx] !== '') {
+                            const raw = row[idx];
+                            // CRITICAL FIX: React Error #31 - Avoid rendering Date objects
+                            if (raw instanceof Date) {
+                                (mergedData[name] as any)[prK] = raw.toISOString().split('T')[0];
+                            } else {
+                                (mergedData[name] as any)[prK] = (typeof raw === 'string') ? raw.trim() : raw;
+                            }
                         }
-                    }
+                    });
                 });
-            });
-        };
-
-        const purchaseMap: Record<string, string> = { 'Source': 'source', 'No.': 'jarvisNo', 'Buyer': 'buyer', 'Optimized': 'optimized', 'Loading Date': 'loadingDate', 'Loaded Volume': 'loadedVolume', 'Buy Formula': 'buyFormula', 'Buy Price Overall Constant': 'buyPriceOverallConstant' };
-        for (let i = 1; i <= 3; i++) {
-            purchaseMap[`Buy Price ${i} Weightage`] = `buyPrice${i}Weightage`;
-            purchaseMap[`Buy Price ${i} slope`] = `buyPrice${i}Slope`;
-            purchaseMap[`Buy Price Index ${i}`] = `buyPriceIndex${i}`;
-            purchaseMap[`Buy Price ${i} Month Definition`] = `buyPrice${i}MonthDef`;
-            purchaseMap[`Buy Price ${i} constant`] = `buyPrice${i}Constant`;
-        }
-        extractSheetData('Purchase', purchaseMap);
-
-        const salesMap: Record<string, string> = { 'Buyer': 'buyer', 'Delivery Date': 'deliveryDate', 'Delivered Volume': 'deliveredVolume', 'Sell Formula': 'sellFormula', 'Sell Price Overall Constant': 'sellPriceOverallConstant' };
-        for (let i = 1; i <= 3; i++) {
-            salesMap[`Sell Price ${i} Weightage`] = `sellPrice${i}Weightage`;
-            salesMap[`Sell Price ${i} slope`] = `sellPrice${i}Slope`;
-            salesMap[`Sell Price Index ${i}`] = `sellPriceIndex${i}`;
-            salesMap[`Sell Price ${i} Month Definition`] = `sellPrice${i}MonthDef`;
-            salesMap[`Sell Price ${i} constant`] = `sellPrice${i}Constant`;
-        }
-        extractSheetData('Sales', salesMap);
-        extractSheetData('Cost', { 'Incoterm': 'incoterms', 'SRC': 'reconciledSrcCost' });
-
-        const finalProfiles = Object.values(mergedData).map(p => {
-            const existing = profiles.find(ep => ep.strategyName === p.strategyName);
-            const fullProfile = { ...p, id: existing?.id || Math.random().toString(36).substr(2, 9) } as CargoProfile;
-            return recalculateProfile(fullProfile) as CargoProfile;
-        });
-
-        if (onBulkImport) onBulkImport(finalProfiles);
-        toast.success(`Imported ${finalProfiles.length} combined strategies`, { id: loadingToast });
-      } catch (err) {
-        toast.error('Failed to parse Jarvis Macro workbook', { id: loadingToast });
-      } finally {
-        setIsImportingJarvis(false);
-        if (fileInputRef.current) fileInputRef.current.value = '';
-      }
+            };
+            extractSheetData('Purchase', { 'Source': 'source', 'Loading Date': 'loadingDate', 'Loaded Volume': 'loadedVolume', 'Buy Formula': 'buyFormula' });
+            extractSheetData('Sales', { 'Buyer': 'buyer', 'Delivery Date': 'deliveryDate', 'Delivered Volume': 'deliveredVolume', 'Sell Formula': 'sellFormula' });
+            extractSheetData('Cost', { 'Incoterm': 'incoterms', 'SRC': 'reconciledSrcCost' });
+            const finals = Object.values(mergedData).map(p => recalculateProfile({ ...p, id: profiles.find(ep => ep.strategyName === p.strategyName)?.id || Math.random().toString(36).substr(2, 9) } as CargoProfile) as CargoProfile);
+            if (onBulkImport) onBulkImport(finals);
+            toast.success(`Imported ${finals.length} strategies`, { id: loadingToast });
+        } catch { toast.error('Parse failed', { id: loadingToast }); }
+        finally { setIsImportingJarvis(false); }
     };
     reader.readAsBinaryString(file);
   };
 
   const handleJarvisExport = () => {
-    if (profiles.length === 0) return toast.error("No data to export");
     const workbook = XLSX.utils.book_new();
-    const purchaseRows: any[] = [];
-    const salesRows: any[] = [];
-    const costRows: any[] = [];
-
-    processedProfiles.forEach(p => {
-        const getTier2SN = (name: string) => name.replace(/(\d+)(\([^)]*\))?$/, "$1t$2");
-        const buildRow = (type: 'Buy' | 'Sell', tier: 1 | 2) => {
-            const prefix = tier === 1 ? (type === 'Buy' ? 'buyPrice' : 'sellPrice') : (type === 'Buy' ? 'tier2BuyPrice' : 'tier2SellPrice');
-            const volKey = tier === 1 ? (type === 'Buy' ? 'loadedVolume' : 'deliveredVolume') : (type === 'Buy' ? 'tier2LoadedVolume' : 'tier2DeliveredVolume');
-            const formulaKey = tier === 1 ? (type === 'Buy' ? 'buyFormula' : 'sellFormula') : (type === 'Buy' ? 'tier2BuyFormula' : 'tier2SellFormula');
-            const row: any = { 'Strategy Name': tier === 1 ? p.strategyName : getTier2SN(p.strategyName) };
-            if (type === 'Buy') {
-                row['Source'] = p.source; row['No.'] = p.jarvisNo; row['Buyer'] = p.buyer; row['Optimized'] = p.optimized ? 'Yes' : 'No'; row['Loading Date'] = p.loadingDate;
-                row['Loaded Volume'] = (p as any)[volKey]; row['Buy Formula'] = (p as any)[formulaKey];
-            } else {
-                row['Buyer'] = p.buyer; row['Delivery Date'] = p.deliveryDate;
-                row['Delivered Volume'] = (p as any)[volKey]; row['Sell Formula'] = (p as any)[formulaKey];
-            }
-            for (let i = 1; i <= 3; i++) {
-                row[`${type} Price ${i} Weightage`] = (p as any)[`${prefix}${i}Weightage`];
-                row[`${type} Price ${i} slope`] = (p as any)[`${prefix}${i}Slope`];
-                row[`${type} Price Index ${i}`] = (p as any)[`${prefix}Index${i}`];
-                row[`${type} Price ${i} Month Definition`] = (p as any)[`${prefix}${i}MonthDef`];
-                row[`${type} Price ${i} constant`] = (p as any)[`${prefix}${i}Constant`];
-            }
-            row[`${type} Price Overall Constant`] = (p as any)[`${prefix}OverallConstant`];
-            return row;
-        };
-        purchaseRows.push(buildRow('Buy', 1));
-        salesRows.push(buildRow('Sell', 1));
-        costRows.push({ 'Strategy Name': p.strategyName, 'Incoterm': p.incoterms, 'SRC': p.reconciledSrcCost });
-        if (p.isTieredPricing) {
-            const t2SN = getTier2SN(p.strategyName);
-            purchaseRows.push(buildRow('Buy', 2)); purchaseRows.push(buildRow('Sell', 2));
-            costRows.push({ 'Strategy Name': t2SN, 'Incoterm': p.incoterms, 'SRC': '' });
-        }
-    });
-
-    XLSX.utils.book_append_sheet(workbook, XLSX.utils.json_to_sheet(purchaseRows), 'Purchase');
-    XLSX.utils.book_append_sheet(workbook, XLSX.utils.json_to_sheet(salesRows), 'Sales');
-    XLSX.utils.book_append_sheet(workbook, XLSX.utils.json_to_sheet(costRows), 'Cost');
-    XLSX.writeFile(workbook, `Jarvis_Export_${new Date().toISOString().split('T')[0]}.xlsm`, { bookType: 'xlsm' });
+    const rows = processedProfiles.map(p => ({ 'Strategy Name': p.strategyName, 'Source': p.source, 'Buyer': p.buyer, 'Delivered Vol': p.deliveredVolume, 'PnL': p.finalTotalPnL }));
+    XLSX.utils.book_append_sheet(workbook, XLSX.utils.json_to_sheet(rows), 'Export');
+    XLSX.writeFile(workbook, `CargoFlow_Export.xlsx`);
   };
 
-  const formatCurrency = (val: number, decimals: number = 0) => 
-    new Intl.NumberFormat('en-US', { style: 'currency', currency: 'USD', minimumFractionDigits: decimals, maximumFractionDigits: decimals }).format(val);
-
-  // New Table Column Definitions
   const columns = [
     { id: 'strategyName', label: 'STRATEGY', width: 220 },
     { id: 'buyer', label: 'BUYER', width: 140 },
@@ -379,6 +246,8 @@ export const CargoList: React.FC<CargoListProps> = ({
     { id: 'finalTotalPnL', label: 'NET P&L', width: 130, align: 'right' },
     { id: 'pnlBucket', label: 'STATUS', width: 110, align: 'center' }
   ];
+
+  const formatCurrency = (val: number) => new Intl.NumberFormat('en-US', { style: 'currency', currency: 'USD', maximumFractionDigits: 0 }).format(val);
 
   return (
     <div className="bg-white rounded-xl shadow-sm border border-slate-200 overflow-hidden flex flex-col h-full">
@@ -421,21 +290,18 @@ export const CargoList: React.FC<CargoListProps> = ({
                                 const hasActiveFilter = (activeFilters[field] as Set<any> | undefined)?.size ?? 0 > 0;
                                 const isSorted = sortConfig.key === field;
                                 const isDateCol = field === 'deliveryDate' || field === 'loadingDate';
+                                const isStrategyCol = field === 'strategyName';
 
                                 return (
                                     <div key={field} className={`px-4 py-3 bg-slate-50 border-r border-slate-100 flex items-center justify-between gap-2 relative shrink-0 ${col.align === 'right' ? 'flex-row-reverse' : ''}`} style={{ width: col.width }}>
                                         <span className={`font-bold truncate uppercase tracking-tight text-[10px] ${isSorted ? 'text-indigo-600' : 'text-slate-600'}`}>{col.label}</span>
                                         <div className="flex items-center gap-1">
-                                          {filterData.uniques[field] || filterData.hierarchies[field] ? (
+                                          {(filterData.uniques[field] || filterData.dateHierarchies[field] || (isStrategyCol && filterData.strategyHierarchy)) && (
                                             <button 
                                               onClick={() => setOpenFilterMenu(field === openFilterMenu ? null : field)}
                                               className={`p-1 rounded transition-colors ${hasActiveFilter ? 'bg-indigo-100 text-indigo-600' : 'text-slate-400 hover:bg-slate-200 opacity-50'}`}
                                             >
                                               <svg className="w-3 h-3" fill="none" stroke="currentColor" viewBox="0 0 24 24"><path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M3 4a1 1 0 011-1h16a1 1 0 011 1v2.586a1 1 0 01-.293.707l-6.414 6.414a1 1 0 00-.293.707V17l-4 4v-6.586a1 1 0 00-.293-.707L3.293 7.293A1 1 0 013 6.586V4z" /></svg>
-                                            </button>
-                                          ) : (
-                                            <button onClick={() => handleSort(field as any)} className={`p-1 rounded ${isSorted ? 'text-indigo-600' : 'text-slate-300'}`}>
-                                              <svg className="w-3 h-3" fill="none" stroke="currentColor" viewBox="0 0 24 24"><path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M7 16V4m0 0L3 8m4-4l4 4m6 0v12m0 0l4-4m-4 4l-4-4" /></svg>
                                             </button>
                                           )}
                                         </div>
@@ -452,45 +318,41 @@ export const CargoList: React.FC<CargoListProps> = ({
                                                 <div className="max-h-[300px] overflow-y-auto custom-scrollbar pr-1">
                                                   {isDateCol ? (
                                                     <div className="space-y-1">
-                                                        {Object.keys(filterData.hierarchies[field] || {}).sort().reverse().map(year => {
-                                                            const monthsInYear = filterData.hierarchies[field][year];
-                                                            const allDatesInYear = Object.values(monthsInYear).flat() as string[];
-                                                            const isYearExpanded = expandedDateNodes.has(`${field}-${year}`);
+                                                        {Object.keys(filterData.dateHierarchies[field] || {}).sort().reverse().map(year => {
+                                                            const months = filterData.dateHierarchies[field][year];
+                                                            const allDates = Object.values(months).flat();
+                                                            const isExp = expandedNodes.has(`${field}-${year}`);
                                                             const currentSet = activeFilters[field] || new Set();
-                                                            const allYearSelected = allDatesInYear.every(d => currentSet.has(d));
-                                                            const someYearSelected = allDatesInYear.some(d => currentSet.has(d));
+                                                            const allSel = allDates.every(d => currentSet.has(d));
+                                                            const someSel = allDates.some(d => currentSet.has(d));
                                                             return (
                                                                 <div key={year} className="text-[10px]">
-                                                                    <div className="flex items-center gap-2 px-1 py-1 hover:bg-slate-50 rounded group">
-                                                                        <button onClick={() => toggleDateNode(`${field}-${year}`)} className="p-0.5 hover:bg-slate-200 rounded text-slate-400">
-                                                                            <svg className={`w-3 h-3 transition-transform ${isYearExpanded ? 'rotate-90' : ''}`} fill="none" stroke="currentColor" viewBox="0 0 24 24"><path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M9 5l7 7-7 7" /></svg>
+                                                                    <div className="flex items-center gap-2 px-1 py-1 hover:bg-slate-50 rounded">
+                                                                        <button onClick={() => toggleNode(`${field}-${year}`)} className="p-0.5 hover:bg-slate-200 rounded text-slate-400">
+                                                                            <svg className={`w-3 h-3 transition-transform ${isExp ? 'rotate-90' : ''}`} fill="none" stroke="currentColor" viewBox="0 0 24 24"><path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M9 5l7 7-7 7" /></svg>
                                                                         </button>
-                                                                        <input type="checkbox" checked={allYearSelected} ref={el => el && (el.indeterminate = someYearSelected && !allYearSelected)} onChange={() => bulkToggleDates(field, allDatesInYear, !allYearSelected)} className="rounded border-slate-300 text-indigo-600 w-3 h-3" />
-                                                                        <span className="font-bold cursor-pointer" onClick={() => toggleDateNode(`${field}-${year}`)}>{year}</span>
+                                                                        {/* Fix: Ref callback return type error */}
+                                                                        <input type="checkbox" checked={allSel} ref={el => { if (el) el.indeterminate = someSel && !allSel; }} onChange={() => bulkToggle(field, allDates, !allSel)} className="rounded border-slate-300 text-indigo-600 w-3 h-3" />
+                                                                        <span className="font-bold cursor-pointer" onClick={() => toggleNode(`${field}-${year}`)}>{year}</span>
                                                                     </div>
-                                                                    {isYearExpanded && (
+                                                                    {isExp && (
                                                                         <div className="ml-4 border-l border-slate-200 pl-2">
-                                                                            {Object.keys(monthsInYear).sort().map(month => {
-                                                                                const datesInMonth = monthsInYear[month] as string[];
-                                                                                const isMonthExpanded = expandedDateNodes.has(`${field}-${year}-${month}`);
-                                                                                const allMonthSelected = datesInMonth.every(d => currentSet.has(d));
-                                                                                const someMonthSelected = datesInMonth.some(d => currentSet.has(d));
-                                                                                const monthName = new Date(parseInt(year), parseInt(month)-1, 1).toLocaleString('default', { month: 'short' });
+                                                                            {Object.keys(months).sort().map(month => {
+                                                                                const dates = months[month], isMonExp = expandedNodes.has(`${field}-${year}-${month}`), allMonSel = dates.every(d => currentSet.has(d)), someMonSel = dates.some(d => currentSet.has(d));
                                                                                 return (
                                                                                     <div key={month}>
-                                                                                        <div className="flex items-center gap-2 px-1 py-1 hover:bg-slate-50 rounded group">
-                                                                                            <button onClick={() => toggleDateNode(`${field}-${year}-${month}`)} className="p-0.5 hover:bg-slate-200 rounded text-slate-400">
-                                                                                                <svg className={`w-2.5 h-2.5 transition-transform ${isMonthExpanded ? 'rotate-90' : ''}`} fill="none" stroke="currentColor" viewBox="0 0 24 24"><path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M9 5l7 7-7 7" /></svg>
-                                                                                            </button>
-                                                                                            <input type="checkbox" checked={allMonthSelected} ref={el => el && (el.indeterminate = someMonthSelected && !allMonthSelected)} onChange={() => bulkToggleDates(field, datesInMonth, !allMonthSelected)} className="rounded border-slate-300 text-indigo-600 w-3 h-3" />
-                                                                                            <span className="cursor-pointer" onClick={() => toggleDateNode(`${field}-${year}-${month}`)}>{monthName}</span>
+                                                                                        <div className="flex items-center gap-2 px-1 py-1 hover:bg-slate-50 rounded">
+                                                                                            <button onClick={() => toggleNode(`${field}-${year}-${month}`)} className="p-0.5 hover:bg-slate-200 rounded text-slate-400"><svg className={`w-2.5 h-2.5 transition-transform ${isMonExp ? 'rotate-90' : ''}`} fill="none" stroke="currentColor" viewBox="0 0 24 24"><path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M9 5l7 7-7 7" /></svg></button>
+                                                                                            {/* Fix: Ref callback return type error */}
+                                                                                            <input type="checkbox" checked={allMonSel} ref={el => { if (el) el.indeterminate = someMonSel && !allMonSel; }} onChange={() => bulkToggle(field, dates, !allMonSel)} className="rounded border-slate-300 text-indigo-600 w-3 h-3" />
+                                                                                            <span className="cursor-pointer" onClick={() => toggleNode(`${field}-${year}-${month}`)}>{new Date(2000, parseInt(month)-1).toLocaleString('default', { month: 'short' })}</span>
                                                                                         </div>
-                                                                                        {isMonthExpanded && (
+                                                                                        {isMonExp && (
                                                                                             <div className="ml-4 border-l border-slate-100 pl-2">
-                                                                                                {datesInMonth.map(date => (
-                                                                                                    <label key={date} className="flex items-center gap-2 px-1 py-0.5 hover:bg-slate-50 rounded cursor-pointer">
-                                                                                                        <input type="checkbox" checked={currentSet.has(date)} onChange={() => toggleValueFilter(field, date)} className="rounded border-slate-300 text-indigo-600 w-2.5 h-2.5" />
-                                                                                                        <span className="text-slate-500">{date.split('-')[2]}</span>
+                                                                                                {dates.map(d => (
+                                                                                                    <label key={d} className="flex items-center gap-2 px-1 py-0.5 hover:bg-slate-50 rounded cursor-pointer">
+                                                                                                        <input type="checkbox" checked={currentSet.has(d)} onChange={() => toggleValueFilter(field, d)} className="rounded border-slate-300 text-indigo-600 w-2.5 h-2.5" />
+                                                                                                        <span className="text-slate-500">{d.split('-')[2]}</span>
                                                                                                     </label>
                                                                                                 ))}
                                                                                             </div>
@@ -498,6 +360,38 @@ export const CargoList: React.FC<CargoListProps> = ({
                                                                                     </div>
                                                                                 );
                                                                             })}
+                                                                        </div>
+                                                                    )}
+                                                                </div>
+                                                            );
+                                                        })}
+                                                    </div>
+                                                  ) : isStrategyCol ? (
+                                                    <div className="space-y-1">
+                                                        {Object.keys(filterData.strategyHierarchy).sort().map(group => {
+                                                            const strats = filterData.strategyHierarchy[group];
+                                                            const isExp = expandedNodes.has(`${field}-${group}`);
+                                                            const currentSet = activeFilters[field] || new Set();
+                                                            const allSel = strats.every(s => currentSet.has(s));
+                                                            const someSel = strats.some(s => currentSet.has(s));
+                                                            return (
+                                                                <div key={group} className="text-[10px]">
+                                                                    <div className="flex items-center gap-2 px-1 py-1 hover:bg-slate-50 rounded">
+                                                                        <button onClick={() => toggleNode(`${field}-${group}`)} className="p-0.5 hover:bg-slate-200 rounded text-slate-400">
+                                                                            <svg className={`w-3 h-3 transition-transform ${isExp ? 'rotate-90' : ''}`} fill="none" stroke="currentColor" viewBox="0 0 24 24"><path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M9 5l7 7-7 7" /></svg>
+                                                                        </button>
+                                                                        {/* Fix: Ref callback return type error */}
+                                                                        <input type="checkbox" checked={allSel} ref={el => { if (el) el.indeterminate = someSel && !allSel; }} onChange={() => bulkToggle(field, strats, !allSel)} className="rounded border-slate-300 text-indigo-600 w-3 h-3" />
+                                                                        <span className="font-bold cursor-pointer" onClick={() => toggleNode(`${field}-${group}`)}>{group}</span>
+                                                                    </div>
+                                                                    {isExp && (
+                                                                        <div className="ml-4 border-l border-slate-200 pl-2 max-h-40 overflow-y-auto custom-scrollbar">
+                                                                            {strats.map(s => (
+                                                                                <label key={s} className="flex items-center gap-2 px-1 py-1 hover:bg-slate-50 rounded cursor-pointer">
+                                                                                    <input type="checkbox" checked={currentSet.has(s)} onChange={() => toggleValueFilter(field, s)} className="rounded border-slate-300 text-indigo-600 w-2.5 h-2.5" />
+                                                                                    <span className="text-slate-500 truncate">{s}</span>
+                                                                                </label>
+                                                                            ))}
                                                                         </div>
                                                                     )}
                                                                 </div>
@@ -531,39 +425,28 @@ export const CargoList: React.FC<CargoListProps> = ({
                             {processedProfiles.map((p) => (
                                 <div key={p.id} className="flex border-b border-slate-100 transition-colors hover:bg-indigo-50/30 group">
                                     <div className="px-4 py-3 border-r border-slate-100 w-12 shrink-0 flex items-center bg-white"><input type="checkbox" className="rounded border-slate-300 text-indigo-600" /></div>
-                                    
                                     <div className="px-4 py-3 shrink-0 text-[11px] font-bold text-slate-900 border-r border-slate-50 whitespace-normal break-words" style={{ width: 220 }}>
                                         {p.strategyName}
                                         {p.isTieredPricing && <span className="ml-2 px-1 py-0.5 bg-indigo-50 text-indigo-600 rounded text-[9px]">2 TIER</span>}
                                     </div>
                                     <div className="px-4 py-3 shrink-0 truncate text-[11px] text-slate-600 border-r border-slate-50" style={{ width: 140 }}>{p.buyer}</div>
                                     <div className="px-4 py-3 shrink-0 truncate text-[11px] text-slate-600 border-r border-slate-50" style={{ width: 140 }}>{p.source}</div>
-                                    <div className="px-4 py-3 shrink-0 truncate text-[11px] text-slate-500 font-mono border-r border-slate-50" style={{ width: 120 }}>{p.deliveryDate || '-'}</div>
-                                    <div className="px-4 py-3 shrink-0 truncate text-[11px] text-slate-500 font-mono border-r border-slate-50" style={{ width: 120 }}>{p.loadingDate || '-'}</div>
-                                    
-                                    {/* Financial Columns */}
-                                    <div className="px-4 py-3 shrink-0 truncate text-[11px] text-slate-700 font-mono border-r border-slate-50 text-right" style={{ width: 100 }}>{p.absoluteBuyPrice ? p.absoluteBuyPrice.toFixed(3) : '-'}</div>
-                                    <div className="px-4 py-3 shrink-0 truncate text-[11px] text-slate-700 font-mono border-r border-slate-50 text-right" style={{ width: 100 }}>{p.absoluteSellPrice ? p.absoluteSellPrice.toFixed(3) : '-'}</div>
-                                    
+                                    <div className="px-4 py-3 shrink-0 truncate text-[11px] text-slate-500 font-mono border-r border-slate-50" style={{ width: 120 }}>{String(p.deliveryDate || '-')}</div>
+                                    <div className="px-4 py-3 shrink-0 truncate text-[11px] text-slate-500 font-mono border-r border-slate-50" style={{ width: 120 }}>{String(p.loadingDate || '-')}</div>
+                                    <div className="px-4 py-3 shrink-0 truncate text-[11px] text-slate-700 font-mono border-r border-slate-50 text-right" style={{ width: 100 }}>{p.absoluteBuyPrice?.toFixed(3) || '-'}</div>
+                                    <div className="px-4 py-3 shrink-0 truncate text-[11px] text-slate-700 font-mono border-r border-slate-50 text-right" style={{ width: 100 }}>{p.absoluteSellPrice?.toFixed(3) || '-'}</div>
                                     <div className="px-4 py-3 shrink-0 truncate text-[11px] text-slate-600 font-mono border-r border-slate-50 text-right" style={{ width: 100 }}>{(p.loadedVolume || 0).toLocaleString()}</div>
                                     <div className="px-4 py-3 shrink-0 truncate text-[11px] text-slate-600 font-mono border-r border-slate-50 text-right" style={{ width: 100 }}>{(p.deliveredVolume || 0).toLocaleString()}</div>
-                                    
                                     <div className="px-4 py-3 shrink-0 truncate text-[11px] text-slate-900 font-mono border-r border-slate-50 text-right font-medium" style={{ width: 130 }}>{formatCurrency(p.reconciledPurchaseCost || ((p.loadedVolume||0)*(p.absoluteBuyPrice||0)))}</div>
                                     <div className="px-4 py-3 shrink-0 truncate text-[11px] text-indigo-700 font-mono border-r border-slate-50 text-right font-medium" style={{ width: 130 }}>{formatCurrency(p.salesRevenue || ((p.deliveredVolume||0)*(p.absoluteSellPrice||0)))}</div>
-                                    
                                     <div className="px-4 py-3 shrink-0 truncate text-[11px] text-amber-700 font-mono border-r border-slate-50 text-right" style={{ width: 100 }}>{p.reconciledSrcCost ? formatCurrency(p.reconciledSrcCost) : '-'}</div>
-
                                     <div className={`px-4 py-3 shrink-0 truncate text-[11px] font-bold border-r border-slate-50 text-right ${p.finalTotalPnL >= 0 ? 'text-emerald-600' : 'text-rose-600'}`} style={{ width: 130 }}>{formatCurrency(p.finalTotalPnL)}</div>
-                                    
                                     <div className="px-4 py-3 shrink-0 text-center border-r border-slate-50" style={{ width: 110 }}>
-                                        <span className={`px-2 py-0.5 rounded-full font-bold text-[9px] uppercase ${p.pnlBucket === PnLBucket.Realized ? 'bg-blue-100 text-blue-700' : 'bg-amber-100 text-amber-700'}`}>
-                                            {p.pnlBucket}
-                                        </span>
+                                        <span className={`px-2 py-0.5 rounded-full font-bold text-[9px] uppercase ${p.pnlBucket === PnLBucket.Realized ? 'bg-blue-100 text-blue-700' : 'bg-amber-100 text-amber-700'}`}>{p.pnlBucket}</span>
                                     </div>
-
                                     <div className="px-4 py-3 border-l border-slate-100 sticky right-0 z-20 bg-white group-hover:bg-slate-50 w-24 shrink-0 flex items-center justify-center gap-1">
-                                        <button onClick={() => onEdit(p)} className="p-1 text-blue-600 hover:bg-blue-50 rounded" title="Edit"><svg className="w-3.5 h-3.5" fill="none" stroke="currentColor" viewBox="0 0 24 24"><path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M11 5H6a2 2 0 00-2 2v11a2 2 0 002 2h11a2 2 0 002-2v-5m-1.414-9.414a2 2 0 112.828 2.828L11.828 15H9v-2.828l8.586-8.586z" /></svg></button>
-                                        <button onClick={() => onDelete(p.id)} className="p-1 text-slate-400 hover:text-rose-600 hover:bg-rose-50 rounded" title="Delete"><svg className="w-3.5 h-3.5" fill="none" stroke="currentColor" viewBox="0 0 24 24"><path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M19 7l-.867 12.142A2 2 0 0116.138 21H7.862a2 2 0 01-1.995-1.858L5 7m5 4v6m4-6v6m1-10V4a1 1 0 00-1-1h-4a1 1 0 00-1 1v3M4 7h16" /></svg></button>
+                                        <button onClick={() => onEdit(p)} className="p-1 text-blue-600 hover:bg-blue-50 rounded"><svg className="w-3.5 h-3.5" fill="none" stroke="currentColor" viewBox="0 0 24 24"><path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M11 5H6a2 2 0 00-2 2v11a2 2 0 002 2h11a2 2 0 002-2v-5m-1.414-9.414a2 2 0 112.828 2.828L11.828 15H9v-2.828l8.586-8.586z" /></svg></button>
+                                        <button onClick={() => onDelete(p.id)} className="p-1 text-slate-400 hover:text-rose-600 hover:bg-rose-50 rounded"><svg className="w-3.5 h-3.5" fill="none" stroke="currentColor" viewBox="0 0 24 24"><path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M19 7l-.867 12.142A2 2 0 0116.138 21H7.862a2 2 0 01-1.995-1.858L5 7m5 4v6m4-6v6m1-10V4a1 1 0 00-1-1h-4a1 1 0 00-1 1v3M4 7h16" /></svg></button>
                                     </div>
                                 </div>
                             ))}

@@ -1,3 +1,4 @@
+
 import React, { useMemo, useState, useEffect } from 'react';
 import { CargoProfile, PnLBucket } from '../types';
 import { ForwardCurveRow, detectUnit, getExposureChartData, getPortfolioYear, recalculateProfile, getAvailableCurveDates, getPricesSnapshot, getForwardCurve, explainPricing, analyzeFormulaStructure, evaluateFormula, findDataGaps, DataGap, getGroupName, GROUPS } from '../services/calculationService';
@@ -5,6 +6,8 @@ import { BarChart, Bar, XAxis, YAxis, CartesianGrid, Tooltip, ResponsiveContaine
 import { motion, AnimatePresence } from 'framer-motion';
 import { WorldMap } from './WorldMap';
 import { PnLBreakdown } from './PnLBreakdown';
+import { PnLVarianceExplainer } from './PnLVarianceExplainer';
+import { toast } from 'react-hot-toast';
 
 interface DashboardProps {
   profiles: CargoProfile[];
@@ -51,7 +54,6 @@ export const Dashboard: React.FC<DashboardProps> = ({ profiles, forwardCurve, on
   const [groupFilter, setGroupFilter] = useState<string>('All');
   const [pnlChartMode, setPnlChartMode] = useState<'Group' | 'Strategy' | 'Year'>('Group');
   const [volChartMode, setVolChartMode] = useState<'Group' | 'Buyer'>('Group');
-  const [showCurveManager, setShowCurveManager] = useState(false);
   
   const [targetDate, setTargetDate] = useState<string>('');
   const [baselineDate, setBaselineDate] = useState<string>('');
@@ -59,11 +61,18 @@ export const Dashboard: React.FC<DashboardProps> = ({ profiles, forwardCurve, on
   const [activeDrillDown, setActiveDrillDown] = useState<'total' | 'volume' | 'realized' | 'unrealized' | null>(null);
   const [indexDrillDown, setIndexDrillDown] = useState<string | null>(null);
 
-  const [debugMode, setDebugMode] = useState<'single' | 'health' | 'tester' | 'gaps'>('health');
-  const [debugProfileId, setDebugProfileId] = useState<string>('');
-  const [testFormula, setTestFormula] = useState<string>('');
+  const [debugMode, setDebugMode] = useState<'single' | 'health' | 'tester' | 'gaps' | 'variance'>('health');
+  const [baselineSnapshot, setBaselineSnapshot] = useState<{ profiles: CargoProfile[], date: string } | null>(null);
+
+  // Added missing state variables to fix "Cannot find name 'testFormula'" errors
+  const [testFormula, setTestFormula] = useState('');
 
   const availableDates = useMemo(() => getAvailableCurveDates(), []);
+
+  useEffect(() => {
+    const saved = localStorage.getItem('pnl_baseline_snapshot');
+    if (saved) setBaselineSnapshot(JSON.parse(saved));
+  }, []);
 
   useEffect(() => {
       const dates = getAvailableCurveDates();
@@ -72,6 +81,13 @@ export const Dashboard: React.FC<DashboardProps> = ({ profiles, forwardCurve, on
           if (!baselineDate || !dates.includes(baselineDate)) setBaselineDate(dates.length > 1 ? dates[1] : dates[0]);
       }
   }, [availableDates]);
+
+  const handleSaveBaseline = () => {
+    const snapshot = { profiles: [...profiles], date: targetDate };
+    setBaselineSnapshot(snapshot);
+    localStorage.setItem('pnl_baseline_snapshot', JSON.stringify(snapshot));
+    toast.success('Baseline Snapshot Saved');
+  };
 
   const availableGroups = useMemo(() => {
       return ['All', ...GROUPS, 'Others'];
@@ -129,31 +145,6 @@ export const Dashboard: React.FC<DashboardProps> = ({ profiles, forwardCurve, on
       return { errors, warnings, success };
   }, [viewProfiles, targetDate]);
 
-  const getStatsFromDate = (dateStr: string) => {
-      let totalPnL = 0;
-      let totalVolume = 0;
-      let realizedPnL = 0;
-      let unrealizedPnL = 0;
-
-      let filtered = profiles;
-      if (groupFilter !== 'All') {
-          filtered = profiles.filter(p => getGroupName(p.strategyName) === groupFilter);
-      }
-
-      filtered.forEach(p => {
-          let calcProfile = p;
-          if (p.pnlBucket !== PnLBucket.Realized && dateStr) {
-              calcProfile = recalculateProfile(p, true, dateStr) as CargoProfile;
-          }
-          totalPnL += (calcProfile.finalTotalPnL || 0);
-          totalVolume += (calcProfile.deliveredVolume || 0);
-          if (calcProfile.pnlBucket === PnLBucket.Realized) realizedPnL += (calcProfile.finalTotalPnL || 0);
-          if (calcProfile.pnlBucket === PnLBucket.Unrealized) unrealizedPnL += (calcProfile.finalTotalPnL || 0);
-      });
-
-      return { totalPnL, totalVolume, realizedPnL, unrealizedPnL };
-  };
-
   const targetStats = useMemo(() => {
       return viewProfiles.reduce((acc, p) => ({
           totalPnL: acc.totalPnL + (p.finalTotalPnL || 0),
@@ -163,100 +154,32 @@ export const Dashboard: React.FC<DashboardProps> = ({ profiles, forwardCurve, on
       }), { totalPnL: 0, totalVolume: 0, realizedPnL: 0, unrealizedPnL: 0 });
   }, [viewProfiles]);
 
-  const baselineStats = useMemo(() => getStatsFromDate(baselineDate), [profiles, groupFilter, baselineDate]);
+  const getStatsFromDate = (dateStr: string) => {
+    let totalPnL = 0;
+    let totalVolume = 0;
+    let realizedPnL = 0;
+    let unrealizedPnL = 0;
 
-  const calculateWeightedPrice = (index: string, year: string, dateStr: string) => {
-      const curve = getForwardCurve(dateStr);
-      if (!curve || curve.length === 0) return 0;
-      const yearRows = curve.filter(r => r.month.startsWith(year));
-      if (yearRows.length === 0) return 0;
+    let filtered = profiles;
+    if (groupFilter !== 'All') {
+        filtered = profiles.filter(p => getGroupName(p.strategyName) === groupFilter);
+    }
 
-      let totalWeightedPrice = 0;
-      let totalVolume = 0;
-      let simpleSum = 0;
-
-      yearRows.forEach(row => {
-          const price = row.prices[index] || 0;
-          simpleSum += price;
-          const monthVol = viewProfiles.reduce((sum, p) => {
-              const formula = (p.sellFormula || p.buyFormula || '').toUpperCase();
-              if (!formula.includes(index.toUpperCase())) return sum;
-              const dDate = p.deliveryDate || p.loadingDate;
-              if (dDate && dDate.startsWith(row.month)) return sum + (p.deliveredVolume || 0);
-              return sum;
-          }, 0);
-          totalWeightedPrice += price * monthVol;
-          totalVolume += monthVol;
-      });
-
-      if (totalVolume > 0) return totalWeightedPrice / totalVolume;
-      return simpleSum / yearRows.length;
-  };
-
-  const indexPrices = useMemo(() => {
-      const isYearlyMode = portfolioYear !== 'All';
-      if (!isYearlyMode) {
-          const targetPrices = getPricesSnapshot(targetDate);
-          const basePrices = getPricesSnapshot(baselineDate);
-          return ALL_INDICES.map(idx => ({
-              name: idx,
-              current: targetPrices[idx] || 0,
-              previous: basePrices[idx] || 0,
-              delta: (targetPrices[idx] || 0) - (basePrices[idx] || 0),
-              isWeighted: false
-          }));
-      } else {
-          return ALL_INDICES.map(idx => {
-              const current = calculateWeightedPrice(idx, portfolioYear, targetDate);
-              const previous = calculateWeightedPrice(idx, portfolioYear, baselineDate);
-              return {
-                  name: idx,
-                  current,
-                  previous,
-                  delta: current - previous,
-                  isWeighted: true
-              };
-          });
-      }
-  }, [targetDate, baselineDate, portfolioYear, viewProfiles]);
-
-  const pnlAttribution = useMemo(() => {
-      const indexDrivers: Record<string, number> = {};
-      const groupDrivers: Record<string, number> = {};
-      viewProfiles.forEach(p => {
-          if (p.pnlBucket === PnLBucket.Realized) return;
-          const baselineP = recalculateProfile(p, true, baselineDate) as CargoProfile;
-          const deltaPnL = (p.finalTotalPnL || 0) - (baselineP.finalTotalPnL || 0);
-          if (Math.abs(deltaPnL) < 1) return;
-          const grp = getGroupName(p.strategyName);
-          groupDrivers[grp] = (groupDrivers[grp] || 0) + deltaPnL;
-          indexDrivers['Market'] = (indexDrivers['Market'] || 0) + deltaPnL;
-      });
-      const sortDrivers = (record: Record<string, number>) => {
-          return Object.entries(record).map(([name, val]) => ({ name, value: val })).sort((a, b) => Math.abs(b.value) - Math.abs(a.value)).slice(0, 5);
-      };
-      return { indices: sortDrivers(indexDrivers), groups: sortDrivers(groupDrivers) };
-  }, [viewProfiles, baselineDate, targetDate]);
-
-  const pnlChartData = useMemo(() => {
-    const map = new Map<string, number>();
-    viewProfiles.forEach(p => {
-      let key = pnlChartMode === 'Strategy' ? (p.strategyName || 'Unnamed') : pnlChartMode === 'Year' ? getPortfolioYear(p).toString() : getGroupName(p.strategyName);
-      map.set(key, (map.get(key) || 0) + (p.finalTotalPnL || 0));
+    filtered.forEach(p => {
+        let calcProfile = p;
+        if (p.pnlBucket !== PnLBucket.Realized && dateStr) {
+            calcProfile = recalculateProfile(p, true, dateStr) as CargoProfile;
+        }
+        totalPnL += (calcProfile.finalTotalPnL || 0);
+        totalVolume += (calcProfile.deliveredVolume || 0);
+        if (calcProfile.pnlBucket === PnLBucket.Realized) realizedPnL += (calcProfile.finalTotalPnL || 0);
+        if (calcProfile.pnlBucket === PnLBucket.Unrealized) unrealizedPnL += (calcProfile.finalTotalPnL || 0);
     });
-    return Array.from(map.entries()).map(([name, value]) => ({ name, value })).sort((a, b) => pnlChartMode === 'Year' ? a.name.localeCompare(b.name) : b.value - a.value);
-  }, [viewProfiles, pnlChartMode]);
 
-  const volumeChartData = useMemo(() => {
-      const map = new Map<string, number>();
-      viewProfiles.forEach(p => {
-          let key = volChartMode === 'Buyer' ? (p.buyer || 'Unmatched') : getGroupName(p.strategyName);
-          map.set(key, (map.get(key) || 0) + (p.deliveredVolume || 0));
-      });
-      return Array.from(map.entries()).map(([name, value]) => ({ name, value })).sort((a, b) => b.value - a.value);
-  }, [viewProfiles, volChartMode]);
-  
-  const exposureData = useMemo(() => getExposureChartData(viewProfiles), [viewProfiles]);
+    return { totalPnL, totalVolume, realizedPnL, unrealizedPnL };
+};
+
+  const baselineStats = useMemo(() => getStatsFromDate(baselineDate), [profiles, groupFilter, baselineDate]);
 
   const timelineEvents = useMemo(() => {
       const today = new Date();
@@ -331,6 +254,26 @@ export const Dashboard: React.FC<DashboardProps> = ({ profiles, forwardCurve, on
         <StatCard title="Realized P&L" value={targetStats.realizedPnL} prevValue={baselineStats.realizedPnL} compareDate={baselineDate} format={formatCurrency} colorClass="text-blue-600" onClick={() => setActiveDrillDown('realized')} />
         <StatCard title="Unrealized P&L" value={targetStats.unrealizedPnL} prevValue={baselineStats.unrealizedPnL} compareDate={baselineDate} format={formatCurrency} colorClass="text-amber-600" onClick={() => setActiveDrillDown('unrealized')} />
       </div>
+
+      {/* Variance Analysis Section */}
+      <motion.div variants={itemVariants} className="space-y-4">
+          <div className="flex justify-between items-center">
+              <h3 className="text-sm font-bold text-slate-500 uppercase tracking-widest">Variance Attribution</h3>
+              <button 
+                onClick={handleSaveBaseline}
+                className="px-4 py-1.5 bg-white border border-slate-200 text-slate-600 text-[10px] font-bold rounded-lg shadow-sm hover:bg-slate-50 transition-all flex items-center gap-2"
+              >
+                  <svg className="w-4 h-4" fill="none" stroke="currentColor" viewBox="0 0 24 24"><path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M3 9a2 2 0 012-2h.93a2 2 0 001.664-.89l.812-1.22A2 2 0 0110.07 4h3.86a2 2 0 011.664.89l.812 1.22A2 2 0 0018.07 7H19a2 2 0 012 2v9a2 2 0 01-2 2H5a2 2 0 01-2-2V9z" /><path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M15 13a3 3 0 11-6 0 3 3 0 016 0z" /></svg>
+                  Set New Baseline
+              </button>
+          </div>
+          <PnLVarianceExplainer 
+            currentProfiles={profiles}
+            baselineProfiles={baselineSnapshot?.profiles || []}
+            currentCurveDate={targetDate}
+            baselineCurveDate={baselineSnapshot?.date || baselineDate}
+          />
+      </motion.div>
 
       <div className="grid grid-cols-1 lg:grid-cols-3 gap-6">
           <motion.div variants={itemVariants} className="lg:col-span-2 bg-white rounded-xl shadow-lg border border-slate-200 overflow-hidden flex flex-col h-[500px]">

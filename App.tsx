@@ -1,6 +1,6 @@
 
-import React, { useState, useEffect, useMemo } from 'react';
-import { Toaster } from 'react-hot-toast';
+import React, { useState, useEffect, useMemo, useCallback } from 'react';
+import { Toaster, toast } from 'react-hot-toast';
 import { motion, AnimatePresence } from 'framer-motion';
 import { Dashboard } from './components/Dashboard';
 import { CargoList } from './components/CargoList';
@@ -19,12 +19,19 @@ const NAV_ITEMS = [
   { id: 'cargos', label: 'Cargo List', icon: 'M9 5H7a2 2 0 00-2 2v12a2 2 0 002 2h10a2 2 0 002-2V7a2 2 0 00-2-2h-2M9 5a2 2 0 002 2h2a2 2 0 002-2M9 5a2 2 0 012-2h2a2 2 0 012 2' },
   { id: 'matching', label: 'Trade Matching', icon: 'M8 7h12m0 0l-4-4m4 4l-4 4m0 6H4m0 0l4 4m-4-4l4-4' },
   { id: 'exposure', label: 'Exposure View', icon: 'M9 19v-6a2 2 0 00-2-2H5a2 2 0 00-2 2v6a2 2 0 002 2h2a2 2 0 002-2zm0 0V9a2 2 0 012-2h2a2 2 0 012 2v10m-6 0a2 2 0 002 2h2a2 2 0 002-2m0 0V5a2 2 0 012-2h2a2 2 0 012 2v14a2 2 0 002 2h2a2 2 0 002-2v-6a2 2 0 01-2-2h-2a2 2 0 01-2 2v6' },
-  { id: 'discrepancy', label: 'TRMS Reconcile', icon: 'M9 5H7a2 2 0 00-2 2v12a2 2 0 002 2h10a2 2 0 002-2V7a2 2 0 00-2-2h-2M9 5a2 2 0 002 2h2a2 2 0 002-2M9 5a2 2 0 012-2h2a2 2 0 012 2m-3 7h3m-3 4h3m-6-4h.01M9 16h.01' },
+  { id: 'discrepancy', label: 'TRMS Reconcile', icon: 'M9 5H7a2 2 0 00-2 2v12a2 2 0 002 2h10a2 2 0 002-2V7a2 2 0 00-2-2h-2M9 5a2 2 0 002 2h2a2 2 0 002-2M9 5a2 2 0 012-2h2a2 2 0 002-2M9 5a2 2 0 012 2h2a2 2 0 012 2m-3 7h3m-3 4h3m-6-4h.01M9 16h.01' },
 ];
+
+const MAX_HISTORY = 50;
 
 const App: React.FC = () => {
   const [view, setView] = useState('dashboard');
   const [profiles, setProfiles] = useState<CargoProfile[]>([]);
+  
+  // History Stacks
+  const [past, setPast] = useState<CargoProfile[][]>([]);
+  const [future, setFuture] = useState<CargoProfile[][]>([]);
+
   const [marketData, setMarketData] = useState(getMarketData());
   const [forwardCurve, setForwardCurve] = useState(getForwardCurve());
   const [portfolioYear, setPortfolioYear] = useState<string>('All');
@@ -34,7 +41,7 @@ const App: React.FC = () => {
     src: [],
     hedging: [],
     paper: [],
-    trmsAgg: {}, // Raw dictionary for dynamic re-compare
+    trmsAgg: {}, 
     uniqueValues: { src: {}, hedging: {}, paper: {} },
     summary: { total: 0, src: 0, hedging: 0, paper: 0 }
   });
@@ -58,15 +65,72 @@ const App: React.FC = () => {
     localStorage.setItem('cargo_profiles', JSON.stringify(profiles));
   }, [profiles]);
 
-  const handleSaveProfile = (profile: CargoProfile) => {
+  // History Helper
+  const updateProfiles = useCallback((newProfiles: CargoProfile[] | ((prev: CargoProfile[]) => CargoProfile[])) => {
     setProfiles(prev => {
+      const next = typeof newProfiles === 'function' ? newProfiles(prev) : newProfiles;
+      // Simple equality check to avoid redundant history steps
+      if (JSON.stringify(next) === JSON.stringify(prev)) return prev;
+
+      setPast(history => [...history, prev].slice(-MAX_HISTORY));
+      setFuture([]); // Clear redo stack on new action
+      return next;
+    });
+  }, []);
+
+  const undo = useCallback(() => {
+    if (past.length === 0) return;
+    const previous = past[past.length - 1];
+    const newPast = past.slice(0, past.length - 1);
+
+    setFuture(f => [profiles, ...f]);
+    setPast(newPast);
+    setProfiles(previous);
+    toast.success('Action undone', { icon: '↩️', duration: 1500 });
+  }, [past, profiles]);
+
+  const redo = useCallback(() => {
+    if (future.length === 0) return;
+    const next = future[0];
+    const newFuture = future.slice(1);
+
+    setPast(p => [...p, profiles]);
+    setFuture(newFuture);
+    setProfiles(next);
+    toast.success('Action redone', { icon: '↪️', duration: 1500 });
+  }, [future, profiles]);
+
+  // Keyboard Shortcuts
+  useEffect(() => {
+    const handleKeyDown = (e: KeyboardEvent) => {
+      const isZ = e.key.toLowerCase() === 'z';
+      const isY = e.key.toLowerCase() === 'y';
+      const isMac = navigator.platform.toUpperCase().indexOf('MAC') >= 0;
+      const cmdKey = isMac ? e.metaKey : e.ctrlKey;
+
+      if (cmdKey && isZ) {
+        e.preventDefault();
+        if (e.shiftKey) redo();
+        else undo();
+      } else if (cmdKey && isY) {
+        e.preventDefault();
+        redo();
+      }
+    };
+
+    window.addEventListener('keydown', handleKeyDown);
+    return () => window.removeEventListener('keydown', handleKeyDown);
+  }, [undo, redo]);
+
+  const handleSaveProfile = (profile: CargoProfile) => {
+    updateProfiles(prev => {
       const idx = prev.findIndex(p => p.id === profile.id);
       if (idx >= 0) {
         const newProfiles = [...prev];
         newProfiles[idx] = profile;
         return newProfiles;
       } else {
-        return [...prev, { ...(profile as object), id: profile.id || Date.now().toString() } as CargoProfile];
+        return [...prev, { ...profile, id: profile.id || Date.now().toString() }];
       }
     });
     setIsEditing(false);
@@ -75,32 +139,32 @@ const App: React.FC = () => {
 
   const handleDeleteProfile = (id: string) => {
     if (confirm('Delete this cargo?')) {
-      setProfiles(prev => prev.filter(p => p.id !== id));
+      updateProfiles(prev => prev.filter(p => p.id !== id));
     }
   };
 
   const handleBulkDelete = (ids: Set<string>) => {
     if (confirm(`Delete ${ids.size} cargoes?`)) {
-      setProfiles(prev => prev.filter(p => !ids.has(p.id)));
+      updateProfiles(prev => prev.filter(p => !ids.has(p.id)));
     }
   };
 
   const handleBulkUpdate = (ids: Set<string>, updates: Partial<CargoProfile>) => {
-    setProfiles(prev => prev.map(p => {
+    updateProfiles(prev => prev.map(p => {
       if (ids.has(p.id)) {
-        return recalculateProfile({ ...(p as object), ...(updates as object) }, p.pnlBucket !== PnLBucket.Realized) as CargoProfile;
+        return recalculateProfile({ ...p, ...updates }, p.pnlBucket !== PnLBucket.Realized) as CargoProfile;
       }
       return p;
     }));
   };
 
   const handleBulkImport = (newProfiles: CargoProfile[]) => {
-    setProfiles(prev => {
+    updateProfiles(prev => {
         const existingMap = new Map(prev.map(p => [p.strategyName, p]));
         newProfiles.forEach(np => {
             const existing = existingMap.get(np.strategyName);
             if (existing) {
-                existingMap.set(np.strategyName, { ...(existing as object), ...(np as object) } as CargoProfile);
+                existingMap.set(np.strategyName, { ...existing, ...np } as CargoProfile);
             } else {
                 existingMap.set(np.strategyName, np);
             }
@@ -112,14 +176,20 @@ const App: React.FC = () => {
   const handleMarketRefresh = () => {
     setMarketData(getMarketData());
     setForwardCurve(getForwardCurve());
-    setProfiles(prev => prev.map(p => 
+    updateProfiles(prev => prev.map(p => 
       p.pnlBucket === PnLBucket.Realized ? p : (recalculateProfile(p, true) as CargoProfile)
     ));
   };
 
   const handleMatch = (buy: CargoProfile, sell: CargoProfile) => {
-    const updatedBuy = { ...(buy as object), buyer: sell.buyer, pnlBucket: PnLBucket.Realized }; 
-    handleSaveProfile(updatedBuy as CargoProfile); 
+    updateProfiles(prev => {
+      const next = [...prev];
+      const buyIdx = next.findIndex(p => p.id === buy.id);
+      if (buyIdx !== -1) {
+        next[buyIdx] = { ...buy, buyer: sell.buyer, pnlBucket: PnLBucket.Realized };
+      }
+      return next;
+    });
     alert(`Matched ${buy.strategyName} with ${sell.strategyName}`);
   };
 
@@ -196,6 +266,26 @@ const App: React.FC = () => {
             <h1 className="text-xl font-bold text-slate-800 capitalize">{NAV_ITEMS.find(n => n.id === view)?.label}</h1>
             
             <div className="flex items-center gap-4">
+                {/* History Controls */}
+                <div className="flex items-center gap-1 bg-slate-100 rounded-lg p-1 mr-2">
+                    <button 
+                        onClick={undo}
+                        disabled={past.length === 0}
+                        className={`p-1.5 rounded transition-all ${past.length > 0 ? 'text-slate-600 hover:bg-white hover:shadow-sm' : 'text-slate-300 cursor-not-allowed'}`}
+                        title="Undo (Ctrl+Z)"
+                    >
+                        <svg className="w-5 h-5" fill="none" stroke="currentColor" viewBox="0 0 24 24"><path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M3 10h10a8 8 0 018 8v2M3 10l6 6m-6-6l6-6" /></svg>
+                    </button>
+                    <button 
+                        onClick={redo}
+                        disabled={future.length === 0}
+                        className={`p-1.5 rounded transition-all ${future.length > 0 ? 'text-slate-600 hover:bg-white hover:shadow-sm' : 'text-slate-300 cursor-not-allowed'}`}
+                        title="Redo (Ctrl+Y)"
+                    >
+                        <svg className="w-5 h-5" fill="none" stroke="currentColor" viewBox="0 0 24 24"><path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M21 10h-10a8 8 0 00-8 8v2m18-10l-6 6m6-6l-6-6" /></svg>
+                    </button>
+                </div>
+
                 {view !== 'discrepancy' && (
                   <>
                     <button 
@@ -255,6 +345,7 @@ const App: React.FC = () => {
                             profiles={profiles} 
                             trmsData={trmsData}
                             onTrmsUpload={setTrmsData}
+                            onEditProfile={handleEdit}
                         />
                     </motion.div>
                 ) : null}
@@ -276,7 +367,7 @@ const App: React.FC = () => {
                     existingProfiles={profiles}
                     onClose={() => setIsImporting(false)}
                     onImport={(newProfiles) => {
-                        setProfiles(prev => {
+                        updateProfiles(prev => {
                             const map = new Map(prev.map(p => [p.id, p]));
                             newProfiles.forEach(p => map.set(p.id, p));
                             return Array.from(map.values());
