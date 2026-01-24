@@ -5,8 +5,55 @@ import { toast } from 'react-hot-toast';
 import * as XLSX from 'xlsx';
 import { CargoProfile } from '../types';
 
+export interface TRMSCommodityLeg {
+    price: number;
+    vol: number;
+    buySell: string;
+}
+
+export interface ReconciliationRow {
+    strategyName: string;
+    foundInTrms: boolean;
+    app: {
+        buyPrice: number;
+        sellPrice: number;
+        buyVol: number;
+        sellVol: number;
+        src: number;
+    };
+    trms: {
+        buyLegs: TRMSCommodityLeg[];
+        sellLegs: TRMSCommodityLeg[];
+        src: number;
+    };
+    discrepancies: Set<string>;
+}
+
+export interface TRMSAggregation {
+    [strategyName: string]: {
+        commodityLegs: TRMSCommodityLeg[];
+        srcValue: number;
+    }
+}
+
+export interface ReconciliationData {
+    src: any[];
+    hedging: any[];
+    paper: any[];
+    trmsAgg: TRMSAggregation;
+    uniqueValues: Record<string, Record<string, any[]>>;
+    summary: {
+        total: number;
+        src: number;
+        hedging: number;
+        paper: number;
+    };
+}
+
 interface DiscrepancyCheckProps {
   profiles: CargoProfile[];
+  trmsData: ReconciliationData;
+  onTrmsUpload: (data: ReconciliationData) => void;
 }
 
 type SortConfig = {
@@ -14,12 +61,12 @@ type SortConfig = {
   direction: 'asc' | 'desc';
 };
 
-type TRMSTab = 'src' | 'hedging' | 'paper';
+type TRMSTab = 'reconcile' | 'src' | 'hedging' | 'paper';
 
-const ROW_HEIGHT = 42;
-const VISIBLE_ROWS = 15;
-const BUFFER_ROWS = 5;
-const COLUMN_WIDTH = 200;
+const ROW_HEIGHT = 120; // Ensure visibility for multiple individual line items
+const VISIBLE_ROWS = 8;
+const BUFFER_ROWS = 4;
+const COLUMN_WIDTH = 180;
 
 const WHITELIST_COLUMNS = [
   'EOD_Date', 'Deal Status', 'Internal Legal Entity', 'Internal Business Unit', 'Internal Portfolio',
@@ -37,71 +84,37 @@ const WHITELIST_COLUMNS = [
 const PRIORITY_COLUMNS = [
   'Strategy Name',
   'Deal Status',
-  'Start Date',
-  'End Date',
+  'Cflow Type',
   'Buy_Sell',
   'Price',
-  'Strike',
-  'Payment Currency',
   'Volume',
-  'Unit',
   'Base_Total_Value_USD',
-  'Yest_Base_Total_Value_USD',
-  'Change_in_Total_PnL'
+  'Start Date',
+  'End Date'
 ];
 
-export const DiscrepancyCheck: React.FC<DiscrepancyCheckProps> = ({ profiles }) => {
-  const [dataSets, setDataSets] = useState<{
-    src: any[];
-    hedging: any[];
-    paper: any[];
-    uniqueValues: Record<string, Record<string, any[]>>;
-  }>({
-    src: [],
-    hedging: [],
-    paper: [],
-    uniqueValues: { src: {}, hedging: {}, paper: {} }
-  });
-  
-  const [activeTab, setActiveTab] = useState<TRMSTab>('src');
+export const DiscrepancyCheck: React.FC<DiscrepancyCheckProps> = ({ profiles, trmsData, onTrmsUpload }) => {
+  const [activeTab, setActiveTab] = useState<TRMSTab>('reconcile');
   const [isParsing, setIsParsing] = useState(false);
-  const [summary, setSummary] = useState({ total: 0, src: 0, hedging: 0, paper: 0 });
   
   const [searchTerm, setSearchTerm] = useState('');
   const [debouncedSearch, setDebouncedSearch] = useState('');
   const [sortConfig, setSortConfig] = useState<SortConfig>({ key: null, direction: 'asc' });
-  const [activeFilters, setActiveFilters] = useState<Record<string, Set<any>>>({});
-  const [openFilterMenu, setOpenFilterMenu] = useState<string | null>(null);
-  const [menuSearch, setMenuSearch] = useState('');
-  const [expandedNodes, setExpandedNodes] = useState<Set<string>>(new Set());
   
   const [scrollTop, setScrollTop] = useState(0);
   const containerRef = useRef<HTMLDivElement>(null);
-  const menuRef = useRef<HTMLDivElement>(null);
 
   useEffect(() => {
     const timer = setTimeout(() => setDebouncedSearch(searchTerm), 250);
     return () => clearTimeout(timer);
   }, [searchTerm]);
 
-  useEffect(() => {
-    const handleClickOutside = (event: MouseEvent) => {
-      if (menuRef.current && !menuRef.current.contains(event.target as Node)) {
-        setOpenFilterMenu(null);
-        setMenuSearch('');
-        setExpandedNodes(new Set());
-      }
-    };
-    document.addEventListener('mousedown', handleClickOutside);
-    return () => document.removeEventListener('mousedown', handleClickOutside);
-  }, []);
-
   const handleFileUpload = (e: React.ChangeEvent<HTMLInputElement>) => {
     const file = e.target.files?.[0];
     if (!file) return;
 
     setIsParsing(true);
-    const loadingToast = toast.loading('Processing TRMS Extract...');
+    const loadingToast = toast.loading('Extracting TRMS Data...');
 
     const reader = new FileReader();
     reader.onload = (evt) => {
@@ -111,75 +124,78 @@ export const DiscrepancyCheck: React.FC<DiscrepancyCheckProps> = ({ profiles }) 
         const ws = wb.Sheets[wb.SheetNames[0]];
         const rawData = XLSX.utils.sheet_to_json(ws);
 
-        const src: any[] = [];
-        const hedging: any[] = [];
-        const paper: any[] = [];
+        const srcRows: any[] = [];
+        const hedgingRows: any[] = [];
+        const paperRows: any[] = [];
+        
+        const trmsAgg: TRMSAggregation = {};
 
         rawData.forEach((row: any) => {
+          const rawYear = row['Plsb Year Bucket'];
+          let plsbYear = 0;
+          if (typeof rawYear === 'number') plsbYear = rawYear;
+          else if (typeof rawYear === 'string') plsbYear = parseInt(rawYear.replace(/[^0-9]/g, ''));
+          
+          if (isNaN(plsbYear) || plsbYear < 2025) return;
+
+          const strategyName = String(row['Strategy Name'] || '').trim();
+          if (!strategyName) return;
+
+          const isExcluded = strategyName.includes("GLNG") || strategyName.includes("CSPA");
+          if (isExcluded) return;
+
+          const cflowType = String(row['Cflow Type'] || '').trim();
+          const internalPortfolio = String(row['Internal Portfolio'] || '').trim();
+          const buySell = String(row['Buy_Sell'] || '').trim();
+          const volume = Math.abs(Number(row['Volume'] || 0));
+          const price = Number(row['Price'] || 0);
+          const totalValue = Math.abs(Number(row['Base_Total_Value_USD'] || 0));
+
+          if (!trmsAgg[strategyName]) {
+            trmsAgg[strategyName] = { commodityLegs: [], srcValue: 0 };
+          }
+
+          if (cflowType === "SRC- Shipping Related Cost") {
+            trmsAgg[strategyName].srcValue += totalValue;
+          } else if (cflowType === "Commodity") {
+            trmsAgg[strategyName].commodityLegs.push({ price, vol: volume, buySell });
+          }
+
           const cleanRow: any = {};
           WHITELIST_COLUMNS.forEach(col => {
             if (row[col] !== undefined) {
-                 if (row[col] instanceof Date) {
-                     // CRITICAL FIX: Add 12 hours to shift date into the middle of the intended day 
-                     // before UTC extraction. This bypasses timezone-induced shifts.
-                     const dObj = row[col];
-                     const adjustedDate = new Date(dObj.getTime() + (12 * 60 * 60 * 1000));
-                     const y = adjustedDate.getUTCFullYear();
-                     const m = String(adjustedDate.getUTCMonth() + 1).padStart(2, '0');
-                     const d = String(adjustedDate.getUTCDate()).padStart(2, '0');
-                     cleanRow[col] = `${y}-${m}-${d}`;
-                 } else {
-                     cleanRow[col] = row[col];
-                 }
+              if (row[col] instanceof Date) {
+                  const dObj = row[col];
+                  cleanRow[col] = `${dObj.getUTCFullYear()}-${String(dObj.getUTCMonth() + 1).padStart(2, '0')}-${String(dObj.getUTCDate()).padStart(2, '0')}`;
+              } else {
+                  cleanRow[col] = row[col];
+              }
             }
           });
 
-          const cflowType = String(row['Cflow Type'] || '').trim();
-          const strategyName = String(row['Strategy Name'] || '').trim();
-          const internalPortfolio = String(row['Internal Portfolio'] || '').trim();
-
-          const matchesCflow = cflowType === "SRC- Shipping Related Cost";
-          const startsWithYear = strategyName.startsWith("2026") || strategyName.startsWith("2027");
-          const hasExclusions = strategyName.includes("GLNG") || strategyName.includes("CSPA");
-          
-          if (matchesCflow && startsWithYear && !hasExclusions) src.push(cleanRow);
-          if (internalPortfolio === "Hedging LNG") hedging.push(cleanRow);
-          if (internalPortfolio === "DH LNG" || internalPortfolio === "DFT LNG") paper.push(cleanRow);
+          if (cflowType === "SRC- Shipping Related Cost") srcRows.push(cleanRow);
+          if (internalPortfolio === "Hedging LNG") hedgingRows.push(cleanRow);
+          if (internalPortfolio === "DH LNG" || internalPortfolio === "DFT LNG") paperRows.push(cleanRow);
         });
 
-        const extractUniques = (data: any[]) => {
-          if (data.length === 0) return {};
-          const keys = Object.keys(data[0]);
-          const uniques: Record<string, any[]> = {};
-          keys.forEach(k => {
-            uniques[k] = Array.from(new Set(data.map(r => r[k]))).sort();
-          });
-          return uniques;
-        };
-
-        setDataSets({
-          src,
-          hedging,
-          paper,
-          uniqueValues: {
-            src: extractUniques(src),
-            hedging: extractUniques(hedging),
-            paper: extractUniques(paper)
+        onTrmsUpload({
+          src: srcRows,
+          hedging: hedgingRows,
+          paper: paperRows,
+          trmsAgg,
+          uniqueValues: {},
+          summary: { 
+            total: rawData.length, 
+            src: srcRows.length, 
+            hedging: hedgingRows.length, 
+            paper: paperRows.length
           }
         });
 
-        setSummary({ total: rawData.length, src: src.length, hedging: hedging.length, paper: paper.length });
-        setActiveFilters({});
-        setSearchTerm('');
-        setDebouncedSearch('');
-        setSortConfig({ key: null, direction: 'asc' });
-        setScrollTop(0);
-        if (containerRef.current) containerRef.current.scrollTop = 0;
-
-        toast.success(`Extracted: ${src.length} SRC, ${hedging.length} Hedging, ${paper.length} Paper`, { id: loadingToast });
+        toast.success(`TRMS Data Filtered (>= 2025).`, { id: loadingToast });
       } catch (err) {
         console.error(err);
-        toast.error('Failed to parse Excel file', { id: loadingToast });
+        toast.error('Excel Parsing Failed', { id: loadingToast });
       } finally {
         setIsParsing(false);
       }
@@ -187,9 +203,65 @@ export const DiscrepancyCheck: React.FC<DiscrepancyCheckProps> = ({ profiles }) 
     reader.readAsBinaryString(file);
   };
 
-  const currentRawData = useMemo(() => dataSets[activeTab], [activeTab, dataSets]);
+  const reconciliationData = useMemo(() => {
+    return profiles.map(p => {
+        const trms = trmsData.trmsAgg[p.strategyName];
+        
+        const row: ReconciliationRow = {
+            strategyName: p.strategyName,
+            foundInTrms: !!trms,
+            app: {
+                buyPrice: p.absoluteBuyPrice || 0,
+                sellPrice: p.absoluteSellPrice || 0,
+                buyVol: p.loadedVolume || 0,
+                sellVol: p.deliveredVolume || 0,
+                src: p.reconciledSrcCost || 0,
+            },
+            trms: {
+                buyLegs: trms?.commodityLegs.filter(l => l.buySell === 'Buy') || [],
+                sellLegs: trms?.commodityLegs.filter(l => l.buySell === 'Sell') || [],
+                src: trms?.srcValue || 0,
+            },
+            discrepancies: new Set()
+        };
+
+        if (trms) {
+            const PRICE_TOL = 0.0051;
+            const VOL_TOL = 1.1;
+
+            const hasBuyMatch = row.trms.buyLegs.some(l => Math.abs(l.price - row.app.buyPrice) < PRICE_TOL);
+            const hasSellMatch = row.trms.sellLegs.some(l => Math.abs(l.price - row.app.sellPrice) < PRICE_TOL);
+            const hasBuyVolMatch = row.trms.buyLegs.some(l => Math.abs(l.vol - row.app.buyVol) < VOL_TOL);
+            const hasSellVolMatch = row.trms.sellLegs.some(l => Math.abs(l.vol - row.app.sellVol) < VOL_TOL);
+
+            if (!hasBuyMatch && row.app.buyPrice > 0) row.discrepancies.add('Buy Price');
+            if (!hasSellMatch && row.app.sellPrice > 0) row.discrepancies.add('Sell Price');
+            if (!hasBuyVolMatch && row.app.buyVol > 0) row.discrepancies.add('Buy Vol');
+            if (!hasSellVolMatch && row.app.sellVol > 0) row.discrepancies.add('Sell Vol');
+            if (Math.abs(row.app.src - row.trms.src) > 100) row.discrepancies.add('SRC Cost');
+        } else {
+            row.discrepancies.add('Missing in TRMS');
+        }
+
+        return row;
+    });
+  }, [profiles, trmsData.trmsAgg]);
+
+  const currentRawData = useMemo(() => {
+    if (activeTab === 'reconcile') return reconciliationData;
+    return trmsData[activeTab];
+  }, [activeTab, trmsData, reconciliationData]);
 
   const headers = useMemo(() => {
+    if (activeTab === 'reconcile') return [
+        'Strategy Name', 
+        'Purchase Price', 
+        'Purchase Volume', 
+        'Sales Price', 
+        'Sales Volume', 
+        'SRC Check', 
+        'PnL Sync'
+    ];
     if (currentRawData.length === 0) return [];
     const availableKeys = Object.keys(currentRawData[0]);
     return availableKeys.sort((a, b) => {
@@ -200,56 +272,13 @@ export const DiscrepancyCheck: React.FC<DiscrepancyCheckProps> = ({ profiles }) 
         if (indexB !== -1) return 1;
         return a.localeCompare(b);
     });
-  }, [currentRawData]);
-
-  const toggleNode = (nodeId: string) => {
-    setExpandedNodes(prev => {
-        const next = new Set(prev);
-        if (next.has(nodeId)) next.delete(nodeId);
-        else next.add(nodeId);
-        return next;
-    });
-  };
+  }, [currentRawData, activeTab]);
 
   const handleSort = (key: string) => {
     setSortConfig(prev => ({
       key,
       direction: prev.key === key && prev.direction === 'asc' ? 'desc' : 'asc'
     }));
-    setOpenFilterMenu(null);
-  };
-
-  const toggleValueFilter = (column: string, value: any) => {
-    setActiveFilters(prev => {
-      const next = { ...prev };
-      const currentSet = new Set(next[column] || []);
-      if (currentSet.has(value)) currentSet.delete(value);
-      else currentSet.add(value);
-      if (currentSet.size === 0) delete next[column];
-      else next[column] = currentSet;
-      return next;
-    });
-  };
-
-  const bulkToggleGroup = (column: string, values: any[]) => {
-    setActiveFilters(prev => {
-        const next = { ...prev };
-        const currentSet = new Set(next[column] || []);
-        const allSelected = values.every(v => currentSet.has(v));
-        if (allSelected) values.forEach(v => currentSet.delete(v));
-        else values.forEach(v => currentSet.add(v));
-        if (currentSet.size === 0) delete next[column];
-        else next[column] = currentSet;
-        return next;
-    });
-  };
-
-  const clearAllFilters = () => {
-    setActiveFilters({});
-    setSearchTerm('');
-    setDebouncedSearch('');
-    setSortConfig({ key: null, direction: 'asc' });
-    toast.success('Filters cleared');
   };
 
   const processedData = useMemo(() => {
@@ -258,27 +287,23 @@ export const DiscrepancyCheck: React.FC<DiscrepancyCheckProps> = ({ profiles }) 
       const lower = debouncedSearch.toLowerCase();
       result = result.filter(row => Object.values(row).some(v => String(v).toLowerCase().includes(lower)));
     }
-    (Object.entries(activeFilters) as [string, Set<any>][]).forEach(([column, selectedValues]) => {
-      if (selectedValues.size > 0) {
-        result = result.filter(row => selectedValues.has(row[column]));
-      }
-    });
+    
     if (sortConfig.key) {
       const { key, direction } = sortConfig;
       result.sort((a, b) => {
-        const aVal = a[key!];
-        const bVal = b[key!];
+        let aVal = (a as any)[key!];
+        let bVal = (b as any)[key!];
         if (aVal === bVal) return 0;
         const isNum = typeof aVal === 'number' && typeof bVal === 'number';
-        if (isNum) return direction === 'asc' ? aVal - bVal : bVal - aVal;
+        if (isNum) return direction === 'asc' ? (aVal as number) - (bVal as number) : (bVal as number) - (aVal as number);
         return direction === 'asc' ? String(aVal).localeCompare(String(bVal)) : String(bVal).localeCompare(String(aVal));
       });
     }
     return result;
-  }, [currentRawData, debouncedSearch, activeFilters, sortConfig]);
+  }, [currentRawData, debouncedSearch, sortConfig, activeTab]);
 
   const startIndex = Math.max(0, Math.floor(scrollTop / ROW_HEIGHT) - BUFFER_ROWS);
-  const endIndex = Math.min(processedData.length, Math.ceil((scrollTop + VISIBLE_ROWS * ROW_HEIGHT) / ROW_HEIGHT) + BUFFER_ROWS);
+  const endIndex = Math.min(processedData.length, Math.ceil((scrollTop + (VISIBLE_ROWS * ROW_HEIGHT)) / ROW_HEIGHT) + BUFFER_ROWS);
   const visibleItems = processedData.slice(startIndex, endIndex);
   const totalHeight = processedData.length * ROW_HEIGHT;
   const offsetY = startIndex * ROW_HEIGHT;
@@ -287,148 +312,120 @@ export const DiscrepancyCheck: React.FC<DiscrepancyCheckProps> = ({ profiles }) 
     setScrollTop(e.currentTarget.scrollTop);
   }, []);
 
-  const menuValues = useMemo(() => {
-    if (!openFilterMenu) return [];
-    const uniques = dataSets.uniqueValues[activeTab][openFilterMenu] || [];
-    if (!menuSearch) return uniques;
-    const lower = menuSearch.toLowerCase();
-    return uniques.filter(v => String(v).toLowerCase().includes(lower));
-  }, [openFilterMenu, activeTab, dataSets, menuSearch]);
-
-  const isAnyFilterActive = Object.keys(activeFilters).length > 0 || searchTerm !== '';
+  const formatCurrency = (v: number) => new Intl.NumberFormat('en-US', { style: 'currency', currency: 'USD', maximumFractionDigits: 0 }).format(v);
 
   return (
     <div className="flex flex-col h-full space-y-4">
-      <div className="bg-white p-5 rounded-xl border border-slate-200 shadow-sm">
-        <div className="flex flex-col md:flex-row justify-between items-start md:items-center gap-6 mb-6">
-          <div className="max-w-xl">
-            <h2 className="text-xl font-bold text-slate-800 flex items-center gap-2">
-              <svg className="w-6 h-6 text-indigo-600" fill="none" stroke="currentColor" viewBox="0 0 24 24"><path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M9 5H7a2 2 0 00-2 2v12a2 2 0 002 2h10a2 2 0 002-2V7a2 2 0 00-2-2h-2M9 5a2 2 0 002 2h2a2 2 0 002-2M9 5a2 2 0 012-2h2a2 2 0 012 2" /></svg>
-              TRMS Multi-Extract Reconciliation
-            </h2>
-            <p className="text-sm text-slate-500 mt-1">Analyze TRMS portfolios with prioritized columns and hierarchical filtering.</p>
-          </div>
-          <div className="flex items-center gap-3 shrink-0">
-             {isAnyFilterActive && (
-               <button onClick={clearAllFilters} className="px-3 py-1.5 text-rose-600 hover:bg-rose-50 text-xs font-bold rounded-lg transition-colors flex items-center gap-2">
-                 <svg className="w-4 h-4" fill="none" stroke="currentColor" viewBox="0 0 24 24"><path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M6 18L18 6M6 6l12 12" /></svg>
-                 Clear Filters
-               </button>
-             )}
-             <div className="relative group">
-                <input type="file" accept=".xlsx, .xls, .csv" onChange={handleFileUpload} className="absolute inset-0 w-full h-full opacity-0 cursor-pointer z-10" disabled={isParsing} />
-                <button className={`px-5 py-2.5 bg-indigo-600 text-white font-bold rounded-xl shadow-lg shadow-indigo-100 flex items-center gap-2 transition-all ${isParsing ? 'opacity-50' : 'hover:bg-indigo-700 active:scale-95'}`}>
-                  <svg className="w-4 h-4" fill="none" stroke="currentColor" viewBox="0 0 24 24"><path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M4 16v1a3 3 0 003 3h10a3 3 0 003-3v-1m-4-8l-4-4m0 0L8 8m4-4v12" /></svg>
-                  {isParsing ? 'Parsing...' : 'Upload Extract'}
-                </button>
-             </div>
-          </div>
+      <div className="bg-white p-5 rounded-xl border border-slate-200 shadow-sm flex flex-col md:flex-row justify-between items-center gap-6">
+        <div className="flex-1">
+          <h2 className="text-xl font-bold text-slate-800 flex items-center gap-2">
+            <svg className="w-6 h-6 text-indigo-600" fill="none" stroke="currentColor" viewBox="0 0 24 24"><path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M9 5H7a2 2 0 00-2 2v12a2 2 0 002 2h10a2 2 0 002-2V7a2 2 0 00-2-2h-2M9 5a2 2 0 002 2h2a2 2 0 002-2M9 5a2 2 0 012-2h2a2 2 0 012 2" /></svg>
+            TRMS Data Reconciliation
+          </h2>
+          <p className="text-sm text-slate-500 mt-1">
+            Compare App vs <b>Individual TRMS Line Items</b>. Prices and volumes align horizontally per leg.
+          </p>
         </div>
+        <div className="relative group shrink-0">
+          <input type="file" accept=".xlsx, .xlsm" onChange={handleFileUpload} className="absolute inset-0 w-full h-full opacity-0 cursor-pointer z-10" disabled={isParsing} />
+          <button className={`px-5 py-2.5 bg-indigo-600 text-white font-bold rounded-xl shadow-lg shadow-indigo-100 flex items-center gap-2 transition-all ${isParsing ? 'opacity-50' : 'hover:bg-indigo-700 active:scale-95'}`}>
+            <svg className="w-4 h-4" fill="none" stroke="currentColor" viewBox="0 0 24 24"><path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M4 16v1a3 3 0 003 3h10a3 3 0 003-3v-1m-4-8l-4-4m0 0L8 8m4-4v12" /></svg>
+            {isParsing ? 'Extracting...' : 'Upload TRMS Export'}
+          </button>
+        </div>
+      </div>
 
-        <div className="flex flex-wrap gap-2 border-b border-slate-100 pb-0.5">
-            <TabButton active={activeTab === 'src'} onClick={() => { setActiveTab('src'); setScrollTop(0); }} label="SRC Active Extract" count={summary.src} color="indigo" />
-            <TabButton active={activeTab === 'hedging'} onClick={() => { setActiveTab('hedging'); setScrollTop(0); }} label="Physical Hedging" count={summary.hedging} color="emerald" />
-            <TabButton active={activeTab === 'paper'} onClick={() => { setActiveTab('paper'); setScrollTop(0); }} label="Paper Portfolio (DH/DFT)" count={summary.paper} color="amber" />
-        </div>
+      <div className="flex flex-wrap gap-2">
+          <TabButton active={activeTab === 'reconcile'} onClick={() => setActiveTab('reconcile')} label="App vs TRMS Reconciliation" count={reconciliationData.filter(r => r.discrepancies.size > 0).length} color="rose" />
+          <TabButton active={activeTab === 'src'} onClick={() => setActiveTab('src')} label="SRC Raw Lines" count={trmsData.summary.src} color="indigo" />
+          <TabButton active={activeTab === 'hedging'} onClick={() => setActiveTab('hedging')} label="Hedging Lines" count={trmsData.summary.hedging} color="emerald" />
+          <TabButton active={activeTab === 'paper'} onClick={() => setActiveTab('paper')} label="DH/DFT Lines" count={trmsData.summary.paper} color="amber" />
       </div>
 
       <div className="flex-1 bg-white rounded-xl border border-slate-200 shadow-sm overflow-hidden flex flex-col min-h-0">
         <div className="p-4 border-b border-slate-100 bg-slate-50/50 flex flex-col md:flex-row justify-between items-center gap-4">
-          <h3 className="text-[11px] font-bold text-slate-400 uppercase tracking-[0.1em] flex items-center gap-2">
-            <span className={`w-2 h-2 rounded-full ${activeTab === 'src' ? 'bg-indigo-500' : activeTab === 'hedging' ? 'bg-emerald-500' : 'bg-amber-500'}`}></span>
-            {activeTab === 'src' ? 'SRC Costs (2026/27)' : activeTab === 'hedging' ? 'Hedging LNG' : 'DH & DFT LNG Portfolios'}
-          </h3>
           <div className="relative w-full md:w-80">
-            <input
-              type="text"
-              placeholder={`Search ${activeTab} data...`}
-              value={searchTerm}
-              onChange={(e) => setSearchTerm(e.target.value)}
-              className="block w-full pl-10 pr-3 py-2 border border-slate-300 rounded-lg text-xs font-medium focus:ring-2 focus:ring-indigo-500/20"
-            />
+            <input type="text" placeholder={`Search strategy...`} value={searchTerm} onChange={(e) => setSearchTerm(e.target.value)} className="block w-full pl-10 pr-3 py-2 border border-slate-300 rounded-lg text-xs font-medium focus:ring-2 focus:ring-indigo-500/20" />
             <svg className="absolute left-3 top-2.5 h-4 w-4 text-slate-400" fill="none" stroke="currentColor" viewBox="0 0 24 24"><path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M21 21l-6-6m2-5a7 7 0 11-14 0 7 7 0 0114 0z" /></svg>
+          </div>
+          <div className="text-[10px] text-slate-400 uppercase font-bold flex gap-4">
+            <span>* Comparison excludes PLSB &lt; 2025</span>
           </div>
         </div>
         
         <div ref={containerRef} onScroll={onScroll} className="flex-1 overflow-auto custom-scrollbar relative bg-slate-50/20">
           {processedData.length > 0 ? (
-            <div className="min-w-max relative" style={{ height: totalHeight + ROW_HEIGHT }}>
-              <div className="sticky top-0 bg-white z-50 border-b-2 border-slate-200 flex">
+            <div className="min-w-max relative" style={{ height: totalHeight + 40 }}>
+              <div className="sticky top-0 bg-white z-40 border-b-2 border-slate-200 flex">
                 {headers.map((header, idx) => {
-                  const hasActiveFilter = (activeFilters[header] as Set<any> | undefined)?.size ?? 0 > 0;
                   const isSorted = sortConfig.key === header;
                   const isFirst = idx === 0;
-
                   return (
                     <div 
                       key={header} 
-                      className={`px-4 py-3 bg-slate-50 border-r border-slate-100 last:border-r-0 flex items-center justify-between gap-2 relative group shrink-0 ${isFirst ? 'sticky left-0 z-50 bg-slate-100 shadow-[2px_0_5_rgba(0,0,0,0.05)]' : ''}`}
-                      style={{ width: COLUMN_WIDTH }}
+                      onClick={() => handleSort(header)}
+                      className={`px-4 py-3 bg-slate-50 border-r border-slate-100 flex items-center justify-between gap-2 cursor-pointer hover:bg-slate-100 shrink-0 ${isFirst ? 'sticky left-0 z-50 bg-slate-100 shadow-[2px_0_5px_rgba(0,0,0,0.05)]' : ''}`}
+                      style={{ width: isFirst ? 280 : COLUMN_WIDTH }}
                     >
                       <span className={`font-bold truncate uppercase tracking-tight text-[10px] ${isSorted ? 'text-indigo-600' : 'text-slate-600'}`}>{header}</span>
-                      <div className="flex items-center gap-1">
-                        <button 
-                          onClick={() => {
-                            setOpenFilterMenu(header === openFilterMenu ? null : header);
-                            setExpandedNodes(new Set());
-                          }}
-                          className={`p-1 rounded transition-colors ${hasActiveFilter ? 'bg-indigo-100 text-indigo-600' : 'text-slate-400 hover:bg-slate-200 opacity-50 group-hover:opacity-100'}`}
-                        >
-                          <svg className="w-3 h-3" fill="none" stroke="currentColor" viewBox="0 0 24 24"><path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M3 4a1 1 0 011-1h16a1 1 0 011 1v2.586a1 1 0 01-.293.707l-6.414 6.414a1 1 0 00-.293.707V17l-4 4v-6.586a1 1 0 00-.293-.707L3.293 7.293A1 1 0 013 6.586V4z" /></svg>
-                        </button>
-                      </div>
-
-                      <AnimatePresence>
-                        {openFilterMenu === header && (
-                          <motion.div ref={menuRef} initial={{ opacity: 0, y: 5 }} animate={{ opacity: 1, y: 0 }} exit={{ opacity: 0, y: 5 }} className="absolute top-full left-0 mt-1 w-72 bg-white border border-slate-200 shadow-2xl rounded-xl p-4 z-50 text-slate-700 font-normal normal-case">
-                            <div className="space-y-4">
-                              <div className="flex border-b border-slate-100 pb-2">
-                                <button onClick={() => handleSort(header)} className={`flex-1 flex items-center gap-2 text-[10px] font-bold py-1 hover:text-indigo-600 ${sortConfig.key === header && sortConfig.direction === 'asc' ? 'text-indigo-600' : 'text-slate-500'}`}>Sort Asc</button>
-                                <button onClick={() => handleSort(header)} className={`flex-1 flex items-center gap-2 text-[10px] font-bold py-1 hover:text-indigo-600 ${sortConfig.key === header && sortConfig.direction === 'desc' ? 'text-indigo-600' : 'text-slate-500'}`}>Sort Desc</button>
-                              </div>
-
-                              <input autoFocus type="text" placeholder="Search values..." value={menuSearch} onChange={(e) => setMenuSearch(e.target.value)} className="w-full text-[10px] px-2 py-1.5 border border-slate-200 rounded bg-slate-50 focus:ring-1 focus:ring-indigo-500" />
-                              
-                              <div className="max-h-[300px] overflow-y-auto custom-scrollbar pr-2">
-                                {menuValues.map(v => (
-                                    <label key={v} className="flex items-center gap-2 px-1 py-1 hover:bg-slate-50 rounded cursor-pointer">
-                                      <input type="checkbox" checked={(activeFilters[header] as Set<any> | undefined)?.has(v)} onChange={() => toggleValueFilter(header, v)} className="rounded border-slate-300 text-indigo-600 w-3 h-3" />
-                                      <span className="text-[10px] truncate">{String(v ?? '(Blank)')}</span>
-                                    </label>
-                                  ))}
-                              </div>
-                              <div className="pt-2 border-t border-slate-100 flex justify-end items-center">
-                                <button onClick={() => setOpenFilterMenu(null)} className="text-[10px] font-bold text-indigo-600 px-3 py-1 bg-indigo-50 rounded-lg hover:bg-indigo-100">Apply Filters</button>
-                              </div>
-                            </div>
-                          </motion.div>
-                        )}
-                      </AnimatePresence>
+                      <svg className={`w-3 h-3 text-slate-300 transition-transform ${isSorted && sortConfig.direction === 'desc' ? 'rotate-180' : ''}`} fill="none" stroke="currentColor" viewBox="0 0 24 24"><path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M19 9l-7 7-7-7" /></svg>
                     </div>
                   );
                 })}
               </div>
 
-              <div className="absolute left-0 w-full" style={{ top: ROW_HEIGHT + offsetY }}>
-                {visibleItems.map((row, i) => {
+              <div className="absolute left-0 w-full" style={{ top: 40 + offsetY }}>
+                {visibleItems.map((row: any, i) => {
+                  const r = row as ReconciliationRow;
                   return (
-                    <div 
-                      key={startIndex + i} 
-                      className="flex border-b border-slate-100 transition-colors hover:bg-indigo-50/20 bg-white" 
-                      style={{ height: ROW_HEIGHT }}
-                    >
-                      {headers.map((header, idx) => {
-                        const isFirst = idx === 0;
-                        return (
-                          <div 
-                            key={header} 
-                            className={`px-4 py-3 text-slate-600 whitespace-nowrap shrink-0 truncate text-[11px] border-r border-slate-50 last:border-r-0 ${isFirst ? 'sticky left-0 z-20 shadow-[2px_0_5_rgba(0,0,0,0.05)] bg-white' : ''}`} 
-                            style={{ width: COLUMN_WIDTH }}
-                          >
+                    <div key={startIndex + i} className={`flex border-b border-slate-100 transition-colors hover:bg-indigo-50/20 bg-white group ${activeTab === 'reconcile' && !r.foundInTrms ? 'bg-slate-50' : ''}`} style={{ height: ROW_HEIGHT }}>
+                      {activeTab === 'reconcile' ? (
+                        <>
+                          <div className={`px-4 py-2 shrink-0 sticky left-0 z-20 shadow-[2px_0_5px_rgba(0,0,0,0.05)] border-r border-slate-50 flex items-center transition-colors group-hover:bg-indigo-50/20 ${!r.foundInTrms ? 'bg-slate-100' : 'bg-white'}`} style={{ width: 280 }}>
+                              <div className="min-w-0">
+                                  <div className="text-[11px] font-bold text-slate-800 truncate">{r.strategyName}</div>
+                                  <div className={`text-[9px] font-bold uppercase tracking-wider ${r.foundInTrms ? 'text-emerald-500' : 'text-slate-400'}`}>
+                                      {r.foundInTrms ? 'Matched in TRMS' : 'Missing from TRMS'}
+                                  </div>
+                              </div>
+                          </div>
+                          
+                          <AlignedSplitCell type="price" appVal={r.app.buyPrice} trmsLegs={r.trms.buyLegs} found={r.foundInTrms} />
+                          <AlignedSplitCell type="vol" appVal={r.app.buyVol} trmsLegs={r.trms.buyLegs} found={r.foundInTrms} />
+                          <AlignedSplitCell type="price" appVal={r.app.sellPrice} trmsLegs={r.trms.sellLegs} found={r.foundInTrms} />
+                          <AlignedSplitCell type="vol" appVal={r.app.sellVol} trmsLegs={r.trms.sellLegs} found={r.foundInTrms} />
+
+                          <div className="px-4 py-2 shrink-0 flex flex-col justify-center border-r border-slate-50" style={{ width: COLUMN_WIDTH }}>
+                                <div className="flex justify-between text-[10px]">
+                                    <span className="text-slate-400 font-bold">APP:</span>
+                                    <span className="font-mono font-bold text-slate-700">{formatCurrency(r.app.src)}</span>
+                                </div>
+                                <div className="flex justify-between text-[10px] mt-1">
+                                    <span className="text-slate-400 font-bold">TRMS:</span>
+                                    <span className={`font-mono font-bold ${Math.abs(r.app.src - r.trms.src) > 100 ? 'text-rose-600' : 'text-slate-500'}`}>{r.foundInTrms ? formatCurrency(r.trms.src) : '-'}</span>
+                                </div>
+                          </div>
+                          
+                          <div className="px-4 py-2 shrink-0 flex items-center justify-center border-r border-slate-50" style={{ width: COLUMN_WIDTH }}>
+                              {r.discrepancies.size > 0 ? (
+                                <div className={`px-2.5 py-1 rounded-full text-[9px] font-black uppercase tracking-tighter ${r.foundInTrms ? 'bg-rose-100 text-rose-700' : 'bg-slate-200 text-slate-500'}`}>
+                                    {r.foundInTrms ? `${r.discrepancies.size} Differences` : 'Not Found'}
+                                </div>
+                              ) : (
+                                <div className="flex items-center gap-1.5 text-emerald-600">
+                                    <svg className="w-4 h-4" fill="currentColor" viewBox="0 0 20 20"><path fillRule="evenodd" d="M10 18a8 8 0 100-16 8 8 0 000 16zm3.707-9.293a1 1 0 00-1.414-1.414L9 10.586 7.707 9.293a1 1 0 00-1.414 1.414l2 2a1 1 0 001.414 0l4-4z" clipRule="evenodd" /></svg>
+                                    <span className="text-[10px] font-bold uppercase">Perfect Sync</span>
+                                </div>
+                              )}
+                          </div>
+                        </>
+                      ) : (
+                        headers.map((header, idx) => (
+                          <div key={header} className={`px-4 py-3 text-slate-600 whitespace-nowrap shrink-0 truncate text-[11px] border-r border-slate-50 ${idx === 0 ? 'sticky left-0 z-20 shadow-[2px_0_5px_rgba(0,0,0,0.05)] bg-white group-hover:bg-indigo-50/20' : ''}`} style={{ width: COLUMN_WIDTH }}>
                             {String(row[header] ?? '-')}
                           </div>
-                        );
-                      })}
+                        ))
+                      )}
                     </div>
                   );
                 })}
@@ -436,20 +433,9 @@ export const DiscrepancyCheck: React.FC<DiscrepancyCheckProps> = ({ profiles }) 
             </div>
           ) : (
             <div className="h-full flex flex-col items-center justify-center p-20 text-slate-400">
-              {currentRawData.length > 0 ? (
-                <div className="text-center">
-                  <p className="font-bold text-slate-500">No records match current filters</p>
-                  <button onClick={clearAllFilters} className="mt-2 text-indigo-600 text-xs font-bold underline">Reset View</button>
-                </div>
-              ) : (
-                <div className="text-center max-w-xs">
-                   <div className="w-16 h-16 bg-slate-50 rounded-full flex items-center justify-center mx-auto mb-4 border border-slate-100">
-                      <svg className="w-8 h-8 text-slate-200" fill="none" stroke="currentColor" viewBox="0 0 24 24"><path strokeLinecap="round" strokeLinejoin="round" strokeWidth={1.5} d="M9 17v-2m3 2v-4m3 2v-6m-9-9H5a2 2 0 00-2 2v12a2 2 0 002 2h10a2 2 0 002-2V7a2 2 0 00-2-2h-2M9 5a2 2 0 022 2h2a2 2 0 002-2M9 5a2 2 0 012-2h2a2 2 0 012 2" /></svg>
-                   </div>
-                   <p className="font-bold text-slate-600">Dataset Empty</p>
-                   <p className="text-xs mt-1">Upload a TRMS extract to populate these tables with prioritized columns.</p>
-                </div>
-              )}
+                <svg className="w-12 h-12 mb-4 opacity-20" fill="none" stroke="currentColor" viewBox="0 0 24 24"><path strokeLinecap="round" strokeLinejoin="round" strokeWidth={1.5} d="M9 17v-2m3 2v-4m3 2v-6m-9-9H5a2 2 0 00-2 2v12a2 2 0 002 2h10a2 2 0 002-2V7a2 2 0 00-2-2h-2M9 5a2 2 0 012 2h2a2 2 0 002-2M9 5a2 2 0 012 2h2a2 2 0 012 2" /></svg>
+                <p className="font-bold text-slate-600">No TRMS Data Found</p>
+                <p className="text-xs">Upload a TRMS extract (PLSB >= 2025) to begin reconciliation.</p>
             </div>
           )}
         </div>
@@ -458,22 +444,55 @@ export const DiscrepancyCheck: React.FC<DiscrepancyCheckProps> = ({ profiles }) 
   );
 };
 
+const AlignedSplitCell = ({ type, appVal, trmsLegs, found }: { type: 'price' | 'vol', appVal: number, trmsLegs: TRMSCommodityLeg[], found: boolean }) => {
+    return (
+        <div className="px-4 py-2 shrink-0 flex flex-col justify-center border-r border-slate-50 overflow-hidden" style={{ width: COLUMN_WIDTH }}>
+            <div className="flex flex-col mb-2 pb-1 border-b border-slate-50">
+                <span className="text-[8px] font-bold text-slate-400 uppercase tracking-tighter">App {type === 'price' ? 'Price' : 'Vol'}</span>
+                <span className="text-[10px] font-bold text-slate-700 font-mono">
+                    {type === 'price' ? `$${appVal.toFixed(3)}` : appVal.toLocaleString()}
+                </span>
+            </div>
+            
+            <div className="flex-1 overflow-y-auto custom-scrollbar flex flex-col space-y-1">
+                {!found ? (
+                    <span className="text-[10px] text-slate-300 italic">Not found</span>
+                ) : trmsLegs.length === 0 ? (
+                    <span className="text-[10px] text-rose-500 italic">No Commodity Data</span>
+                ) : (
+                    trmsLegs.map((leg, idx) => {
+                        const valToComp = type === 'price' ? leg.price : leg.vol;
+                        const isMatch = type === 'price' 
+                            ? Math.abs(valToComp - appVal) < 0.0051 
+                            : Math.abs(valToComp - appVal) < 1.1;
+
+                        return (
+                            <div 
+                                key={idx} 
+                                className={`h-5 flex items-center px-1.5 rounded font-mono text-[9px] border ${isMatch ? 'bg-emerald-50 text-emerald-700 font-bold border-emerald-100 shadow-sm' : 'text-slate-500 opacity-80 border-transparent'}`}
+                            >
+                                {type === 'price' ? leg.price.toFixed(3) : leg.vol.toLocaleString()}
+                            </div>
+                        );
+                    })
+                )}
+            </div>
+        </div>
+    );
+};
+
 const TabButton = ({ active, onClick, label, count, color }: { active: boolean, onClick: () => void, label: string, count: number, color: string }) => {
     const colorClasses = {
         indigo: 'text-indigo-600 border-indigo-500 bg-indigo-50',
         emerald: 'text-emerald-600 border-emerald-500 bg-emerald-50',
-        amber: 'text-amber-600 border-amber-500 bg-amber-50'
-    }[color as 'indigo' | 'emerald' | 'amber'];
+        amber: 'text-amber-600 border-amber-500 bg-amber-50',
+        rose: 'text-rose-600 border-rose-500 bg-rose-50'
+    }[color as 'indigo' | 'emerald' | 'amber' | 'rose'];
 
     return (
-        <button 
-            onClick={onClick}
-            className={`px-4 py-3 text-xs font-bold transition-all border-b-2 flex items-center gap-2 ${active ? colorClasses : 'border-transparent text-slate-400 hover:text-slate-600'}`}
-        >
+        <button onClick={onClick} className={`px-4 py-3 text-xs font-bold transition-all border-b-2 flex items-center gap-2 ${active ? colorClasses : 'border-transparent text-slate-400 hover:text-slate-600'}`}>
             {label}
-            <span className={`px-1.5 py-0.5 rounded-full text-[10px] ${active ? 'bg-white shadow-sm' : 'bg-slate-100 text-slate-500'}`}>
-                {count.toLocaleString()}
-            </span>
+            {count > 0 && <span className={`px-1.5 py-0.5 rounded-full text-[10px] ${active ? 'bg-white shadow-sm' : 'bg-slate-100 text-slate-500'}`}>{count.toLocaleString()}</span>}
         </button>
     );
 };

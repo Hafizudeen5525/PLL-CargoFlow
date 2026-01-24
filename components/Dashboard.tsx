@@ -1,4 +1,3 @@
-
 import React, { useMemo, useState, useEffect } from 'react';
 import { CargoProfile, PnLBucket } from '../types';
 import { ForwardCurveRow, detectUnit, getExposureChartData, getPortfolioYear, recalculateProfile, getAvailableCurveDates, getPricesSnapshot, getForwardCurve, explainPricing, analyzeFormulaStructure, evaluateFormula, findDataGaps, DataGap, getGroupName, GROUPS } from '../services/calculationService';
@@ -381,8 +380,8 @@ export const Dashboard: React.FC<DashboardProps> = ({ profiles, forwardCurve, on
           </motion.div>
       </div>
 
-      <motion.div variants={itemVariants} className="bg-white p-6 rounded-xl shadow-sm border border-slate-200">
-          <div className="flex justify-between items-center mb-6">
+      <motion.div variants={itemVariants} className="bg-white p-6 rounded-xl shadow-sm border border-slate-200 h-[600px] flex flex-col">
+          <div className="flex justify-between items-center mb-6 shrink-0">
               <h3 className="text-lg font-bold text-slate-800 flex items-center gap-2">
                   <svg className="w-5 h-5 text-indigo-600" fill="none" stroke="currentColor" viewBox="0 0 24 24"><path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M10 20l4-16m4 4l4 4-4 4M6 16l-4-4 4-4" /></svg>
                   Portfolio Integrity & Diagnostic
@@ -398,61 +397,63 @@ export const Dashboard: React.FC<DashboardProps> = ({ profiles, forwardCurve, on
               </div>
           </div>
           
-          {debugMode === 'health' && (
-              <div className="grid grid-cols-1 md:grid-cols-2 lg:grid-cols-3 gap-6 h-[450px]">
-                  <HealthColumn title="Attention Needed" items={healthReport.errors} color="rose" />
-                  <HealthColumn title="Pricing Warnings" items={healthReport.warnings} color="amber" />
-                  <HealthColumn title="Operational Health" items={healthReport.success} color="emerald" />
-              </div>
-          )}
+          <div className="flex-1 overflow-hidden min-h-0">
+            {debugMode === 'health' && (
+                <div className="grid grid-cols-1 md:grid-cols-2 lg:grid-cols-3 gap-6 h-full pb-2 min-h-0">
+                    <HealthColumn title="Attention Needed" items={healthReport.errors} color="rose" />
+                    <HealthColumn title="Pricing Warnings" items={healthReport.warnings} color="amber" />
+                    <HealthColumn title="Operational Health" items={healthReport.success} color="emerald" />
+                </div>
+            )}
 
-          {debugMode === 'gaps' && (
-              <div className="space-y-4">
-                  <div className="bg-rose-50 border border-rose-100 p-4 rounded-xl">
-                      <h4 className="text-rose-800 font-bold text-sm mb-1">Missing Historical Monthly Prices</h4>
-                      <p className="text-xs text-rose-600">These index/month pairs are referenced in active formulas but missing from the current curve ({targetDate}).</p>
-                  </div>
-                  <div className="overflow-hidden border border-slate-200 rounded-xl bg-white">
-                      <table className="w-full text-xs text-left">
-                          <thead className="bg-slate-50 text-slate-500 uppercase font-bold border-b border-slate-200">
-                              <tr>
-                                  <th className="px-4 py-3">Index</th>
-                                  <th className="px-4 py-3">Pricing Month</th>
-                                  <th className="px-4 py-3">Affected Strategies</th>
-                              </tr>
-                          </thead>
-                          <tbody className="divide-y divide-slate-100">
-                              {dataGaps.length === 0 ? (
-                                  <tr><td colSpan={3} className="p-8 text-center text-slate-400">No missing monthly data detected for current view.</td></tr>
-                              ) : (
-                                  dataGaps.map((gap, i) => (
-                                      <tr key={i} className="hover:bg-slate-50">
-                                          <td className="px-4 py-3 font-bold text-slate-700">{gap.index}</td>
-                                          <td className="px-4 py-3 font-mono text-rose-500">{gap.month}</td>
-                                          <td className="px-4 py-3 text-slate-500">{gap.affectedStrategies.join(', ')}</td>
-                                      </tr>
-                                  ))
-                              )}
-                          </tbody>
-                      </table>
-                  </div>
-              </div>
-          )}
+            {debugMode === 'gaps' && (
+                <div className="space-y-4 h-full flex flex-col min-h-0">
+                    <div className="bg-rose-50 border border-rose-100 p-4 rounded-xl shrink-0">
+                        <h4 className="text-rose-800 font-bold text-sm mb-1">Missing Historical Monthly Prices</h4>
+                        <p className="text-xs text-rose-600">These index/month pairs are referenced in active formulas but missing from the current curve ({targetDate}).</p>
+                    </div>
+                    <div className="flex-1 overflow-y-auto custom-scrollbar border border-slate-200 rounded-xl bg-white shadow-inner min-h-0">
+                        <table className="w-full text-xs text-left">
+                            <thead className="bg-slate-50 text-slate-500 uppercase font-bold border-b border-slate-200 sticky top-0 z-10">
+                                <tr>
+                                    <th className="px-4 py-3">Index</th>
+                                    <th className="px-4 py-3">Pricing Month</th>
+                                    <th className="px-4 py-3">Affected Strategies</th>
+                                </tr>
+                            </thead>
+                            <tbody className="divide-y divide-slate-100">
+                                {dataGaps.length === 0 ? (
+                                    <tr><td colSpan={3} className="p-8 text-center text-slate-400">No missing monthly data detected for current view.</td></tr>
+                                ) : (
+                                    dataGaps.map((gap, i) => (
+                                        <tr key={i} className="hover:bg-slate-50">
+                                            <td className="px-4 py-3 font-bold text-slate-700">{gap.index}</td>
+                                            <td className="px-4 py-3 font-mono text-rose-500">{gap.month}</td>
+                                            <td className="px-4 py-3 text-slate-500 whitespace-normal break-words">{gap.affectedStrategies.join(', ')}</td>
+                                        </tr>
+                                    ))
+                                )}
+                            </tbody>
+                        </table>
+                    </div>
+                </div>
+            )}
 
-          {debugMode === 'tester' && (
-              <div className="space-y-4">
-                  <div className="bg-slate-50 p-6 rounded-xl border border-slate-200">
-                      <label className="block text-sm font-bold text-slate-700 mb-2">Test Formula Expression</label>
-                      <input type="text" value={testFormula} onChange={(e) => setTestFormula(e.target.value)} placeholder="e.g. 50% HH + 0.50" className="w-full px-4 py-3 rounded-lg border border-slate-300 font-mono text-sm" />
-                  </div>
-                  {testFormula && (
-                      <div className="bg-white border border-slate-200 rounded-xl p-4">
-                          <p className="text-xs font-bold text-slate-400 mb-2">Evaluation Result ({targetDate}):</p>
-                          <div className="text-xl font-mono font-bold text-blue-600">${evaluateFormula(testFormula, undefined, targetDate)?.toFixed(3) ?? 'Calculation Error'}</div>
-                      </div>
-                  )}
-              </div>
-          )}
+            {debugMode === 'tester' && (
+                <div className="space-y-4 h-full overflow-y-auto custom-scrollbar pr-2 min-h-0">
+                    <div className="bg-slate-50 p-6 rounded-xl border border-slate-200">
+                        <label className="block text-sm font-bold text-slate-700 mb-2">Test Formula Expression</label>
+                        <input type="text" value={testFormula} onChange={(e) => setTestFormula(e.target.value)} placeholder="e.g. 50% HH + 0.50" className="w-full px-4 py-3 rounded-lg border border-slate-300 font-mono text-sm" />
+                    </div>
+                    {testFormula && (
+                        <div className="bg-white border border-slate-200 rounded-xl p-4">
+                            <p className="text-xs font-bold text-slate-400 mb-2">Evaluation Result ({targetDate}):</p>
+                            <div className="text-xl font-mono font-bold text-blue-600">${evaluateFormula(testFormula, undefined, targetDate)?.toFixed(3) ?? 'Calculation Error'}</div>
+                        </div>
+                    )}
+                </div>
+            )}
+          </div>
       </motion.div>
 
       <motion.div variants={itemVariants} className="bg-white p-6 rounded-xl shadow-sm border border-slate-200">
@@ -499,18 +500,21 @@ const HealthColumn = ({ title, items, color }: any) => {
     const bgClass = color === 'rose' ? 'bg-rose-50 border-rose-100' : color === 'amber' ? 'bg-amber-50 border-amber-100' : 'bg-emerald-50 border-emerald-100';
     const textClass = color === 'rose' ? 'text-rose-800' : color === 'amber' ? 'text-amber-800' : 'text-emerald-800';
     return (
-        <div className={`rounded-xl border p-4 flex flex-col h-full ${bgClass}`}>
-            <div className="flex justify-between items-center mb-3 pb-2 border-b border-white/50">
+        <div className={`rounded-xl border p-4 flex flex-col h-full min-h-0 ${bgClass}`}>
+            <div className="flex justify-between items-center mb-3 pb-2 border-b border-white/50 shrink-0">
                 <h4 className={`font-bold text-sm ${textClass}`}>{title}</h4>
                 <span className={`px-2 py-0.5 rounded-full text-xs font-bold bg-white/50 ${textClass}`}>{items.length}</span>
             </div>
-            <div className="flex-1 overflow-y-auto custom-scrollbar space-y-2">
+            <div className="flex-1 overflow-y-auto custom-scrollbar space-y-2 pr-1 min-h-0">
                 {items.map((p: any) => (
-                    <div key={p.id} className="bg-white p-3 rounded-lg shadow-sm">
-                        <div className="font-bold text-xs text-slate-700">{p.strategyName}</div>
+                    <div key={p.id} className="bg-white p-3 rounded-lg shadow-sm border border-white/50">
+                        <div className="font-bold text-xs text-slate-700 leading-tight whitespace-normal break-words">{p.strategyName}</div>
                         <div className="text-[10px] text-slate-500 mt-1">{getGroupName(p.strategyName)}</div>
                     </div>
                 ))}
+                {items.length === 0 && (
+                    <div className="text-[10px] text-slate-400 italic text-center py-4">No records in this bucket</div>
+                )}
             </div>
         </div>
     );
@@ -524,13 +528,13 @@ const DrillDownTable = ({ profiles, metricType, onClose, targetDate, format }: a
                     <h3 className="text-xl font-bold text-slate-800 uppercase">Drill Down: {metricType}</h3>
                     <button onClick={onClose} className="text-slate-400 hover:text-slate-600"><svg className="w-6 h-6" fill="none" stroke="currentColor" viewBox="0 0 24 24"><path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M6 18L18 6M6 6l12 12" /></svg></button>
                 </div>
-                <div className="flex-1 overflow-y-auto p-4">
+                <div className="flex-1 overflow-y-auto p-4 custom-scrollbar">
                     <table className="w-full text-sm text-left">
-                        <thead className="text-xs text-slate-500 uppercase bg-slate-50">
+                        <thead className="text-xs text-slate-500 uppercase bg-slate-50 sticky top-0">
                             <tr>
-                                <th className="px-4 py-3">Strategy</th>
-                                <th className="px-4 py-3">Auto Group</th>
-                                <th className="px-4 py-3 text-right">PnL ({targetDate})</th>
+                                <th className="px-4 py-3 bg-slate-50">Strategy</th>
+                                <th className="px-4 py-3 bg-slate-50">Auto Group</th>
+                                <th className="px-4 py-3 text-right bg-slate-50">PnL ({targetDate})</th>
                             </tr>
                         </thead>
                         <tbody className="divide-y divide-slate-100">

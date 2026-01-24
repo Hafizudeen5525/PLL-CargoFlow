@@ -9,13 +9,13 @@ import { TradeMatching } from './components/TradeMatching';
 import { ForwardCurveModal } from './components/ForwardCurveModal';
 import { BulkImportModal } from './components/BulkImportModal';
 import { ExposureView } from './components/ExposureView';
-import { DiscrepancyCheck } from './components/DiscrepancyCheck';
+import { DiscrepancyCheck, ReconciliationData } from './components/DiscrepancyCheck';
 import { CargoProfile, PnLBucket } from './types';
 import { getMarketData, getForwardCurve, recalculateProfile, getPortfolioYear } from './services/calculationService';
 
 // Navigation Items
 const NAV_ITEMS = [
-  { id: 'dashboard', label: 'Dashboard', icon: 'M4 6a2 2 0 012-2h2a2 2 0 012 2v2a2 2 0 01-2 2H6a2 2 0 01-2-2V6zM14 6a2 2 0 012-2h2a2 2 0 012 2v2a2 2 0 01-2 2h-2a2 2 0 01-2-2V6zM4 16a2 2 0 012-2h2a2 2 0 01-2 2H6a2 2 0 01-2-2v-2zM14 16a2 2 0 012-2h2a2 2 0 01-2 2h-2a2 2 0 01-2-2v-2z' },
+  { id: 'dashboard', label: 'Dashboard', icon: 'M4 6a2 2 0 012-2h2a2 2 0 012 2v2a2 2 0 01-2 2H6a2 2 0 01-2-2V6zM14 6a2 2 0 012-2h2a2 2 0 012 2v2a2 2 0 01-2 2h-2a2 2 0 01-2-2V6zM4 16a2 2 0 012-2h2a2 2 0 01-1 2H6a2 2 0 01-2-2v-2zM14 16a2 2 0 012-2h2a2 2 0 01-1 2h-2a2 2 0 01-2-2v-2z' },
   { id: 'cargos', label: 'Cargo List', icon: 'M9 5H7a2 2 0 00-2 2v12a2 2 0 002 2h10a2 2 0 002-2V7a2 2 0 00-2-2h-2M9 5a2 2 0 002 2h2a2 2 0 002-2M9 5a2 2 0 012-2h2a2 2 0 012 2' },
   { id: 'matching', label: 'Trade Matching', icon: 'M8 7h12m0 0l-4-4m4 4l-4 4m0 6H4m0 0l4 4m-4-4l4-4' },
   { id: 'exposure', label: 'Exposure View', icon: 'M9 19v-6a2 2 0 00-2-2H5a2 2 0 00-2 2v6a2 2 0 002 2h2a2 2 0 002-2zm0 0V9a2 2 0 012-2h2a2 2 0 012 2v10m-6 0a2 2 0 002 2h2a2 2 0 002-2m0 0V5a2 2 0 012-2h2a2 2 0 012 2v14a2 2 0 002 2h2a2 2 0 002-2v-6a2 2 0 01-2-2h-2a2 2 0 01-2 2v6' },
@@ -29,6 +29,16 @@ const App: React.FC = () => {
   const [forwardCurve, setForwardCurve] = useState(getForwardCurve());
   const [portfolioYear, setPortfolioYear] = useState<string>('All');
   
+  // Persisted TRMS Data for discrepancy check
+  const [trmsData, setTrmsData] = useState<ReconciliationData>({
+    src: [],
+    hedging: [],
+    paper: [],
+    trmsAgg: {}, // Raw dictionary for dynamic re-compare
+    uniqueValues: { src: {}, hedging: {}, paper: {} },
+    summary: { total: 0, src: 0, hedging: 0, paper: 0 }
+  });
+
   // Modals
   const [isEditing, setIsEditing] = useState(false);
   const [editingProfile, setEditingProfile] = useState<CargoProfile | undefined>(undefined);
@@ -56,7 +66,6 @@ const App: React.FC = () => {
         newProfiles[idx] = profile;
         return newProfiles;
       } else {
-        // Fix: Cast to object to avoid "Spread types may only be created from object types" error
         return [...prev, { ...(profile as object), id: profile.id || Date.now().toString() } as CargoProfile];
       }
     });
@@ -79,7 +88,6 @@ const App: React.FC = () => {
   const handleBulkUpdate = (ids: Set<string>, updates: Partial<CargoProfile>) => {
     setProfiles(prev => prev.map(p => {
       if (ids.has(p.id)) {
-        // Fix: Cast to object to avoid "Spread types may only be created from object types" error
         return recalculateProfile({ ...(p as object), ...(updates as object) }, p.pnlBucket !== PnLBucket.Realized) as CargoProfile;
       }
       return p;
@@ -90,10 +98,8 @@ const App: React.FC = () => {
     setProfiles(prev => {
         const existingMap = new Map(prev.map(p => [p.strategyName, p]));
         newProfiles.forEach(np => {
-            // If strategy exists, merge updates, otherwise add new
             const existing = existingMap.get(np.strategyName);
             if (existing) {
-                // Fix: Cast to object to avoid "Spread types may only be created from object types" error
                 existingMap.set(np.strategyName, { ...(existing as object), ...(np as object) } as CargoProfile);
             } else {
                 existingMap.set(np.strategyName, np);
@@ -112,7 +118,6 @@ const App: React.FC = () => {
   };
 
   const handleMatch = (buy: CargoProfile, sell: CargoProfile) => {
-    // Fix: Cast to object to avoid "Spread types may only be created from object types" error
     const updatedBuy = { ...(buy as object), buyer: sell.buyer, pnlBucket: PnLBucket.Realized }; 
     handleSaveProfile(updatedBuy as CargoProfile); 
     alert(`Matched ${buy.strategyName} with ${sell.strategyName}`);
@@ -246,7 +251,11 @@ const App: React.FC = () => {
                     </motion.div>
                 ) : view === 'discrepancy' ? (
                     <motion.div key="discrepancy" initial={{opacity:0, x:-20}} animate={{opacity:1, x:0}} exit={{opacity:0, x:20}} className="h-full">
-                         <DiscrepancyCheck profiles={profiles} />
+                         <DiscrepancyCheck 
+                            profiles={profiles} 
+                            trmsData={trmsData}
+                            onTrmsUpload={setTrmsData}
+                        />
                     </motion.div>
                 ) : null}
             </AnimatePresence>

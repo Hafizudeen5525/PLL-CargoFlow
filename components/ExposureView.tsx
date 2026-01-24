@@ -129,7 +129,7 @@ export const ExposureView: React.FC<ExposureViewProps> = ({ profiles }) => {
     }, [profiles, tableYear]);
 
     // Drill down logic: find all profiles contributing to a specific month and index
-    const contributors = useMemo(() => {
+    const contributors = useMemo<(CargoProfile & { _specificContribution: number })[]>(() => {
         if (!drillDownCell) return [];
         const { month, index } = drillDownCell;
 
@@ -149,7 +149,6 @@ export const ExposureView: React.FC<ExposureViewProps> = ({ profiles }) => {
                    hasMatch(p.sellFormula) || 
                    (p.isTieredPricing && (hasMatch(p.tier2BuyFormula || '') || hasMatch(p.tier2SellFormula || '')));
         }).map(p => {
-            // Extract the specific volume contribution for this index
             const getLegContribution = (formula: string, vol: number, isBuy: boolean) => {
                 if (formula && getIndexType(formula) === index) return isBuy ? -vol : vol;
                 return 0;
@@ -159,9 +158,24 @@ export const ExposureView: React.FC<ExposureViewProps> = ({ profiles }) => {
                                getLegContribution(p.sellFormula, p.deliveredVolume || 0, false) +
                                (p.isTieredPricing ? (getLegContribution(p.tier2BuyFormula || '', p.tier2LoadedVolume || 0, true) + getLegContribution(p.tier2SellFormula || '', p.tier2DeliveredVolume || 0, false)) : 0);
 
-            return { ...p, _specificContribution: contribution };
+            return { ...p, _specificContribution: contribution } as (CargoProfile & { _specificContribution: number });
         });
     }, [profiles, drillDownCell]);
+
+    const totalSpecificContribution = useMemo<number>(() => {
+        // Fix: Explicitly type accumulator for arithmetic safety
+        return contributors.reduce((acc: number, p) => acc + (p._specificContribution || 0), 0);
+    }, [contributors]);
+
+    // Fix: Explicitly type the reducer accumulator and current value to avoid arithmetic errors
+    const grandNetTotal = useMemo<number>(() => {
+        const gridValues = Object.values(tableData.grid);
+        return gridValues.reduce((acc: number, row: any) => {
+            const rowValues = Object.values(row) as number[];
+            const rowSum = rowValues.reduce((s: number, v: number) => s + v, 0);
+            return acc + rowSum;
+        }, 0);
+    }, [tableData]);
 
     const getDynamicSourceCategory = useMemo(() => {
         const counts: Record<string, number> = {};
@@ -280,13 +294,11 @@ export const ExposureView: React.FC<ExposureViewProps> = ({ profiles }) => {
 
     return (
         <div className="flex flex-col gap-6 p-2 min-h-[800px]">
-            
-            {/* EXPOSURE SUMMARY TABLE SECTION */}
             <section className="bg-white rounded-2xl border border-slate-200 shadow-sm overflow-hidden flex flex-col shrink-0">
                 <div className="p-5 border-b border-slate-100 flex flex-col md:flex-row justify-between items-start md:items-center gap-4 bg-slate-50/30">
                     <div>
                         <h2 className="text-lg font-bold text-slate-800 flex items-center gap-2">
-                            <svg className="w-5 h-5 text-indigo-600" fill="none" stroke="currentColor" viewBox="0 0 24 24"><path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M3 10h18M3 14h18m-9-4v8m-7 0h14a2 2 0 002-2V8a2 2 0 00-2-2H5a2 2 0 00-2 2v10a2 2 0 002 2z" /></svg>
+                            <svg className="w-5 h-5 text-indigo-600" fill="none" stroke="currentColor" viewBox="0 0 24 24"><path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M3 10h18M3 14h18m-9-4v8m-7 0h14a2 2 0 002-2V8a2 2 0 00-2-2H5a2 2 0 00-2-2v10a2 2 0 002 2z" /></svg>
                             Monthly Net Exposure Summary
                         </h2>
                         <p className="text-xs text-slate-500">Net floating volumes (Sales minus Purchases) mapped to physical delivery month.</p>
@@ -322,7 +334,8 @@ export const ExposureView: React.FC<ExposureViewProps> = ({ profiles }) => {
                         <tbody className="divide-y divide-slate-100">
                             {tableData.hasData ? (
                                 tableData.months.map(m => {
-                                    const rowTotal = INDICES.reduce((sum, idx) => sum + (tableData.grid[m][idx] || 0), 0);
+                                    // Fix: Explicitly type accumulator for arithmetic safety
+                                    const rowTotal = INDICES.reduce((sum: number, idx) => sum + (tableData.grid[m][idx] || 0), 0);
                                     if (Math.abs(rowTotal) < 0.1) return null; 
                                     const [y, mon] = m.split('-');
                                     const dateObj = new Date(parseInt(y), parseInt(mon)-1, 1);
@@ -345,16 +358,16 @@ export const ExposureView: React.FC<ExposureViewProps> = ({ profiles }) => {
                                                         onClick={() => hasValue && setDrillDownCell({ month: m, index: idx })}
                                                         className={`px-4 py-3 text-center font-mono transition-all ${
                                                             hasValue 
-                                                            ? `cursor-pointer hover:bg-white hover:shadow-inner hover:scale-105 ${val < 0 ? 'text-rose-600 font-bold' : 'text-slate-900 font-bold'}` 
+                                                            ? `cursor-pointer hover:bg-white hover:shadow-inner hover:scale-105 ${val < 0 ? 'text-rose-600' : 'text-slate-900'}` 
                                                             : 'text-slate-300'
                                                         }`}
                                                     >
-                                                        {hasValue ? (val / 1000).toLocaleString(undefined, { maximumFractionDigits: 0, minimumFractionDigits: 0 }) + 'k' : '-'}
+                                                        {hasValue ? (val / 1000).toLocaleString('en-US', { maximumFractionDigits: 0, minimumFractionDigits: 0 }) + 'k' : '-'}
                                                     </td>
                                                 );
                                             })}
                                             <td className={`px-6 py-3 text-right font-bold bg-slate-50/30 group-hover:bg-indigo-100/30 ${rowTotal >= 0 ? 'text-indigo-600' : 'text-rose-600'}`}>
-                                                {(Number(rowTotal) / 1000).toLocaleString(undefined, { maximumFractionDigits: 0 })}k
+                                                {(rowTotal / 1000).toLocaleString('en-US', { maximumFractionDigits: 0 })}k
                                             </td>
                                         </tr>
                                     );
@@ -371,15 +384,16 @@ export const ExposureView: React.FC<ExposureViewProps> = ({ profiles }) => {
                                 <tr className="bg-slate-900 text-white font-bold">
                                     <td className="px-6 py-4 sticky left-0 bg-slate-900 border-r border-slate-800">GRAND NET TOTAL</td>
                                     {INDICES.map(idx => {
+                                        // Fix: Explicitly type accumulator for arithmetic safety
                                         const colTotal = tableData.months.reduce((sum: number, m) => sum + (tableData.grid[m][idx] || 0), 0);
                                         return (
                                             <td key={idx} className={`px-4 py-4 text-center ${colTotal < 0 ? 'text-rose-400' : ''}`}>
-                                                {Math.abs(colTotal) > 0.1 ? (Number(colTotal) / 1000).toLocaleString(undefined, { maximumFractionDigits: 0 }) + 'k' : '-'}
+                                                {Math.abs(colTotal) > 0.1 ? (colTotal / 1000).toLocaleString('en-US', { maximumFractionDigits: 0 }) + 'k' : '-'}
                                             </td>
                                         );
                                     })}
-                                    <td className={`px-6 py-4 text-right ${(Object.values(tableData.grid) as Record<string, number>[]).reduce((acc: number, row) => acc + (Object.values(row) as number[]).reduce((s: number, v: number) => s + v, 0), 0) >= 0 ? 'text-amber-400' : 'text-rose-400'}`}>
-                                        {(Number((Object.values(tableData.grid) as Record<string, number>[]).reduce((acc: number, row: Record<string, number>) => acc + (Object.values(row) as number[]).reduce((s: number, v: number) => s + v, 0), 0)) / 1000).toLocaleString(undefined, { maximumFractionDigits: 0 })}k
+                                    <td className={`px-6 py-4 text-right ${grandNetTotal >= 0 ? 'text-amber-400' : 'text-rose-400'}`}>
+                                        {(grandNetTotal / 1000).toLocaleString('en-US', { maximumFractionDigits: 0 })}k
                                     </td>
                                 </tr>
                             )}
@@ -388,7 +402,6 @@ export const ExposureView: React.FC<ExposureViewProps> = ({ profiles }) => {
                 </div>
             </section>
 
-            {/* DRILL DOWN MODAL */}
             <AnimatePresence>
                 {drillDownCell && (
                     <div className="fixed inset-0 z-[100] flex items-center justify-center p-6 bg-slate-900/60 backdrop-blur-sm">
@@ -418,7 +431,7 @@ export const ExposureView: React.FC<ExposureViewProps> = ({ profiles }) => {
                             
                             <div className="flex-1 overflow-y-auto p-4 space-y-3 custom-scrollbar">
                                 {contributors.length > 0 ? (
-                                    contributors.map((p: any) => (
+                                    contributors.map((p) => (
                                         <div key={p.id} className="p-4 rounded-2xl border border-slate-100 bg-slate-50/30 flex items-center justify-between hover:border-indigo-200 transition-all group">
                                             <div className="min-w-0">
                                                 <div className="font-bold text-slate-800 truncate">{p.strategyName}</div>
@@ -430,7 +443,7 @@ export const ExposureView: React.FC<ExposureViewProps> = ({ profiles }) => {
                                             </div>
                                             <div className="text-right ml-4">
                                                 <div className={`text-sm font-mono font-bold ${p._specificContribution < 0 ? 'text-rose-600' : 'text-indigo-600'}`}>
-                                                    {p._specificContribution > 0 ? '+' : ''}{(p._specificContribution / 1000).toLocaleString()}k
+                                                    {p._specificContribution > 0 ? '+' : ''}{(p._specificContribution / 1000).toLocaleString('en-US')}k
                                                 </div>
                                                 <div className="text-[9px] font-bold text-slate-400 uppercase tracking-tighter mt-0.5">
                                                     {p._specificContribution < 0 ? 'Purchase Leg' : 'Sales Leg'}
@@ -445,9 +458,8 @@ export const ExposureView: React.FC<ExposureViewProps> = ({ profiles }) => {
                             
                             <div className="p-5 border-t border-slate-100 bg-slate-50 flex justify-between items-center">
                                 <div className="text-xs text-slate-500 font-bold uppercase">Total Net Exposure</div>
-                                {/* Use explicit numeric type parameter to ensure the result is treated as a number during division. */}
-                                <div className={`text-lg font-mono font-bold ${(contributors.reduce<number>((acc, p: any) => acc + (p._specificContribution || 0), 0)) < 0 ? 'text-rose-600' : 'text-indigo-600'}`}>
-                                    {(contributors.reduce<number>((acc, p: any) => acc + (p._specificContribution || 0), 0) / 1000).toLocaleString()}k
+                                <div className={`text-lg font-mono font-bold ${totalSpecificContribution < 0 ? 'text-rose-600' : 'text-indigo-600'}`}>
+                                    {(totalSpecificContribution / 1000).toLocaleString('en-US', { maximumFractionDigits: 0 })}k
                                 </div>
                             </div>
                         </motion.div>
@@ -455,10 +467,7 @@ export const ExposureView: React.FC<ExposureViewProps> = ({ profiles }) => {
                 )}
             </AnimatePresence>
 
-            {/* LOWER CONTENT AREA */}
             <div className="flex flex-col lg:flex-row gap-6 flex-1 min-h-0">
-                
-                {/* LEFT PANEL: FILTERS & DISTRIBUTION */}
                 <aside className="w-full lg:w-[380px] flex flex-col gap-4 shrink-0">
                     <div className="bg-white p-5 rounded-xl border border-slate-200 shadow-sm">
                         <div className="flex justify-between items-center mb-3">
@@ -490,15 +499,15 @@ export const ExposureView: React.FC<ExposureViewProps> = ({ profiles }) => {
                         </div>
                         <div className="flex-1 overflow-y-auto custom-scrollbar p-3 space-y-3 bg-slate-50/30">
                             {categoryBreakdown.length > 0 ? (
-                                categoryBreakdown.map(([category, data]) => (
+                                categoryBreakdown.map(([category, data]: [string, any]) => (
                                     <div key={category} onClick={() => setSelectedCategory(selectedCategory === category ? null : category)} className={`bg-white rounded-xl border p-4 shadow-sm cursor-pointer transition-all ${selectedCategory === category ? 'border-blue-500 ring-1 ring-blue-500' : 'hover:border-blue-300'}`}>
                                         <div className="flex justify-between items-start mb-3">
                                             <span className="font-bold text-slate-800 truncate pr-2">{category}</span>
-                                            <span className={`text-sm font-mono font-bold whitespace-nowrap ${data.total >= 0 ? 'text-indigo-600' : 'text-rose-600'}`}>{(Number(data.total)/1000).toFixed(0)}k</span>
+                                            <span className={`text-sm font-mono font-bold whitespace-nowrap ${data.total >= 0 ? 'text-indigo-600' : 'text-rose-600'}`}>{((data.total)/1000).toFixed(0)}k</span>
                                         </div>
                                         <div className="flex h-1.5 w-full rounded-full overflow-hidden bg-slate-100">
                                             {Object.entries(data.indices).map(([idx, vol], i) => (
-                                                <div key={i} className={`${getIndexColorStr(idx)} h-full`} style={{ width: `${(Math.abs(vol) / (Object.values(data.indices) as number[]).reduce((a: number, b: number) => a + Math.abs(b), 0)) * 100}%` }} />
+                                                <div key={i} className={`${getIndexColorStr(idx)} h-full`} style={{ width: `${(Math.abs(vol as number) / Object.values(data.indices).reduce((a: number, b: any) => a + Math.abs(b), 0)) * 100}%` }} />
                                             ))}
                                         </div>
                                     </div>
@@ -510,7 +519,6 @@ export const ExposureView: React.FC<ExposureViewProps> = ({ profiles }) => {
                     </div>
                 </aside>
 
-                {/* RIGHT PANEL: SIMULATION & CARGO LIST */}
                 <main className="flex-1 flex flex-col gap-4 min-w-0">
                     <div className="bg-white p-3 rounded-xl border border-slate-200 shadow-sm flex items-center gap-4 shrink-0">
                         <button onClick={() => setIsPlaying(!isPlaying)} className={`shrink-0 w-10 h-10 rounded-full flex items-center justify-center shadow-sm transition-all ${isPlaying ? 'bg-amber-100 text-amber-600 ring-2 ring-amber-200' : 'bg-white text-blue-600 border border-slate-200 hover:bg-blue-50'}`}>
@@ -524,7 +532,6 @@ export const ExposureView: React.FC<ExposureViewProps> = ({ profiles }) => {
                     </div>
 
                     <div className="flex-1 flex flex-col md:flex-row gap-4 min-h-0">
-                        {/* Floating Exposure Column */}
                         <div className="flex-[2] bg-white rounded-xl border border-slate-200 shadow-sm flex flex-col overflow-hidden">
                             <div className="p-4 border-b border-slate-100 flex justify-between items-center bg-slate-50/50">
                                 <h3 className="text-sm font-bold text-slate-700 uppercase tracking-tight">Active Net Exposure</h3>
@@ -539,7 +546,6 @@ export const ExposureView: React.FC<ExposureViewProps> = ({ profiles }) => {
                             </div>
                         </div>
                         
-                        {/* Fixed Exposure Column */}
                         <div className="flex-1 bg-slate-50/50 rounded-xl border border-slate-200 shadow-sm flex flex-col overflow-hidden">
                             <div className="p-4 border-b border-slate-100 flex justify-between items-center bg-slate-100/30">
                                 <h3 className="text-xs font-bold text-slate-500 uppercase tracking-tight">Fixed</h3>
@@ -574,7 +580,7 @@ const CargoCard: React.FC<{ profile: any, status: 'floating' | 'fixed' }> = ({ p
             </div>
             <div className="text-right shrink-0 ml-3">
                 <div className={`text-xs font-mono font-bold ${profile._displayNetVol >= 0 ? 'text-slate-700' : 'text-rose-500'}`}>
-                    {(Number(profile._displayNetVol)/1000).toFixed(0)}k
+                    {(profile._displayNetVol/1000).toFixed(0)}k
                 </div>
                 {status === 'floating' && (
                     <div className={`text-[9px] font-bold mt-0.5 ${profile._daysToFix <= 7 ? 'text-rose-500 animate-pulse' : 'text-slate-400'}`}>
