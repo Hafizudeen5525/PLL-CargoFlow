@@ -1,8 +1,7 @@
-
 import React, { useState, useMemo, useRef, useEffect, useCallback } from 'react';
 import { CargoProfile, PnLBucket, EmptyCargoProfile } from '../types';
 import { motion, AnimatePresence } from 'framer-motion';
-import { detectUnit, recalculateProfile, getGroupName, GROUPS } from '../services/calculationService';
+import { detectUnit, recalculateProfile, getGroupName, GROUPS, getPortfolioYear } from '../services/calculationService';
 import { WorldMap } from './WorldMap';
 import { CalendarView } from './CalendarView';
 import * as XLSX from 'xlsx';
@@ -35,6 +34,7 @@ export const CargoList: React.FC<CargoListProps> = ({
   const [isImportingJarvis, setIsImportingJarvis] = useState(false);
   const fileInputRef = useRef<HTMLInputElement>(null);
   const filterMenuRef = useRef<HTMLDivElement>(null);
+  const exportPopoverRef = useRef<HTMLDivElement>(null);
   
   const [searchTerm, setSearchTerm] = useState('');
   const [debouncedSearch, setDebouncedSearch] = useState('');
@@ -46,6 +46,11 @@ export const CargoList: React.FC<CargoListProps> = ({
   const [filterSearch, setFilterSearch] = useState('');
   const [expandedNodes, setExpandedNodes] = useState<Set<string>>(new Set());
 
+  // Export Configuration State
+  const [isExportPopoverOpen, setIsExportPopoverOpen] = useState(false);
+  const [exportYear, setExportYear] = useState<string>('All');
+  const [exportGroup, setExportGroup] = useState<string>('All');
+
   useEffect(() => {
     const timer = setTimeout(() => setDebouncedSearch(searchTerm), 250);
     return () => clearTimeout(timer);
@@ -56,6 +61,9 @@ export const CargoList: React.FC<CargoListProps> = ({
       if (filterMenuRef.current && !filterMenuRef.current.contains(event.target as Node)) {
         setOpenFilterMenu(null);
         setFilterSearch('');
+      }
+      if (exportPopoverRef.current && !exportPopoverRef.current.contains(event.target as Node)) {
+        setIsExportPopoverOpen(false);
       }
     };
     document.addEventListener('mousedown', handleClickOutside);
@@ -127,6 +135,17 @@ export const CargoList: React.FC<CargoListProps> = ({
     });
     return { values, strategyHierarchy, dateHierarchies };
   }, [profiles, headers]);
+
+  // Derived Options for Export
+  const availableExportYears = useMemo(() => {
+    const years = new Set<string>();
+    profiles.forEach(p => years.add(getPortfolioYear(p).toString()));
+    return ['All', ...Array.from(years).sort().reverse()];
+  }, [profiles]);
+
+  const availableExportGroups = useMemo(() => {
+    return ['All', ...GROUPS, 'Others'];
+  }, []);
 
   const toggleValueFilter = (header: string, value: any) => {
     setActiveFilters(prev => {
@@ -298,20 +317,48 @@ export const CargoList: React.FC<CargoListProps> = ({
     reader.readAsBinaryString(file);
   };
 
+  /**
+   * Helper to format tiered strategy names.
+   * Inserts 't' right after the last digit sequence in the strategy name.
+   * Example: "2026-PL9SB_59(PLL)" -> "2026-PL9SB_59t(PLL)"
+   */
+  const formatTieredName = (name: string): string => {
+      const match = name.match(/^(.*\d)(.*)$/);
+      if (match) {
+          return match[1] + 't' + match[2];
+      }
+      return name + 't';
+  };
+
   const handleJarvisExport = () => {
-    if (profiles.length === 0) return toast.error("No data to export");
+    // Determine profiles to export based on current config
+    let exportProfiles = profiles;
+    
+    if (exportYear !== 'All') {
+        exportProfiles = exportProfiles.filter(p => getPortfolioYear(p).toString() === exportYear);
+    }
+    
+    if (exportGroup !== 'All') {
+        exportProfiles = exportProfiles.filter(p => getGroupName(p.strategyName) === exportGroup);
+    }
+
+    if (exportProfiles.length === 0) {
+        return toast.error("No data found for the selected export filters");
+    }
+
     const workbook = XLSX.utils.book_new();
     const purchaseRows: any[] = [];
     const salesRows: any[] = [];
     const costRows: any[] = [];
 
-    processedProfiles.forEach(p => {
+    exportProfiles.forEach(p => {
         const buildRow = (type: 'Buy' | 'Sell', tier: 1 | 2) => {
             const prefix = tier === 1 ? (type === 'Buy' ? 'buyPrice' : 'sellPrice') : (type === 'Buy' ? 'tier2BuyPrice' : 'tier2SellPrice');
             const volKey = tier === 1 ? (type === 'Buy' ? 'loadedVolume' : 'deliveredVolume') : (type === 'Buy' ? 'tier2LoadedVolume' : 'tier2DeliveredVolume');
             const formulaKey = tier === 1 ? (type === 'Buy' ? 'buyFormula' : 'sellFormula') : (type === 'Buy' ? 'tier2BuyFormula' : 'tier2SellFormula');
             
-            const row: any = { 'Strategy Name': p.strategyName + (tier === 2 ? 't' : '') };
+            const strategyName = tier === 1 ? p.strategyName : formatTieredName(p.strategyName);
+            const row: any = { 'Strategy Name': strategyName };
             if (type === 'Buy') {
                 row['Source'] = p.source; row['No.'] = p.jarvisNo; row['Buyer'] = p.buyer; row['Optimized'] = p.optimized ? 'Yes' : 'No'; row['Loading Date'] = p.loadingDate;
             } else {
@@ -330,20 +377,38 @@ export const CargoList: React.FC<CargoListProps> = ({
             return row;
         };
 
+        // Push Primary Tier rows
         purchaseRows.push(buildRow('Buy', 1));
         salesRows.push(buildRow('Sell', 1));
-        costRows.push({ 'Strategy Name': p.strategyName, 'Incoterm': p.incoterms, 'SRC': p.reconciledSrcCost });
+        // Add Primary Tier Cost row
+        costRows.push({ 
+            'Strategy Name': p.strategyName, 
+            'Incoterm': p.incoterms, 
+            'SRC': p.reconciledSrcCost || 0 
+        });
         
         if (p.isTieredPricing) {
+            // Push Tier 2 rows for Purchase and Sales
             purchaseRows.push(buildRow('Buy', 2));
             salesRows.push(buildRow('Sell', 2));
+            
+            // Fix: Add matching row to Cost sheet for Tier 2 to ensure row count parity
+            costRows.push({ 
+                'Strategy Name': formatTieredName(p.strategyName), 
+                'Incoterm': p.incoterms, 
+                'SRC': 0 // SRC is typically captured only once per strategy leg in Jarvis
+            });
         }
     });
 
     XLSX.utils.book_append_sheet(workbook, XLSX.utils.json_to_sheet(purchaseRows), 'Purchase');
     XLSX.utils.book_append_sheet(workbook, XLSX.utils.json_to_sheet(salesRows), 'Sales');
     XLSX.utils.book_append_sheet(workbook, XLSX.utils.json_to_sheet(costRows), 'Cost');
-    XLSX.writeFile(workbook, `Jarvis_Export_${new Date().toISOString().split('T')[0]}.xlsm`, { bookType: 'xlsm' });
+    
+    const fileName = `Jarvis_Export_${exportYear}_${exportGroup}_${new Date().toISOString().split('T')[0]}.xlsm`;
+    XLSX.writeFile(workbook, fileName, { bookType: 'xlsm' });
+    setIsExportPopoverOpen(false);
+    toast.success(`Exported ${exportProfiles.length} strategies to ${fileName}`);
   };
 
   const handleSort = (key: keyof CargoProfile) => {
@@ -376,10 +441,60 @@ export const CargoList: React.FC<CargoListProps> = ({
                 <svg className="w-4 h-4" fill="none" stroke="currentColor" viewBox="0 0 24 24"><path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M4 16v1a3 3 0 003 3h10a3 3 0 003 3h10a3 3 0 003-3v-1m-4-8l-4-4m0 0L8 8m4-4v12" /></svg>
                 Import Jarvis
             </button>
-            <button onClick={handleJarvisExport} className="text-xs font-bold text-slate-600 bg-white px-3 py-1.5 rounded-lg border border-slate-200 hover:bg-slate-50 transition-colors flex items-center gap-2 shadow-sm">
-                <svg className="w-4 h-4" fill="none" stroke="currentColor" viewBox="0 0 24 24"><path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M4 16v1a3 3 0 003 3h10a3 3 0 003 3h10a3 3 0 003-3v-1m-4-4l-4 4m0 0l-4-4m4 4V4" /></svg>
-                Export Jarvis
-            </button>
+            <div className="relative">
+                <button 
+                    onClick={() => setIsExportPopoverOpen(!isExportPopoverOpen)} 
+                    className={`text-xs font-bold px-3 py-1.5 rounded-lg border transition-colors flex items-center gap-2 shadow-sm ${isExportPopoverOpen ? 'bg-indigo-600 text-white border-indigo-600' : 'text-slate-600 bg-white border-slate-200 hover:bg-slate-50'}`}
+                >
+                    <svg className="w-4 h-4" fill="none" stroke="currentColor" viewBox="0 0 24 24"><path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M4 16v1a3 3 0 003 3h10a3 3 0 003 3h10a3 3 0 003-3v-1m-4-4l-4 4m0 0l-4-4m4 4V4" /></svg>
+                    Export Jarvis
+                </button>
+
+                <AnimatePresence>
+                    {isExportPopoverOpen && (
+                        <motion.div 
+                            ref={exportPopoverRef}
+                            initial={{ opacity: 0, y: 10, scale: 0.95 }}
+                            animate={{ opacity: 1, y: 0, scale: 1 }}
+                            exit={{ opacity: 0, y: 10, scale: 0.95 }}
+                            className="absolute right-0 mt-2 w-72 bg-white border border-slate-200 shadow-2xl rounded-xl p-5 z-[100] text-slate-700"
+                        >
+                            <h4 className="text-[10px] font-black text-slate-400 uppercase tracking-widest mb-4">Export Configuration</h4>
+                            <div className="space-y-4">
+                                <div>
+                                    <label className="block text-[10px] font-bold text-slate-500 uppercase mb-1.5">Portfolio Year</label>
+                                    <select 
+                                        value={exportYear} 
+                                        onChange={(e) => setExportYear(e.target.value)}
+                                        className="w-full bg-slate-50 border border-slate-200 rounded-lg text-xs font-medium p-2 focus:ring-2 focus:ring-indigo-500/20"
+                                    >
+                                        {availableExportYears.map(y => <option key={y} value={y}>{y}</option>)}
+                                    </select>
+                                </div>
+                                <div>
+                                    <label className="block text-[10px] font-bold text-slate-500 uppercase mb-1.5">Portfolio Group</label>
+                                    <select 
+                                        value={exportGroup} 
+                                        onChange={(e) => setExportGroup(e.target.value)}
+                                        className="w-full bg-slate-50 border border-slate-200 rounded-lg text-xs font-medium p-2 focus:ring-2 focus:ring-indigo-500/20"
+                                    >
+                                        {availableExportGroups.map(g => <option key={g} value={g}>{g}</option>)}
+                                    </select>
+                                </div>
+                                <div className="pt-2">
+                                    <button 
+                                        onClick={handleJarvisExport}
+                                        className="w-full py-2.5 bg-indigo-600 text-white text-xs font-bold rounded-lg shadow-lg shadow-indigo-100 hover:bg-indigo-700 transition-all flex items-center justify-center gap-2"
+                                    >
+                                        <svg className="w-3.5 h-3.5" fill="none" stroke="currentColor" viewBox="0 0 24 24"><path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M4 16v1a3 3 0 003 3h10a3 3 0 003 3h10a3 3 0 003-3v-1m-4-4l-4 4m0 0l-4-4m4 4V4" /></svg>
+                                        Generate XLSM
+                                    </button>
+                                </div>
+                            </div>
+                        </motion.div>
+                    )}
+                </AnimatePresence>
+            </div>
         </div>
       </div>
 
