@@ -1,3 +1,4 @@
+
 import { CargoProfile, PnLBucket, EmptyCargoProfile } from '../types';
 
 export interface ForwardCurveRow {
@@ -53,6 +54,23 @@ export function getGroupName(strategyName: string = ''): string {
     }
     return 'Others';
 }
+
+/**
+ * Helper to determine Index Type from a formula string
+ */
+export const getIndexType = (formula: string): string => {
+    const f = (formula || '').toUpperCase();
+    if (f.includes('HH LAST DAY')) return 'HH Last Day';
+    if (f.includes('HH')) return 'HH';
+    if (f.includes('TTF')) return 'TTF';
+    if (f.includes('NBP')) return 'NBP';
+    if (f.includes('JKM')) return 'JKM';
+    if (f.includes('BRENT') || f.includes('DATED')) return 'Dated Brent';
+    if (f.includes('JCC')) return 'JCC';
+    if (f.includes('AECO')) return 'AECO';
+    if (f.includes('STN 2') || f.includes('STATION 2')) return 'STN 2';
+    return 'Other';
+};
 
 function toMonthKey(date: Date): string {
     const y = date.getFullYear();
@@ -321,7 +339,10 @@ export function getForwardCurve(dateStr?: string): ForwardCurveRow[] {
         const raw = localStorage.getItem(STORAGE_KEY_CURVES);
         if (!raw) return [];
         const data = JSON.parse(raw);
-        if (dateStr && data[dateStr]) return data[dateStr];
+        if (dateStr) {
+            // Return ONLY requested date if provided, otherwise empty to allow component to handle new date initialization
+            return data[dateStr] || [];
+        }
         const dates = Object.keys(data).sort().reverse();
         return dates.length > 0 ? data[dates[0]] : [];
     } catch { return []; }

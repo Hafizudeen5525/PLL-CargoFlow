@@ -1,5 +1,5 @@
 
-import React, { useState, useEffect, useMemo } from 'react';
+import React, { useState, useEffect, useMemo, useCallback, useRef } from 'react';
 import { saveForwardCurve, getForwardCurve, getAvailableCurveDates, deleteForwardCurve, ForwardCurveRow, getHistoricalCurve, saveHistoricalCurve } from '../services/calculationService';
 import { toast } from 'react-hot-toast';
 import { LineChart, Line, XAxis, YAxis, CartesianGrid, Tooltip, Legend, ResponsiveContainer } from 'recharts';
@@ -9,447 +9,617 @@ interface ForwardCurveModalProps {
   onSave: () => void;
 }
 
-// Updated exact column order as requested by user, renaming JCC Detailed to JCC
 const COLUMNS = ['Month', 'BRIPE', 'JCC', 'Dated Brent', 'HH', 'HH Last Day', 'NBP', 'JKM', 'TTF', 'AECO', 'STN 2'];
 const INDICES = COLUMNS.slice(1);
 
+interface Selection {
+    startRow: number;
+    startCol: number;
+    endRow: number;
+    endCol: number;
+}
+
 export const ForwardCurveModal: React.FC<ForwardCurveModalProps> = ({ onClose, onSave }) => {
   const [activeTab, setActiveTab] = useState<'manage' | 'analyze' | 'evolution' | 'historical'>('manage');
-  
-  // Manage Tab State
   const [curveDate, setCurveDate] = useState<string>(new Date().toISOString().split('T')[0]);
-  const [inputText, setInputText] = useState('');
   const [availableDates, setAvailableDates] = useState<string[]>([]);
-  const [parsedData, setParsedData] = useState<ForwardCurveRow[]>([]);
-  const [previewMode, setPreviewMode] = useState(false);
+  
+  const [manageGrid, setManageGrid] = useState<ForwardCurveRow[]>([]);
+  const [historicalGrid, setHistoricalGrid] = useState<ForwardCurveRow[]>([]);
 
-  // Historical Tab State
-  const [historicalInput, setHistoricalInput] = useState('');
-  const [historicalParsed, setHistoricalParsed] = useState<ForwardCurveRow[]>([]);
-  const [historicalPreview, setHistoricalPreview] = useState(false);
+  // Internal History for Undo/Redo
+  const [historyPast, setHistoryPast] = useState<ForwardCurveRow[][]>([]);
+  const [historyFuture, setHistoryFuture] = useState<ForwardCurveRow[][]>([]);
 
-  // Analyze Tab State
+  // Refs for focus management
+  const containerRef = useRef<HTMLDivElement>(null);
+
+  // Excel Interaction State
+  const [selection, setSelection] = useState<Selection | null>(null);
+  const [isSelecting, setIsSelecting] = useState(false);
+  const [editingCell, setEditingCell] = useState<{ r: number, c: number } | null>(null);
+  const [editValue, setEditValue] = useState('');
+
+  // Comparison State
   const [compareDateA, setCompareDateA] = useState<string>('');
   const [compareDateB, setCompareDateB] = useState<string>('');
   const [selectedAnalysisIndex, setSelectedAnalysisIndex] = useState('TTF');
 
-  // Evolution Tab State
+  // Evolution State
   const [evolutionIndex, setEvolutionIndex] = useState('TTF');
   const [evolutionContract, setEvolutionContract] = useState<string>('');
 
   useEffect(() => {
     refreshDates();
-    loadCurveForDate(new Date().toISOString().split('T')[0]);
-    loadHistorical();
+    loadCurveData(new Date().toISOString().split('T')[0]);
+    setHistoricalGrid(getHistoricalCurve());
   }, []);
 
   const refreshDates = () => {
     const dates = getAvailableCurveDates();
     setAvailableDates(dates);
-    if (dates.length >= 1) setCompareDateA(dates[0]);
-    if (dates.length >= 2) setCompareDateB(dates[1]);
-    else setCompareDateB(dates[0]);
+    if (dates.length >= 1 && !compareDateA) setCompareDateA(dates[0]);
+    if (dates.length >= 2 && !compareDateB) setCompareDateB(dates[1]);
   };
 
-  const loadCurveForDate = (date: string) => {
+  const loadCurveData = (date: string) => {
       const data = getForwardCurve(date);
-      if (data && data.length > 0) {
-          const tsv = data.map(row => {
-              const vals = INDICES.map(idx => row.prices[idx] !== undefined ? row.prices[idx] : '');
-              return `${row.month}\t${vals.join('\t')}`;
-          }).join('\n');
-          setInputText(tsv);
-          setParsedData(data);
-          setPreviewMode(true);
+      let targetGrid: ForwardCurveRow[] = [];
+      if (data.length === 0) {
+          const skeleton: ForwardCurveRow[] = [];
+          const start = new Date(date);
+          for (let i = 0; i < 12; i++) {
+              const d = new Date(start.getFullYear(), start.getMonth() + i, 1);
+              const mKey = `${d.getFullYear()}-${String(d.getMonth() + 1).padStart(2, '0')}`;
+              skeleton.push({ month: mKey, prices: {} });
+          }
+          targetGrid = skeleton;
       } else {
-          setInputText('');
-          setParsedData([]);
-          setPreviewMode(false);
+          targetGrid = data;
       }
+      setManageGrid(targetGrid);
       setCurveDate(date);
+      setSelection(null);
+      setEditingCell(null);
+      setHistoryPast([]);
+      setHistoryFuture([]);
   };
 
-  const loadHistorical = () => {
-      const data = getHistoricalCurve();
-      if (data && data.length > 0) {
-          const tsv = data.map(row => {
-              const vals = INDICES.map(idx => row.prices[idx] !== undefined ? row.prices[idx] : '');
-              return `${row.month}\t${vals.join('\t')}`;
-          }).join('\n');
-          setHistoricalInput(tsv);
-          setHistoricalParsed(data);
-          setHistoricalPreview(true);
-      }
+  const currentGrid = activeTab === 'manage' ? manageGrid : historicalGrid;
+  
+  const updateGridWithHistory = (next: ForwardCurveRow[]) => {
+      setHistoryPast(prev => [...prev, JSON.parse(JSON.stringify(currentGrid))].slice(-50));
+      setHistoryFuture([]);
+      if (activeTab === 'manage') setManageGrid(next);
+      else setHistoricalGrid(next);
   };
+
+  const undo = useCallback(() => {
+      if (historyPast.length === 0) return;
+      const prev = historyPast[historyPast.length - 1];
+      setHistoryFuture(f => [...f, JSON.parse(JSON.stringify(currentGrid))]);
+      setHistoryPast(p => p.slice(0, -1));
+      if (activeTab === 'manage') setManageGrid(prev);
+      else setHistoricalGrid(prev);
+      toast.success('Undo', { duration: 1000 });
+  }, [historyPast, currentGrid, activeTab]);
+
+  const redo = useCallback(() => {
+      if (historyFuture.length === 0) return;
+      const next = historyFuture[historyFuture.length - 1];
+      setHistoryPast(p => [...p, JSON.parse(JSON.stringify(currentGrid))]);
+      setHistoryFuture(f => f.slice(0, -1));
+      if (activeTab === 'manage') setManageGrid(next);
+      else setHistoricalGrid(next);
+      toast.success('Redo', { duration: 1000 });
+  }, [historyFuture, currentGrid, activeTab]);
 
   const parseCurveDate = (raw: string): string => {
     const str = raw.trim();
     if (!str) return '';
-
     const months: Record<string, string> = {
         jan: '01', feb: '02', mar: '03', apr: '04', may: '05', jun: '06',
-        jul: '07', aug: '08', sep: '09', oct: '10', nov: '11', dec: '12',
-        january: '01', february: '02', march: '03', april: '04', june: '06',
-        july: '07', august: '08', september: '09', october: '10', november: '11', december: '12'
+        jul: '07', aug: '08', sep: '09', oct: '10', nov: '11', dec: '12'
     };
-
     const mmmYy = str.match(/^([a-zA-Z]+)[\s\-\']+(\d{2,4})$/);
     if (mmmYy) {
         const mStr = mmmYy[1].toLowerCase().slice(0, 3);
-        const yStr = mmmYy[2];
-        const month = months[mStr] || months[mmmYy[1].toLowerCase()];
-        
-        if (month) {
-            let year = parseInt(yStr);
-            if (year < 100) year += 2000;
-            return `${year}-${month}`;
-        }
-    }
-
-    const mmYy = str.match(/^(\d{1,2})[\/\-](\d{2})$/);
-    if (mmYy) {
-        const m = parseInt(mmYy[1]);
-        let y = parseInt(mmYy[2]);
-        if (m >= 1 && m <= 12) {
+        const m = months[mStr];
+        if (m) {
+            let y = parseInt(mmmYy[2]);
             if (y < 100) y += 2000;
-            return `${y}-${String(m).padStart(2, '0')}`;
+            return `${y}-${m}`;
         }
     }
-
     const d = new Date(str);
-    if (!isNaN(d.getTime())) {
-        return `${d.getFullYear()}-${String(d.getMonth() + 1).padStart(2, '0')}`;
-    }
-
+    if (!isNaN(d.getTime())) return `${d.getFullYear()}-${String(d.getMonth() + 1).padStart(2, '0')}`;
     return '';
   };
 
-  const handleGenericParse = (input: string, setter: (data: ForwardCurveRow[]) => void, previewSetter: (val: boolean) => void) => {
-    if (!input.trim()) {
-        toast.error("Please paste some data first.");
-        return;
+  const handleSave = () => {
+    if (activeTab === 'manage') {
+        saveForwardCurve(curveDate, manageGrid.filter(r => r.month));
+        toast.success(`Curve saved for ${curveDate}`);
+    } else {
+        saveHistoricalCurve(historicalGrid.filter(r => r.month));
+        toast.success(`Historical prices updated`);
     }
-
-    try {
-        const rawRows = input.trim().split('\n');
-        const curveData: ForwardCurveRow[] = [];
-        const firstRow = rawRows[0];
-        const hasTab = firstRow.includes('\t');
-        const delimiter = hasTab ? '\t' : ',';
-        let startIndex = 0;
-        if (firstRow.toLowerCase().includes('month') || firstRow.toLowerCase().includes('date')) {
-            startIndex = 1;
-        }
-
-        for (let i = startIndex; i < rawRows.length; i++) {
-            const line = rawRows[i].trim();
-            if (!line) continue;
-            const values = line.split(delimiter).map(v => v.trim());
-            if (values.length < 2) continue;
-            const rawDate = values[0];
-            const formattedMonth = parseCurveDate(rawDate);
-            if (!formattedMonth) continue;
-
-            const prices: Record<string, number> = {};
-            const mapVal = (idx: number, key: string) => {
-                if (values[idx]) {
-                    const numStr = values[idx].replace(/[^0-9.-]/g, '');
-                    if (!numStr) return;
-                    const num = parseFloat(numStr);
-                    if (!isNaN(num) && Math.abs(num) > 0.0001) {
-                        prices[key] = num;
-                    }
-                }
-            };
-            
-            // Order: Month | BRIPE | JCC | Dated Brent | HH | HH Last Day | NBP | JKM | TTF | AECO | STN 2
-            mapVal(1, 'BRIPE');
-            mapVal(2, 'JCC');
-            mapVal(3, 'Dated Brent');
-            mapVal(4, 'HH');
-            mapVal(5, 'HH Last Day');
-            mapVal(6, 'NBP');
-            mapVal(7, 'JKM');
-            mapVal(8, 'TTF');
-            mapVal(9, 'AECO');
-            mapVal(10, 'STN 2');
-
-            curveData.push({ month: formattedMonth, prices });
-        }
-        if (curveData.length === 0) {
-            toast.error("Could not parse valid rows. Check date format.");
-            return;
-        }
-        setter(curveData);
-        previewSetter(true);
-        toast.success(`Parsed ${curveData.length} rows successfully.`);
-    } catch (e) {
-        console.error(e);
-        toast.error("Error parsing data. Check format.");
-    }
-  };
-
-  const handleSaveCurve = () => {
-    if (!curveDate) {
-        toast.error("Please select a date for this curve");
-        return;
-    }
-    saveForwardCurve(curveDate, parsedData);
-    toast.success(`Forward Curve saved for ${curveDate}`);
     refreshDates();
-    onSave(); 
-  };
-
-  const handleSaveHistorical = () => {
-    saveHistoricalCurve(historicalParsed);
-    toast.success("Historical Market Data updated.");
     onSave();
   };
 
-  const handleDelete = (date: string) => {
-      if (window.confirm(`Are you sure you want to delete the curve for ${date}?`)) {
+  const handleDeleteSnapshot = (e: React.MouseEvent, date: string) => {
+      e.stopPropagation();
+      if (confirm(`Delete curve snapshot for ${date}?`)) {
           deleteForwardCurve(date);
           refreshDates();
-          if (date === curveDate) {
-              setPreviewMode(false);
-              setInputText('');
-              setParsedData([]);
-          }
-          toast.success("Curve deleted");
-          onSave(); 
+          if (curveDate === date) loadCurveData(new Date().toISOString().split('T')[0]);
+          toast.success(`Snapshot deleted`);
       }
+  };
+
+  // --- Grid Interaction Core ---
+
+  const handleCellMouseDown = (r: number, c: number) => {
+      setIsSelecting(true);
+      setSelection({ startRow: r, startCol: c, endRow: r, endCol: c });
+      setEditingCell(null);
+      containerRef.current?.focus();
+  };
+
+  const handleCellMouseEnter = (r: number, c: number) => {
+      if (isSelecting && selection) {
+          setSelection({ ...selection, endRow: r, endCol: c });
+      }
+  };
+
+  const handleCellDoubleClick = (r: number, c: number) => {
+      setEditingCell({ r, c });
+      const val = c === 0 ? currentGrid[r]?.month : currentGrid[r]?.prices[COLUMNS[c]];
+      setEditValue(String(val ?? ''));
+  };
+
+  const finishEditing = () => {
+      if (!editingCell) return;
+      const { r, c } = editingCell;
+      const next = JSON.parse(JSON.stringify(currentGrid));
+      if (c === 0) {
+          next[r].month = editValue;
+      } else {
+          const num = parseFloat(editValue.replace(/[^0-9.-]/g, ''));
+          next[r].prices[COLUMNS[c]] = isNaN(num) ? 0 : num;
+      }
+      updateGridWithHistory(next);
+      setEditingCell(null);
+  };
+
+  const isSelected = (r: number, c: number) => {
+      if (!selection) return false;
+      const rMin = Math.min(selection.startRow, selection.endRow);
+      const rMax = Math.max(selection.startRow, selection.endRow);
+      const cMin = Math.min(selection.startCol, selection.endCol);
+      const cMax = Math.max(selection.startCol, selection.endCol);
+      return r >= rMin && r <= rMax && c >= cMin && c <= cMax;
+  };
+
+  // Statistics for Status Bar
+  const selectionStats = useMemo(() => {
+      if (!selection) return null;
+      const rMin = Math.min(selection.startRow, selection.endRow);
+      const rMax = Math.max(selection.startRow, selection.endRow);
+      const cMin = Math.min(selection.startCol, selection.endCol);
+      const cMax = Math.max(selection.startCol, selection.endCol);
+      
+      let sum = 0, count = 0, numericCount = 0;
+      for (let r = rMin; r <= rMax; r++) {
+          for (let c = cMin; c <= cMax; c++) {
+              count++;
+              const val = c === 0 ? null : currentGrid[r]?.prices[COLUMNS[c]];
+              if (val !== null && val !== undefined && typeof val === 'number') {
+                  sum += val;
+                  numericCount++;
+              }
+          }
+      }
+      return { sum, count, numericCount, avg: numericCount > 0 ? sum / numericCount : 0 };
+  }, [selection, currentGrid]);
+
+  const handleKeyDown = useCallback((e: React.KeyboardEvent) => {
+      const isMod = e.ctrlKey || e.metaKey;
+
+      if (editingCell) {
+          if (e.key === 'Enter') {
+              finishEditing();
+              const nextR = Math.min(currentGrid.length - 1, editingCell.r + 1);
+              setSelection({ startRow: nextR, startCol: editingCell.c, endRow: nextR, endCol: editingCell.c });
+              containerRef.current?.focus();
+          }
+          if (e.key === 'Escape') setEditingCell(null);
+          return;
+      }
+
+      // Undo/Redo
+      if (isMod && e.key === 'z') { e.preventDefault(); if (e.shiftKey) redo(); else undo(); return; }
+      if (isMod && e.key === 'y') { e.preventDefault(); redo(); return; }
+
+      // Range Management
+      if (e.key === 'Delete' || e.key === 'Backspace') {
+          if (!selection) return;
+          const next = JSON.parse(JSON.stringify(currentGrid));
+          const rMin = Math.min(selection.startRow, selection.endRow);
+          const rMax = Math.max(selection.startRow, selection.endRow);
+          const cMin = Math.min(selection.startCol, selection.endCol);
+          const cMax = Math.max(selection.startCol, selection.endCol);
+          for (let r = rMin; r <= rMax; r++) {
+              for (let c = cMin; c <= cMax; c++) {
+                  if (c === 0) next[r].month = '';
+                  else delete next[r].prices[COLUMNS[c]];
+              }
+          }
+          updateGridWithHistory(next);
+          e.preventDefault();
+      }
+
+      // Fill Down (Ctrl+D)
+      if (isMod && e.key === 'd') {
+          if (!selection) return;
+          e.preventDefault();
+          const rMin = Math.min(selection.startRow, selection.endRow);
+          const rMax = Math.max(selection.startRow, selection.endRow);
+          const cMin = Math.min(selection.startCol, selection.endCol);
+          const cMax = Math.max(selection.startCol, selection.endCol);
+          if (rMin === rMax) return;
+          const next = JSON.parse(JSON.stringify(currentGrid));
+          for (let c = cMin; c <= cMax; c++) {
+              const baseVal = c === 0 ? next[rMin].month : next[rMin].prices[COLUMNS[c]];
+              for (let r = rMin + 1; r <= rMax; r++) {
+                  if (c === 0) next[r].month = baseVal;
+                  else if (baseVal !== undefined) next[r].prices[COLUMNS[c]] = baseVal;
+                  else delete next[r].prices[COLUMNS[c]];
+              }
+          }
+          updateGridWithHistory(next);
+          toast.success('Filled Down');
+      }
+
+      // Fill Right (Ctrl+R)
+      if (isMod && e.key === 'r') {
+          if (!selection) return;
+          e.preventDefault();
+          const rMin = Math.min(selection.startRow, selection.endRow);
+          const rMax = Math.max(selection.startRow, selection.endRow);
+          const cMin = Math.min(selection.startCol, selection.endCol);
+          const cMax = Math.max(selection.startCol, selection.endCol);
+          if (cMin === cMax) return;
+          const next = JSON.parse(JSON.stringify(currentGrid));
+          for (let r = rMin; r <= rMax; r++) {
+              const baseVal = cMin === 0 ? next[r].month : next[r].prices[COLUMNS[cMin]];
+              for (let c = cMin + 1; c <= cMax; c++) {
+                  // Only fill if it's not the Month column or if we are filling the Month column specifically
+                  if (c === 0) next[r].month = String(baseVal);
+                  else if (baseVal !== undefined) next[r].prices[COLUMNS[c]] = Number(baseVal);
+              }
+          }
+          updateGridWithHistory(next);
+          toast.success('Filled Right');
+      }
+
+      // Copy
+      if (isMod && e.key === 'c') {
+          if (!selection) return;
+          const rMin = Math.min(selection.startRow, selection.endRow);
+          const rMax = Math.max(selection.startRow, selection.endRow);
+          const cMin = Math.min(selection.startCol, selection.endCol);
+          const cMax = Math.max(selection.startCol, selection.endCol);
+          let tsv = '';
+          for (let r = rMin; r <= rMax; r++) {
+              let line = [];
+              for (let c = cMin; c <= cMax; c++) {
+                  const val = c === 0 ? currentGrid[r]?.month : currentGrid[r]?.prices[COLUMNS[c]];
+                  line.push(val ?? '');
+              }
+              tsv += line.join('\t') + '\n';
+          }
+          navigator.clipboard.writeText(tsv);
+          toast.success('Copied selection');
+          e.preventDefault();
+      }
+
+      // Navigation
+      if (selection) {
+          const { endRow, endCol } = selection;
+          let nr = endRow, nc = endCol;
+          if (e.key === 'ArrowUp') nr = Math.max(0, endRow - 1);
+          if (e.key === 'ArrowDown') nr = Math.min(currentGrid.length - 1, endRow + 1);
+          if (e.key === 'ArrowLeft') nc = Math.max(0, endCol - 1);
+          if (e.key === 'ArrowRight') nc = Math.min(COLUMNS.length - 1, endCol + 1);
+          if (nr !== endRow || nc !== endCol) {
+              setSelection(e.shiftKey ? { ...selection, endRow: nr, endCol: nc } : { startRow: nr, startCol: nc, endRow: nr, endCol: nc });
+              e.preventDefault();
+          }
+          if (e.key === 'Enter') { handleCellDoubleClick(endRow, endCol); e.preventDefault(); }
+          if (e.key === 'Tab') {
+              e.preventDefault();
+              const nextC = e.shiftKey ? Math.max(0, endCol - 1) : Math.min(COLUMNS.length - 1, endCol + 1);
+              setSelection({ startRow: endRow, startCol: nextC, endRow: endRow, endCol: nextC });
+          }
+      }
+  }, [selection, editingCell, currentGrid, editValue, undo, redo]);
+
+  const handlePaste = (e: React.ClipboardEvent) => {
+      const text = e.clipboardData.getData('Text');
+      if (!text) return;
+      const isTableData = text.includes('\t') || text.includes('\n');
+      if (editingCell && !isTableData) return;
+
+      let startR = 0, startC = 0;
+      if (selection) {
+          startR = Math.min(selection.startRow, selection.endRow);
+          startC = Math.min(selection.startCol, selection.endCol);
+      } else if (editingCell) {
+          startR = editingCell.r; startC = editingCell.c;
+      } else return;
+
+      e.preventDefault();
+      const lines = text.split(/\r?\n/).filter(l => l.trim() !== '' || l.includes('\t'));
+      if (lines.length === 0) return;
+
+      const next = JSON.parse(JSON.stringify(currentGrid));
+
+      // Smart Excel Paste: If one value copied and multiple selected, fill selection
+      if (lines.length === 1 && !lines[0].includes('\t') && selection && (selection.startRow !== selection.endRow || selection.startCol !== selection.endCol)) {
+          const fillVal = lines[0].trim();
+          const rMin = Math.min(selection.startRow, selection.endRow);
+          const rMax = Math.max(selection.startRow, selection.endRow);
+          const cMin = Math.min(selection.startCol, selection.endCol);
+          const cMax = Math.max(selection.startCol, selection.endCol);
+          for (let r = rMin; r <= rMax; r++) {
+              for (let c = cMin; c <= cMax; c++) {
+                  if (c === 0) { const m = parseCurveDate(fillVal); next[r].month = m || fillVal; }
+                  else { const num = parseFloat(fillVal.replace(/[^0-9.-]/g, '')); if (!isNaN(num)) next[r].prices[COLUMNS[c]] = num; }
+              }
+          }
+      } else {
+          lines.forEach((line, lineIdx) => {
+              const r = startR + lineIdx;
+              if (r >= next.length) next.push({ month: '', prices: {} });
+              const cells = line.split('\t');
+              cells.forEach((cell, cellIdx) => {
+                  const c = startC + cellIdx;
+                  if (c >= COLUMNS.length) return;
+                  const val = cell.trim();
+                  if (c === 0) { const m = parseCurveDate(val); next[r].month = m || val; }
+                  else {
+                      const num = parseFloat(val.replace(/[^0-9.-]/g, ''));
+                      if (!isNaN(num)) next[r].prices[COLUMNS[c]] = num;
+                      else if (val === '') delete next[r].prices[COLUMNS[c]];
+                  }
+              });
+          });
+      }
+      
+      updateGridWithHistory(next);
+      setEditingCell(null);
+      toast.success(`Imported data`);
   };
 
   const analysisChartData = useMemo(() => {
       const curveA = getForwardCurve(compareDateA);
       const curveB = getForwardCurve(compareDateB);
-      const allMonths = new Set([...curveA.map(r => r.month), ...curveB.map(r => r.month)]);
-      const sortedMonths = Array.from(allMonths).sort();
-      return sortedMonths.map(month => {
-          const rowA = curveA.find(r => r.month === month);
-          const rowB = curveB.find(r => r.month === month);
-          const valA = rowA?.prices[selectedAnalysisIndex] || null;
-          const valB = rowB?.prices[selectedAnalysisIndex] || null;
-          return {
-              month,
-              [`Curve A (${compareDateA})`]: valA,
-              [`Curve B (${compareDateB})`]: valB,
-              diff: (valA !== null && valB !== null) ? valA - valB : null
-          };
-      });
+      const allMonths = Array.from(new Set([...curveA.map(r => r.month), ...curveB.map(r => r.month)])).sort();
+      return allMonths.map(month => ({
+          month,
+          [`A (${compareDateA})`]: curveA.find(r => r.month === month)?.prices[selectedAnalysisIndex] || null,
+          [`B (${compareDateB})`]: curveB.find(r => r.month === month)?.prices[selectedAnalysisIndex] || null,
+      }));
   }, [compareDateA, compareDateB, selectedAnalysisIndex]);
 
-  const allContractMonths = useMemo(() => {
-      const dates = getAvailableCurveDates();
-      const contracts = new Set<string>();
-      dates.forEach(d => {
-          const curve = getForwardCurve(d);
-          curve.forEach(r => contracts.add(r.month));
-      });
-      return Array.from(contracts).sort();
-  }, [availableDates]); 
-
-  const evolutionChartData = useMemo(() => {
-      if (!evolutionContract) return [];
-      const dataPoints: { date: string, price: number | null }[] = [];
-      const dates = getAvailableCurveDates().sort(); 
-      dates.forEach(curveDate => {
-          const curve = getForwardCurve(curveDate);
-          const row = curve.find(r => r.month === evolutionContract);
-          if (row) {
-              dataPoints.push({
-                  date: curveDate,
-                  price: row.prices[evolutionIndex] || null
-              });
-          }
-      });
-      return dataPoints;
-  }, [evolutionContract, evolutionIndex, availableDates]);
-
   return (
-    <div className="fixed inset-0 bg-slate-900/60 backdrop-blur-sm flex items-center justify-center p-4 z-50">
-      <div className="bg-white rounded-xl shadow-2xl w-full max-w-6xl max-h-[95vh] flex flex-col overflow-hidden">
-        
-        <div className="p-0 border-b border-slate-200 bg-white flex flex-col">
-            <div className="flex justify-between items-center p-6 pb-2">
-                <h2 className="text-xl font-bold text-slate-800">Forward Curve Manager</h2>
-                <button onClick={onClose} className="text-slate-400 hover:text-slate-600">
-                    <svg className="w-6 h-6" fill="none" stroke="currentColor" viewBox="0 0 24 24"><path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M6 18L18 6M6 6l12 12" /></svg>
-                </button>
+    <div className="fixed inset-0 bg-slate-900/60 backdrop-blur-sm flex items-center justify-center p-4 z-50" onMouseUp={() => setIsSelecting(false)}>
+      <div 
+        ref={containerRef}
+        className="bg-white rounded-xl shadow-2xl w-full max-w-7xl h-[92vh] flex flex-col overflow-hidden outline-none ring-1 ring-slate-200"
+        onKeyDown={handleKeyDown}
+        onPaste={handlePaste}
+        tabIndex={0}
+      >
+        <div className="shrink-0 border-b border-slate-200 bg-white">
+            <div className="flex justify-between items-center p-5 pb-3">
+                <h2 className="text-lg font-extrabold text-slate-800 tracking-tight">Forward Curve Manager</h2>
+                <div className="flex items-center gap-4">
+                    <div className="flex items-center gap-1">
+                        <button onClick={undo} disabled={historyPast.length === 0} className="p-2 text-slate-400 hover:text-blue-600 disabled:opacity-30"><svg className="w-5 h-5" fill="none" stroke="currentColor" viewBox="0 0 24 24"><path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2.5} d="M3 10h10a8 8 0 018 8v2M3 10l6 6m-6-6l6-6" /></svg></button>
+                        <button onClick={redo} disabled={historyFuture.length === 0} className="p-2 text-slate-400 hover:text-blue-600 disabled:opacity-30"><svg className="w-5 h-5" fill="none" stroke="currentColor" viewBox="0 0 24 24"><path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2.5} d="M21 10h-10a8 8 0 00-8 8v2m18-10l-6 6m6-6l-6-6" /></svg></button>
+                    </div>
+                    <button onClick={onClose} className="p-2 text-slate-400 hover:text-rose-500 hover:bg-rose-50 rounded-full transition-all">
+                        <svg className="w-6 h-6" fill="none" stroke="currentColor" viewBox="0 0 24 24"><path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2.5} d="M6 18L18 6M6 6l12 12" /></svg>
+                    </button>
+                </div>
             </div>
-            <div className="flex px-6 gap-6">
-                <button 
-                    onClick={() => setActiveTab('manage')}
-                    className={`pb-3 px-2 text-sm font-bold border-b-2 transition-colors ${activeTab === 'manage' ? 'border-blue-500 text-blue-600' : 'border-transparent text-slate-500 hover:text-slate-700'}`}
-                >
-                    Projected Curves
-                </button>
-                <button 
-                    onClick={() => setActiveTab('historical')}
-                    className={`pb-3 px-2 text-sm font-bold border-b-2 transition-colors ${activeTab === 'historical' ? 'border-blue-500 text-blue-600' : 'border-transparent text-slate-500 hover:text-slate-700'}`}
-                >
-                    Historical Prices
-                </button>
-                <button 
-                    onClick={() => setActiveTab('analyze')}
-                    className={`pb-3 px-2 text-sm font-bold border-b-2 transition-colors ${activeTab === 'analyze' ? 'border-blue-500 text-blue-600' : 'border-transparent text-slate-500 hover:text-slate-700'}`}
-                >
-                    Curve Comparison
-                </button>
-                <button 
-                    onClick={() => setActiveTab('evolution')}
-                    className={`pb-3 px-2 text-sm font-bold border-b-2 transition-colors ${activeTab === 'evolution' ? 'border-blue-500 text-blue-600' : 'border-transparent text-slate-500 hover:text-slate-700'}`}
-                >
-                    Contract Evolution
-                </button>
+            <div className="flex px-6 gap-8">
+                {['manage', 'historical', 'analyze', 'evolution'].map((tab) => (
+                    <button 
+                        key={tab}
+                        onClick={() => setActiveTab(tab as any)}
+                        className={`pb-3 px-1 text-xs font-bold uppercase tracking-widest border-b-2 transition-all ${activeTab === tab ? 'border-blue-600 text-blue-600' : 'border-transparent text-slate-400 hover:text-slate-600'}`}
+                    >
+                        {tab === 'manage' ? 'Forward Curves' : tab === 'historical' ? 'Historical Data' : tab === 'analyze' ? 'Curve Comparison' : 'Contract Evolution'}
+                    </button>
+                ))}
             </div>
         </div>
 
         <div className="flex-1 overflow-hidden bg-slate-50 flex">
             {activeTab === 'manage' && (
-                <>
-                    <div className="w-64 bg-white border-r border-slate-200 flex flex-col">
-                        <div className="p-4 border-b border-slate-100 bg-slate-50">
-                            <h3 className="text-xs font-bold text-slate-500 uppercase">Available Dates</h3>
-                        </div>
-                        <div className="flex-1 overflow-y-auto p-2 space-y-1 custom-scrollbar">
-                            {availableDates.map(date => (
-                                <div key={date} className="flex group items-center justify-between hover:bg-slate-50 rounded-lg p-1 pr-2 cursor-default">
-                                    <button 
-                                        onClick={() => loadCurveForDate(date)}
-                                        className={`flex-1 text-left px-3 py-2 text-sm rounded-lg transition-colors ${curveDate === date ? 'bg-blue-50 text-blue-700 font-medium' : 'text-slate-600'}`}
-                                    >
-                                        {date}
-                                    </button>
-                                    <button 
-                                        onClick={(e) => { e.stopPropagation(); handleDelete(date); }}
-                                        className="opacity-0 group-hover:opacity-100 p-2 text-slate-400 hover:text-rose-500 hover:bg-rose-50 rounded transition-all"
-                                    >
-                                        <svg className="w-4 h-4" fill="none" stroke="currentColor" viewBox="0 0 24 24"><path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M19 7l-.867 12.142A2 2 0 0116.138 21H7.862a2 2 0 01-1.995-1.858L5 7m5 4v6m4-6v6m1-10V4a1 1 0 00-1-1h-4a1 1 0 00-1 1v3M4 7h16" /></svg>
-                                    </button>
-                                </div>
-                            ))}
-                        </div>
+                <div className="w-64 border-r border-slate-200 bg-white flex flex-col shrink-0">
+                    <div className="p-4 border-b border-slate-100 bg-slate-50/50">
+                        <h3 className="text-[10px] font-black text-slate-400 uppercase tracking-widest">Saved Snapshots</h3>
                     </div>
-
-                    <div className="flex-1 flex flex-col overflow-hidden">
-                        <div className="p-4 bg-white border-b border-slate-200 flex items-center justify-between gap-4">
-                            <div className="flex items-center gap-2">
-                                <label className="text-sm font-bold text-slate-700">Editing Curve As Of:</label>
-                                <input type="date" value={curveDate} onChange={(e) => setCurveDate(e.target.value)} className="border border-slate-300 rounded-lg px-3 py-1.5 text-sm" />
+                    <div className="flex-1 overflow-y-auto custom-scrollbar p-2 space-y-1">
+                        {availableDates.map(date => (
+                            <div 
+                                key={date} 
+                                onClick={() => loadCurveData(date)}
+                                className={`group flex items-center justify-between p-2 rounded-lg cursor-pointer transition-all ${curveDate === date ? 'bg-blue-50 text-blue-700 font-bold border border-blue-100' : 'hover:bg-slate-50 text-slate-600'}`}
+                            >
+                                <span className="text-xs">{date}</span>
+                                <button onClick={(e) => handleDeleteSnapshot(e, date)} className="p-1 text-slate-300 hover:text-rose-500 opacity-0 group-hover:opacity-100"><svg className="w-3.5 h-3.5" fill="none" stroke="currentColor" viewBox="0 0 24 24"><path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M19 7l-.867 12.142A2 2 0 0116.138 21H7.862a2 2 0 01-1.995-1.858L5 7m5 4v6m4-6v6m1-10V4a1 1 0 00-1-1h-4a1 1 0 00-1 1v3M4 7h16" /></svg></button>
                             </div>
-                            <div className="flex gap-2">
-                                <button onClick={() => { setPreviewMode(false); setInputText(''); setParsedData([]); }} className="px-3 py-1.5 text-sm font-medium text-slate-600 hover:bg-slate-100 rounded-lg">Clear</button>
-                                {previewMode ? (
-                                     <button onClick={() => setPreviewMode(false)} className="px-4 py-1.5 text-sm font-medium text-blue-600 bg-blue-50 hover:bg-blue-100 rounded-lg border border-blue-200">Edit Raw Data</button>
-                                ) : (
-                                     <button onClick={() => handleGenericParse(inputText, setParsedData, setPreviewMode)} className="px-4 py-1.5 text-sm font-medium text-white bg-blue-600 hover:bg-blue-700 rounded-lg">Parse</button>
-                                )}
-                            </div>
-                        </div>
-                        <div className="flex-1 overflow-y-auto p-6">
-                            {!previewMode ? (
-                                <textarea className="flex-1 w-full h-full p-4 border border-slate-300 rounded-lg font-mono text-xs focus:ring-2 focus:ring-blue-500/20 focus:border-blue-500 whitespace-pre leading-relaxed" placeholder="Month | BRIPE | JCC | Dated Brent | HH | HH Last Day | NBP | JKM | TTF | AECO | Station 2" value={inputText} onChange={(e) => setInputText(e.target.value)} />
-                            ) : (
-                                <PreviewTable data={parsedData} />
-                            )}
-                        </div>
-                        <div className="p-4 border-t border-slate-200 bg-white flex justify-end">
-                            <button onClick={handleSaveCurve} disabled={!previewMode} className="px-6 py-2 bg-emerald-600 hover:bg-emerald-700 text-white font-medium rounded-lg shadow-lg disabled:opacity-50">Save Current Projection</button>
-                        </div>
+                        ))}
                     </div>
-                </>
+                    <div className="p-4 border-t border-slate-100">
+                        <button onClick={() => loadCurveData(new Date().toISOString().split('T')[0])} className="w-full py-2 bg-slate-800 text-white text-[10px] font-bold rounded-lg uppercase tracking-wider hover:bg-slate-900 shadow-sm">+ New Snapshot</button>
+                    </div>
+                </div>
             )}
 
-            {activeTab === 'historical' && (
+            {(activeTab === 'manage' || activeTab === 'historical') && (
                 <div className="flex-1 flex flex-col overflow-hidden">
-                    <div className="p-4 bg-white border-b border-slate-200 flex items-center justify-between gap-4">
-                        <div className="flex items-center gap-2">
-                            <label className="text-sm font-bold text-slate-800">Historical Market Realized Prices</label>
-                            <p className="text-xs text-slate-500">(Monthly averages for realized months)</p>
+                    <div className="p-4 bg-white border-b border-slate-200 flex items-center justify-between shadow-sm z-10">
+                        <div className="flex items-center gap-6">
+                            {activeTab === 'manage' && (
+                                <div className="flex items-center gap-2">
+                                    <span className="text-[10px] font-black text-slate-400 uppercase">Curve As Of:</span>
+                                    <input type="date" value={curveDate} onChange={(e) => setCurveDate(e.target.value)} className="border border-slate-200 rounded-lg px-3 py-1.5 text-sm font-bold text-blue-600 outline-none hover:border-blue-300 focus:ring-2 focus:ring-blue-500/20" />
+                                </div>
+                            )}
+                            <div className="hidden lg:flex items-center gap-4 px-3 py-1.5 bg-slate-50 border border-slate-200 rounded-lg text-[9px] font-bold text-slate-500 uppercase">
+                                <span>Ctrl+Z: Undo</span>
+                                <span>Ctrl+D: Fill Down</span>
+                                <span>Ctrl+R: Fill Right</span>
+                            </div>
                         </div>
                         <div className="flex gap-2">
-                            {historicalPreview ? (
-                                 <button onClick={() => setHistoricalPreview(false)} className="px-4 py-1.5 text-sm font-medium text-blue-600 bg-blue-50 hover:bg-blue-100 rounded-lg border border-blue-200">Edit Raw Data</button>
-                            ) : (
-                                 <button onClick={() => handleGenericParse(historicalInput, setHistoricalParsed, setHistoricalPreview)} className="px-4 py-1.5 text-sm font-medium text-white bg-blue-600 hover:bg-blue-700 rounded-lg">Parse</button>
-                            )}
+                             <button onClick={() => updateGridWithHistory([...currentGrid, { month: '', prices: {} }])} className="px-4 py-2 text-xs font-bold text-slate-600 bg-white border border-slate-200 rounded-lg hover:bg-slate-50 transition-all">Add Row</button>
+                             <button onClick={handleSave} className="px-6 py-2 text-xs font-bold text-white bg-blue-600 rounded-lg shadow-lg hover:bg-blue-700 transition-all">Save Grid</button>
                         </div>
                     </div>
-                    <div className="flex-1 overflow-y-auto p-6">
-                        {!historicalPreview ? (
-                            <textarea className="flex-1 w-full h-full p-4 border border-slate-300 rounded-lg font-mono text-xs focus:ring-2 focus:ring-blue-500/20 focus:border-blue-500 whitespace-pre leading-relaxed" placeholder="Month | BRIPE | JCC | Dated Brent | HH | HH Last Day | NBP | JKM | TTF | AECO | STN 2" value={historicalInput} onChange={(e) => setHistoricalInput(e.target.value)} />
-                        ) : (
-                            <PreviewTable data={historicalParsed} />
-                        )}
+
+                    <div className="flex-1 overflow-auto custom-scrollbar p-6 bg-slate-100/30">
+                        <div className="bg-white border border-slate-300 rounded shadow-md min-w-max flex flex-col select-none relative">
+                            <div className="flex sticky top-0 bg-slate-200 border-b-2 border-slate-300 divide-x divide-slate-300 z-20">
+                                {COLUMNS.map((col, idx) => (
+                                    <div key={col} className={`px-4 py-2 text-[9px] font-black text-slate-600 uppercase tracking-tighter text-center ${idx === 0 ? 'w-32' : 'w-24'}`}>
+                                        {col}
+                                    </div>
+                                ))}
+                            </div>
+
+                            <div className="divide-y divide-slate-200">
+                                {currentGrid.map((row, rIdx) => (
+                                    <div key={rIdx} className="flex divide-x divide-slate-200">
+                                        {COLUMNS.map((col, cIdx) => {
+                                            const isMonthCol = cIdx === 0;
+                                            const active = editingCell?.r === rIdx && editingCell?.c === cIdx;
+                                            const val = isMonthCol ? row.month : row.prices[col];
+                                            const selected = isSelected(rIdx, cIdx);
+
+                                            return (
+                                                <div 
+                                                    key={col} 
+                                                    onMouseDown={() => handleCellMouseDown(rIdx, cIdx)}
+                                                    onMouseEnter={() => handleCellMouseEnter(rIdx, cIdx)}
+                                                    onDoubleClick={() => handleCellDoubleClick(rIdx, cIdx)}
+                                                    className={`relative h-9 flex items-center transition-all ${isMonthCol ? 'w-32 bg-slate-50/80' : 'w-24'} ${selected ? 'bg-blue-50 ring-1 ring-blue-400 z-10' : ''}`}
+                                                >
+                                                    {active ? (
+                                                        <input 
+                                                            autoFocus
+                                                            type="text"
+                                                            value={editValue}
+                                                            onChange={(e) => setEditValue(e.target.value)}
+                                                            onBlur={finishEditing}
+                                                            className="absolute inset-0 w-full h-full px-3 text-xs font-mono font-bold bg-white outline-none ring-2 ring-blue-500 z-30 shadow-lg"
+                                                        />
+                                                    ) : (
+                                                        <div className={`px-3 text-xs font-mono truncate w-full ${isMonthCol ? 'font-bold text-slate-700' : 'text-right text-slate-600'}`}>
+                                                            {isMonthCol ? (val || '-') : (val !== undefined ? Number(val).toFixed(2) : '')}
+                                                        </div>
+                                                    )}
+                                                </div>
+                                            );
+                                        })}
+                                    </div>
+                                ))}
+                            </div>
+                        </div>
                     </div>
-                    <div className="p-4 border-t border-slate-200 bg-white flex justify-end">
-                        <button onClick={handleSaveHistorical} disabled={!historicalPreview} className="px-6 py-2 bg-emerald-600 hover:bg-emerald-700 text-white font-medium rounded-lg shadow-lg disabled:opacity-50">Update Historical Data</button>
+                    
+                    {/* Status Bar */}
+                    <div className="h-8 bg-slate-800 text-white flex items-center px-4 justify-between shrink-0">
+                        <div className="flex gap-4 items-center">
+                             <span className="text-[10px] font-bold text-slate-400 uppercase">Internal History: {historyPast.length} Past | {historyFuture.length} Future</span>
+                        </div>
+                        {selectionStats && selectionStats.numericCount > 0 && (
+                            <div className="flex gap-6 text-[10px] font-mono">
+                                <div className="flex gap-1.5"><span className="text-slate-400">AVERAGE:</span> <span className="font-bold">{selectionStats.avg.toFixed(3)}</span></div>
+                                <div className="flex gap-1.5"><span className="text-slate-400">COUNT:</span> <span className="font-bold">{selectionStats.numericCount}</span></div>
+                                <div className="flex gap-1.5"><span className="text-slate-400">SUM:</span> <span className="font-bold">{selectionStats.sum.toFixed(3)}</span></div>
+                            </div>
+                        )}
                     </div>
                 </div>
             )}
 
             {activeTab === 'analyze' && (
-                <div className="flex-1 flex flex-col p-6 space-y-6 overflow-y-auto">
-                    <div className="flex flex-wrap gap-4 items-end bg-white p-4 rounded-xl border border-slate-200 shadow-sm">
-                        <div className="flex flex-col gap-1">
-                            <label className="text-xs font-bold text-slate-400 uppercase">Index</label>
-                            <select value={selectedAnalysisIndex} onChange={(e) => setSelectedAnalysisIndex(e.target.value)} className="border border-slate-300 rounded-lg px-3 py-2 text-sm font-bold text-slate-700">{INDICES.map(idx => <option key={idx} value={idx}>{idx}</option>)}</select>
+                <div className="flex-1 flex flex-col p-8 space-y-6 overflow-y-auto">
+                    <div className="grid grid-cols-1 md:grid-cols-3 gap-4 bg-white p-5 rounded-2xl border border-slate-200 shadow-sm">
+                        <div className="space-y-1">
+                            <label className="text-[10px] font-black text-slate-400 uppercase">Benchmark</label>
+                            <select value={selectedAnalysisIndex} onChange={(e) => setSelectedAnalysisIndex(e.target.value)} className="w-full border border-slate-200 rounded-xl px-4 py-2.5 text-sm font-bold text-slate-700">{INDICES.map(idx => <option key={idx} value={idx}>{idx}</option>)}</select>
                         </div>
-                        <div className="flex flex-col gap-1">
-                            <label className="text-xs font-bold text-slate-400 uppercase">Curve A (Baseline)</label>
-                            <select value={compareDateA} onChange={(e) => setCompareDateA(e.target.value)} className="border border-slate-300 rounded-lg px-3 py-2 text-sm">{availableDates.map(d => <option key={d} value={d}>{d}</option>)}</select>
+                        <div className="space-y-1">
+                            <label className="text-[10px] font-black text-slate-400 uppercase">Baseline Curve</label>
+                            <select value={compareDateA} onChange={(e) => setCompareDateA(e.target.value)} className="w-full border border-slate-200 rounded-xl px-4 py-2.5 text-sm">{availableDates.map(d => <option key={d} value={d}>{d}</option>)}</select>
                         </div>
-                        <div className="flex flex-col gap-1">
-                            <label className="text-xs font-bold text-slate-400 uppercase">Curve B (Comparison)</label>
-                            <select value={compareDateB} onChange={(e) => setCompareDateB(e.target.value)} className="border border-slate-300 rounded-lg px-3 py-2 text-sm">{availableDates.map(d => <option key={d} value={d}>{d}</option>)}</select>
+                        <div className="space-y-1">
+                            <label className="text-[10px] font-black text-slate-400 uppercase">Comparison Curve</label>
+                            <select value={compareDateB} onChange={(e) => setCompareDateB(e.target.value)} className="w-full border border-slate-200 rounded-xl px-4 py-2.5 text-sm">{availableDates.map(d => <option key={d} value={d}>{d}</option>)}</select>
                         </div>
                     </div>
-                    <div className="grid grid-cols-1 lg:grid-cols-3 gap-6">
-                        <div className="lg:col-span-2 bg-white p-4 rounded-xl border border-slate-200 shadow-sm h-[400px]">
-                            <ResponsiveContainer width="100%" height="100%">
-                                <LineChart data={analysisChartData}>
-                                    <CartesianGrid strokeDasharray="3 3" vertical={false} stroke="#f1f5f9" />
-                                    <XAxis dataKey="month" tick={{fontSize: 10}} />
-                                    <YAxis domain={['auto', 'auto']} />
-                                    <Tooltip />
-                                    <Legend />
-                                    <Line type="monotone" dataKey={`Curve A (${compareDateA})`} stroke="#3b82f6" strokeWidth={2} dot={false} />
-                                    <Line type="monotone" dataKey={`Curve B (${compareDateB})`} stroke="#ef4444" strokeWidth={2} dot={false} strokeDasharray="5 5" />
-                                </LineChart>
-                            </ResponsiveContainer>
-                        </div>
+                    <div className="flex-1 min-h-[450px] bg-white p-8 rounded-2xl border border-slate-200 shadow-sm">
+                        <ResponsiveContainer width="100%" height="100%">
+                            <LineChart data={analysisChartData}>
+                                <CartesianGrid strokeDasharray="3 3" vertical={false} stroke="#f1f5f9" />
+                                <XAxis dataKey="month" tick={{fontSize: 10, fontWeight: 700}} axisLine={false} tickLine={false} />
+                                <YAxis axisLine={false} tickLine={false} tick={{fontSize: 10}} />
+                                <Tooltip contentStyle={{ borderRadius: '12px', border: 'none', boxShadow: '0 10px 15px -3px rgba(0,0,0,0.1)' }} />
+                                <Legend verticalAlign="top" align="right" />
+                                <Line type="monotone" dataKey={`A (${compareDateA})`} stroke="#3b82f6" strokeWidth={4} dot={false} animationDuration={600} />
+                                <Line type="monotone" dataKey={`B (${compareDateB})`} stroke="#ef4444" strokeWidth={4} dot={false} strokeDasharray="6 6" animationDuration={600} />
+                            </LineChart>
+                        </ResponsiveContainer>
                     </div>
                 </div>
             )}
 
             {activeTab === 'evolution' && (
-                <div className="flex-1 flex flex-col p-6 space-y-6 overflow-y-auto">
-                    <div className="flex flex-wrap gap-4 items-end bg-white p-4 rounded-xl border border-slate-200 shadow-sm">
-                        <div className="flex flex-col gap-1">
-                            <label className="text-xs font-bold text-slate-400 uppercase">Index</label>
-                            <select value={evolutionIndex} onChange={(e) => setEvolutionIndex(e.target.value)} className="border border-slate-300 rounded-lg px-3 py-2 text-sm font-bold text-slate-700">{INDICES.map(idx => <option key={idx} value={idx}>{idx}</option>)}</select>
+                <div className="flex-1 flex flex-col p-8 space-y-6 overflow-y-auto">
+                    <div className="grid grid-cols-1 md:grid-cols-2 gap-4 bg-white p-5 rounded-2xl border border-slate-200 shadow-sm">
+                        <div className="space-y-1">
+                            <label className="text-[10px] font-black text-slate-400 uppercase">Index</label>
+                            <select value={evolutionIndex} onChange={(e) => setEvolutionIndex(e.target.value)} className="w-full border border-slate-200 rounded-xl px-4 py-2.5 text-sm font-bold text-slate-700">{INDICES.map(idx => <option key={idx} value={idx}>{idx}</option>)}</select>
                         </div>
-                        <div className="flex flex-col gap-1">
-                            <label className="text-xs font-bold text-slate-400 uppercase">Contract Month</label>
-                            <select value={evolutionContract} onChange={(e) => setEvolutionContract(e.target.value)} className="border border-slate-300 rounded-lg px-3 py-2 text-sm">
-                                <option value="">Select a Month</option>
-                                {allContractMonths.map(m => <option key={m} value={m}>{m}</option>)}
+                        <div className="space-y-1">
+                            <label className="text-[10px] font-black text-slate-400 uppercase">Contract Month</label>
+                            <select value={evolutionContract} onChange={(e) => setEvolutionContract(e.target.value)} className="w-full border border-slate-200 rounded-xl px-4 py-2.5 text-sm">
+                                <option value="">Select Target Month...</option>
+                                {Array.from(new Set(availableDates.flatMap(d => getForwardCurve(d).map(r => r.month)))).sort().map(m => <option key={m} value={m}>{m}</option>)}
                             </select>
                         </div>
                     </div>
-                    <div className="bg-white p-6 rounded-xl border border-slate-200 shadow-sm flex-1 min-h-[400px]">
-                        {evolutionChartData.length > 0 ? (
+                    <div className="flex-1 min-h-[450px] bg-white p-8 rounded-2xl border border-slate-200 shadow-sm flex items-center justify-center">
+                        {evolutionContract ? (
                             <ResponsiveContainer width="100%" height="100%">
-                                <LineChart data={evolutionChartData}>
+                                <LineChart data={availableDates.sort().map(d => ({ date: d, price: getForwardCurve(d).find(r => r.month === evolutionContract)?.prices[evolutionIndex] || null }))}>
                                     <CartesianGrid strokeDasharray="3 3" vertical={false} stroke="#f1f5f9" />
-                                    <XAxis dataKey="date" tick={{fontSize: 11}} />
-                                    <YAxis domain={['auto', 'auto']} />
+                                    <XAxis dataKey="date" tick={{fontSize: 10, fontWeight: 700}} axisLine={false} tickLine={false} />
+                                    <YAxis axisLine={false} tickLine={false} tick={{fontSize: 10}} />
                                     <Tooltip />
-                                    <Line type="monotone" dataKey="price" stroke="#8b5cf6" strokeWidth={3} />
+                                    <Line type="monotone" dataKey="price" stroke="#8b5cf6" strokeWidth={4} dot={{ r: 4, fill: '#8b5cf6', strokeWidth: 2, stroke: '#fff' }} />
                                 </LineChart>
                             </ResponsiveContainer>
-                        ) : <div className="flex items-center justify-center h-full text-slate-400">Select a contract month to view price evolution.</div>}
+                        ) : <span className="text-slate-400 text-sm font-bold italic">Select a contract month to visualize its price history over time</span>}
                     </div>
                 </div>
             )}
@@ -458,24 +628,3 @@ export const ForwardCurveModal: React.FC<ForwardCurveModalProps> = ({ onClose, o
     </div>
   );
 };
-
-const PreviewTable = ({ data }: { data: ForwardCurveRow[] }) => (
-    <div className="overflow-x-auto border border-slate-200 rounded-lg shadow-sm">
-        <table className="w-full text-sm text-left bg-white">
-            <thead className="text-xs text-slate-500 uppercase bg-slate-100 border-b border-slate-200 sticky top-0">
-                <tr>{COLUMNS.map(col => <th key={col} className="px-4 py-3 font-bold">{col}</th>)}</tr>
-            </thead>
-            <tbody className="divide-y divide-slate-100">
-                {data.map((row, i) => (
-                    <tr key={i} className="hover:bg-slate-50">
-                        <td className="px-4 py-2 font-mono font-bold text-slate-700">{row.month}</td>
-                        {COLUMNS.slice(1).map((col) => {
-                            const val = row.prices[col];
-                            return <td key={col} className={`px-4 py-2 ${val !== undefined ? 'text-slate-600' : 'text-slate-300 italic'}`}>{val !== undefined ? val.toFixed(3) : '-'}</td>;
-                        })}
-                    </tr>
-                ))}
-            </tbody>
-        </table>
-    </div>
-);
