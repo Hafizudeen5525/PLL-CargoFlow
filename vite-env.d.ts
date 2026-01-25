@@ -1,83 +1,19 @@
-// Images
+/// <reference types="vite/client" />
+
+/**
+ * Fix: Use triple-slash reference to 'vite/client' to include standard Vite types.
+ * This resolves "Duplicate identifier" and "identical modifiers" errors by
+ * removing manual re-declarations of assets, CSS modules, and environment interfaces
+ * that are already provided by Vite.
+ */
+
 declare module '*.svg' {
   import * as React from 'react';
-  export const ReactComponent: React.FunctionComponent<React.SVGProps<SVGSVGElement> & { title?: string }>;
-  const src: string;
-  export default src;
-}
-
-declare module '*.png' {
-  const content: string;
-  export default content;
-}
-
-declare module '*.jpg' {
-  const content: string;
-  export default content;
-}
-
-declare module '*.jpeg' {
-  const content: string;
-  export default content;
-}
-
-declare module '*.gif' {
-  const content: string;
-  export default content;
-}
-
-declare module '*.webp' {
-  const content: string;
-  export default content;
-}
-
-declare module '*.ico' {
-  const content: string;
-  export default content;
-}
-
-declare module '*.bmp' {
-  const content: string;
-  export default content;
-}
-
-// CSS modules
-declare module '*.module.css' {
-  const classes: { [key: string]: string };
-  export default classes;
-}
-
-declare module '*.module.scss' {
-  const classes: { [key: string]: string };
-  export default classes;
-}
-
-declare module '*.module.sass' {
-  const classes: { [key: string]: string };
-  export default classes;
-}
-
-declare module '*.module.less' {
-  const classes: { [key: string]: string };
-  export default classes;
-}
-
-declare module '*.module.styl' {
-  const classes: { [key: string]: string };
-  export default classes;
-}
-
-// Vite env
-interface ImportMetaEnv {
-  readonly [key: string]: string | boolean | undefined;
-  readonly BASE_URL: string;
-  readonly MODE: string;
-  readonly DEV: boolean;
-  readonly PROD: boolean;
-  readonly SSR: boolean;
-}
-
-interface ImportMeta {
-  readonly env: ImportMetaEnv;
-  readonly glob: (pattern: string) => Record<string, () => Promise<any>>;
+  /**
+   * Fix: Augment the existing *.svg module declaration from vite/client
+   * to add support for ReactComponent (commonly used with vite-plugin-svgr).
+   */
+  export const ReactComponent: React.FunctionComponent<
+    React.SVGProps<SVGSVGElement> & { title?: string }
+  >;
 }
