@@ -1,3 +1,4 @@
+
 import React, { useState, useMemo, useRef, useEffect, useCallback } from 'react';
 import { CargoProfile, PnLBucket, EmptyCargoProfile } from '../types';
 import { motion, AnimatePresence } from 'framer-motion';
@@ -353,7 +354,7 @@ export const CargoList: React.FC<CargoListProps> = ({
 
     exportProfiles.forEach(p => {
         const buildRow = (type: 'Buy' | 'Sell', tier: 1 | 2) => {
-            const prefix = tier === 1 ? (type === 'Buy' ? 'buyPrice' : 'sellPrice') : (type === 'Buy' ? 'tier2BuyPrice' : 'tier2SellPrice');
+            const prefix = tier === 1 ? (type === 'Buy' ? 'buyPrice' : 'sellPrice') : (type === 'Buy' ? 'tier2BuyPrice' : (type === 'Sell' ? 'tier2SellPrice' : 'sellPrice'));
             const volKey = tier === 1 ? (type === 'Buy' ? 'loadedVolume' : 'deliveredVolume') : (type === 'Buy' ? 'tier2LoadedVolume' : 'tier2DeliveredVolume');
             const formulaKey = tier === 1 ? (type === 'Buy' ? 'buyFormula' : 'sellFormula') : (type === 'Buy' ? 'tier2BuyFormula' : 'tier2SellFormula');
             
@@ -414,6 +415,28 @@ export const CargoList: React.FC<CargoListProps> = ({
   const handleSort = (key: keyof CargoProfile) => {
     setSortConfig(prev => ({ key, direction: prev.key === key && prev.direction === 'asc' ? 'desc' : 'asc' }));
   };
+
+  const toggleSelectAll = useCallback(() => {
+    const allVisibleSelected = processedProfiles.every(p => selectedIds.has(p.id));
+    if (allVisibleSelected && processedProfiles.length > 0) {
+      // Deselect all visible
+      setSelectedIds(prev => {
+        const next = new Set(prev);
+        processedProfiles.forEach(p => next.delete(p.id));
+        return next;
+      });
+    } else {
+      // Select all visible
+      setSelectedIds(prev => {
+        const next = new Set(prev);
+        processedProfiles.forEach(p => next.add(p.id));
+        return next;
+      });
+    }
+  }, [processedProfiles, selectedIds]);
+
+  const isAllVisibleSelected = processedProfiles.length > 0 && processedProfiles.every(p => selectedIds.has(p.id));
+  const isSomeVisibleSelected = processedProfiles.some(p => selectedIds.has(p.id)) && !isAllVisibleSelected;
 
   const formatCurrency = (val: number) => 
     new Intl.NumberFormat('en-US', { style: 'currency', currency: 'USD', minimumFractionDigits: 0, maximumFractionDigits: 0 }).format(val);
@@ -505,7 +528,13 @@ export const CargoList: React.FC<CargoListProps> = ({
                     <div className="min-w-max relative h-full">
                         <div className="sticky top-0 bg-white z-40 border-b-2 border-slate-200 flex shadow-sm">
                             <div className="px-4 py-3 bg-slate-50 border-r border-slate-200 flex items-center w-12 shrink-0">
-                                <input type="checkbox" className="rounded border-slate-300 text-indigo-600" />
+                                <input 
+                                  type="checkbox" 
+                                  className="rounded border-slate-300 text-indigo-600 cursor-pointer" 
+                                  checked={isAllVisibleSelected}
+                                  ref={el => { if (el) el.indeterminate = isSomeVisibleSelected; }}
+                                  onChange={toggleSelectAll}
+                                />
                             </div>
                             {headers.map((header, idx) => {
                                 const isStrat = header === 'strategyName';
@@ -655,7 +684,7 @@ export const CargoList: React.FC<CargoListProps> = ({
                                             const next = new Set(selectedIds);
                                             if (e.target.checked) next.add(p.id); else next.delete(p.id);
                                             setSelectedIds(next);
-                                        }} className="rounded border-slate-300 text-indigo-600" />
+                                        }} className="rounded border-slate-300 text-indigo-600 cursor-pointer" />
                                     </div>
                                     
                                     <div className="px-4 py-3 shrink-0 truncate text-[11px] font-bold text-slate-900 border-r-2 border-slate-200 sticky left-12 bg-white group-hover:bg-indigo-50/30 z-30" style={{ width: STRATEGY_COL_WIDTH }}>

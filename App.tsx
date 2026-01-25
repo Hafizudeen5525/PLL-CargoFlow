@@ -5,7 +5,6 @@ import { motion, AnimatePresence } from 'framer-motion';
 import { Dashboard } from './components/Dashboard';
 import { CargoList } from './components/CargoList';
 import { CargoForm } from './components/CargoForm';
-import { TradeMatching } from './components/TradeMatching';
 import { ForwardCurveModal } from './components/ForwardCurveModal';
 import { BulkImportModal } from './components/BulkImportModal';
 import { ExposureView } from './components/ExposureView';
@@ -13,11 +12,10 @@ import { DiscrepancyCheck, ReconciliationData } from './components/DiscrepancyCh
 import { CargoProfile, PnLBucket } from './types';
 import { getMarketData, getForwardCurve, recalculateProfile, getPortfolioYear } from './services/calculationService';
 
-// Navigation Items
+// Navigation Items - Removed 'matching'
 const NAV_ITEMS = [
   { id: 'dashboard', label: 'Dashboard', icon: 'M4 6a2 2 0 012-2h2a2 2 0 012 2v2a2 2 0 01-2 2H6a2 2 0 01-2-2V6zM14 6a2 2 0 012-2h2a2 2 0 012 2v2a2 2 0 01-2 2h-2a2 2 0 01-2-2V6zM4 16a2 2 0 012-2h2a2 2 0 01-1 2H6a2 2 0 01-2-2v-2zM14 16a2 2 0 012-2h2a2 2 0 01-1 2h-2a2 2 0 01-2-2v-2z' },
   { id: 'cargos', label: 'Cargo List', icon: 'M9 5H7a2 2 0 00-2 2v12a2 2 0 002 2h10a2 2 0 002-2V7a2 2 0 00-2-2h-2M9 5a2 2 0 002 2h2a2 2 0 002-2M9 5a2 2 0 012-2h2a2 2 0 012 2' },
-  { id: 'matching', label: 'Trade Matching', icon: 'M8 7h12m0 0l-4-4m4 4l-4 4m0 6H4m0 0l4 4m-4-4l4-4' },
   { id: 'exposure', label: 'Exposure View', icon: 'M9 19v-6a2 2 0 00-2-2H5a2 2 0 00-2 2v6a2 2 0 002 2h2a2 2 0 002-2zm0 0V9a2 2 0 012-2h2a2 2 0 012 2v10m-6 0a2 2 0 002 2h2a2 2 0 002-2m0 0V5a2 2 0 012-2h2a2 2 0 012 2v14a2 2 0 002 2h2a2 2 0 002-2v-6a2 2 0 01-2-2h-2a2 2 0 01-2 2v6' },
   { id: 'discrepancy', label: 'TRMS Reconcile', icon: 'M9 5H7a2 2 0 00-2 2v12a2 2 0 002 2h10a2 2 0 002-2V7a2 2 0 00-2-2h-2M9 5a2 2 0 002 2h2a2 2 0 002-2M9 5a2 2 0 012-2h2a2 2 0 002-2M9 5a2 2 0 012 2h2a2 2 0 012 2m-3 7h3m-3 4h3m-6-4h.01M9 16h.01' },
 ];
@@ -160,11 +158,12 @@ const App: React.FC = () => {
 
   const handleBulkImport = (newProfiles: CargoProfile[]) => {
     updateProfiles(prev => {
-        const existingMap = new Map(prev.map(p => [p.strategyName, p]));
+        // Fix: Explicitly type existingMap and handle potential undefined spread for existing objects
+        const existingMap = new Map<string, CargoProfile>(prev.map(p => [p.strategyName, p]));
         newProfiles.forEach(np => {
             const existing = existingMap.get(np.strategyName);
             if (existing) {
-                existingMap.set(np.strategyName, { ...existing, ...np } as CargoProfile);
+                existingMap.set(np.strategyName, { ...(existing as CargoProfile), ...np });
             } else {
                 existingMap.set(np.strategyName, np);
             }
@@ -179,18 +178,6 @@ const App: React.FC = () => {
     updateProfiles(prev => prev.map(p => 
       p.pnlBucket === PnLBucket.Realized ? p : (recalculateProfile(p, true) as CargoProfile)
     ));
-  };
-
-  const handleMatch = (buy: CargoProfile, sell: CargoProfile) => {
-    updateProfiles(prev => {
-      const next = [...prev];
-      const buyIdx = next.findIndex(p => p.id === buy.id);
-      if (buyIdx !== -1) {
-        next[buyIdx] = { ...buy, buyer: sell.buyer, pnlBucket: PnLBucket.Realized };
-      }
-      return next;
-    });
-    alert(`Matched ${buy.strategyName} with ${sell.strategyName}`);
   };
 
   const handleEdit = (p?: CargoProfile) => {
@@ -330,10 +317,6 @@ const App: React.FC = () => {
                             onBulkUpdate={handleBulkUpdate}
                             onBulkImport={handleBulkImport}
                         />
-                    </motion.div>
-                ) : view === 'matching' ? (
-                    <motion.div key="matching" initial={{opacity:0, x:-20}} animate={{opacity:1, x:0}} exit={{opacity:0, x:20}} className="h-full">
-                        <TradeMatching profiles={filteredProfiles} onMatch={handleMatch} />
                     </motion.div>
                 ) : view === 'exposure' ? (
                     <motion.div key="exposure" initial={{opacity:0, x:-20}} animate={{opacity:1, x:0}} exit={{opacity:0, x:20}} className="h-full">

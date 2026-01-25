@@ -163,11 +163,9 @@ export const ExposureView: React.FC<ExposureViewProps> = ({ profiles }) => {
     }, [profiles, drillDownCell]);
 
     const totalSpecificContribution = useMemo<number>(() => {
-        // Fix: Explicitly type accumulator for arithmetic safety
         return contributors.reduce((acc: number, p) => acc + (p._specificContribution || 0), 0);
     }, [contributors]);
 
-    // Fix: Explicitly type the reducer accumulator and current value to avoid arithmetic errors
     const grandNetTotal = useMemo<number>(() => {
         const gridValues = Object.values(tableData.grid);
         return gridValues.reduce((acc: number, row: any) => {
@@ -293,7 +291,7 @@ export const ExposureView: React.FC<ExposureViewProps> = ({ profiles }) => {
     };
 
     return (
-        <div className="flex flex-col gap-6 p-2 min-h-[800px]">
+        <div className="flex flex-col gap-6 p-2">
             <section className="bg-white rounded-2xl border border-slate-200 shadow-sm overflow-hidden flex flex-col shrink-0">
                 <div className="p-5 border-b border-slate-100 flex flex-col md:flex-row justify-between items-start md:items-center gap-4 bg-slate-50/30">
                     <div>
@@ -334,12 +332,10 @@ export const ExposureView: React.FC<ExposureViewProps> = ({ profiles }) => {
                         <tbody className="divide-y divide-slate-100">
                             {tableData.hasData ? (
                                 tableData.months.map(m => {
-                                    // Fix: Explicitly type accumulator for arithmetic safety
                                     const rowTotal = INDICES.reduce((sum: number, idx) => sum + (tableData.grid[m][idx] || 0), 0);
                                     if (Math.abs(rowTotal) < 0.1) return null; 
                                     const [y, mon] = m.split('-');
-                                    const dateObj = new Date(parseInt(y), parseInt(mon)-1, 1);
-                                    const monthName = dateObj.toLocaleString('en-US', { month: 'short' });
+                                    const monthName = new Date(parseInt(y), parseInt(mon)-1, 1).toLocaleString('en-US', { month: 'short' });
 
                                     return (
                                         <tr key={m} className="hover:bg-indigo-50/30 transition-colors group">
@@ -384,7 +380,6 @@ export const ExposureView: React.FC<ExposureViewProps> = ({ profiles }) => {
                                 <tr className="bg-slate-900 text-white font-bold">
                                     <td className="px-6 py-4 sticky left-0 bg-slate-900 border-r border-slate-800">GRAND NET TOTAL</td>
                                     {INDICES.map(idx => {
-                                        // Fix: Explicitly type accumulator for arithmetic safety
                                         const colTotal = tableData.months.reduce((sum: number, m) => sum + (tableData.grid[m][idx] || 0), 0);
                                         return (
                                             <td key={idx} className={`px-4 py-4 text-center ${colTotal < 0 ? 'text-rose-400' : ''}`}>
@@ -487,7 +482,7 @@ export const ExposureView: React.FC<ExposureViewProps> = ({ profiles }) => {
                         </div>
                     </div>
 
-                    <div className="flex-1 bg-white rounded-xl border border-slate-200 shadow-sm flex flex-col overflow-hidden">
+                    <div className="flex-1 bg-white rounded-xl border border-slate-200 shadow-sm flex flex-col overflow-hidden h-[400px]">
                         <div className="p-4 border-b border-slate-100 bg-slate-50/50">
                             <div className="flex justify-between items-center">
                                 <h3 className="text-sm font-bold text-slate-800">Net Exposure Distribution</h3>
@@ -507,7 +502,6 @@ export const ExposureView: React.FC<ExposureViewProps> = ({ profiles }) => {
                                         </div>
                                         <div className="flex h-1.5 w-full rounded-full overflow-hidden bg-slate-100">
                                             {Object.entries(data.indices).map(([idx, vol], i) => (
-                                                /* // @google/genai fixes: arithmetic operation on unknown reduce result by explicitly casting to number */
                                                 <div key={i} className={`${getIndexColorStr(idx)} h-full`} style={{ width: `${(Math.abs(vol as number) / (Object.values(data.indices).reduce((a: number, b: any) => a + Math.abs(b), 0) as number)) * 100}%` }} />
                                             ))}
                                         </div>
@@ -532,7 +526,7 @@ export const ExposureView: React.FC<ExposureViewProps> = ({ profiles }) => {
                         </div>
                     </div>
 
-                    <div className="flex-1 flex flex-col md:flex-row gap-4 min-h-0">
+                    <div className="h-[600px] flex flex-col md:flex-row gap-4">
                         <div className="flex-[2] bg-white rounded-xl border border-slate-200 shadow-sm flex flex-col overflow-hidden">
                             <div className="p-4 border-b border-slate-100 flex justify-between items-center bg-slate-50/50">
                                 <h3 className="text-sm font-bold text-slate-700 uppercase tracking-tight">Active Net Exposure</h3>

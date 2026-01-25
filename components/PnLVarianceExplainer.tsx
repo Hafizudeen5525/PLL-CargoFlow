@@ -1,4 +1,3 @@
-
 import React, { useMemo, useState } from 'react';
 import { CargoProfile, PnLBucket } from '../types';
 import { recalculateProfile, getGroupName, getIndexPrice, getIndexType } from '../services/calculationService';
@@ -45,7 +44,7 @@ export const PnLVarianceExplainer: React.FC<PnLVarianceExplainerProps> = ({
 }) => {
   const [isExpanded, setIsExpanded] = useState(false);
 
-  const attribution = useMemo(() => {
+  const attribution = useMemo<Attribution | null>(() => {
     if (!currentCurveDate || !baselineCurveDate) return null;
 
     const attr: Attribution = {
@@ -61,8 +60,9 @@ export const PnLVarianceExplainer: React.FC<PnLVarianceExplainerProps> = ({
         items: []
     };
 
-    const currentMap = new Map(currentProfiles.map(p => [p.strategyName, p]));
-    const baselineMap = new Map(baselineProfiles.map(p => [p.strategyName, p]));
+    // Fix: Explicitly type Maps to ensure values are treated as CargoProfile and not unknown
+    const currentMap = new Map<string, CargoProfile>(currentProfiles.map(p => [p.strategyName, p]));
+    const baselineMap = new Map<string, CargoProfile>(baselineProfiles.map(p => [p.strategyName, p]));
     const allStrategies = Array.from(new Set([...currentMap.keys(), ...baselineMap.keys()]));
 
     // Temporary storage for index price changes to avoid redundant lookups
@@ -212,8 +212,10 @@ export const PnLVarianceExplainer: React.FC<PnLVarianceExplainerProps> = ({
     return <div className="bg-white border border-slate-200 rounded-xl p-4 text-center text-xs text-slate-400 italic">No significant portfolio variance detected.</div>;
   }
 
-  const isProfitDelta = attribution.totalDelta >= 0;
-  const hasEdits = Math.abs(attribution.profileEdits) > 1000;
+  // Fix: Explicitly narrow attribution to avoid "unknown" errors during comparison
+  const attr = attribution as Attribution;
+  const isProfitDelta = attr.totalDelta >= 0;
+  const hasEdits = Math.abs(attr.profileEdits) > 1000;
 
   return (
     <div className="bg-white border border-slate-200 rounded-2xl overflow-hidden shadow-sm hover:shadow-md transition-all">
@@ -233,21 +235,21 @@ export const PnLVarianceExplainer: React.FC<PnLVarianceExplainerProps> = ({
             <div className="text-sm text-slate-700">
                 <p className="font-bold text-base mb-1">Portfolio Variance Walk</p>
                 <div className="space-y-0.5">
-                    {attribution.topIndexDriver && (
+                    {attr.topIndexDriver && (
                         <p className="text-slate-600">
-                            <span className="font-black text-indigo-600">{attribution.topIndexDriver.name}</span> 
-                            {attribution.topIndexDriver.priceChange >= 0 ? ' rally ' : ' drop '} 
-                            was the primary driver ({formatUSD(attribution.topIndexDriver.impact)}).
+                            <span className="font-black text-indigo-600">{attr.topIndexDriver.name}</span> 
+                            {attr.topIndexDriver.priceChange >= 0 ? ' rally ' : ' drop '} 
+                            was the primary driver ({formatUSD(attr.topIndexDriver.impact)}).
                         </p>
                     )}
-                    {attribution.topGroupAffected && (
+                    {attr.topGroupAffected && (
                         <p className="text-slate-500 text-xs">
-                            Most affected portfolio: <span className="font-bold text-slate-700">{attribution.topGroupAffected.name}</span> ({formatUSD(attribution.topGroupAffected.impact)}).
+                            Most affected portfolio: <span className="font-bold text-slate-700">{attr.topGroupAffected.name}</span> ({formatUSD(attr.topGroupAffected.impact)}).
                         </p>
                     )}
                     {hasEdits && (
                         <p className="text-amber-600 text-xs font-medium">
-                            * Operational edits contributed {formatUSD(attribution.profileEdits)} to this movement.
+                            * Operational edits contributed {formatUSD(attr.profileEdits)} to this movement.
                         </p>
                     )}
                 </div>
@@ -259,7 +261,7 @@ export const PnLVarianceExplainer: React.FC<PnLVarianceExplainerProps> = ({
                 <div className="text-right">
                     <span className="block text-[10px] font-black text-slate-400 uppercase tracking-tighter">Net Change</span>
                     <span className={`text-xl font-mono font-black ${isProfitDelta ? 'text-emerald-600' : 'text-rose-600'}`}>
-                        {formatUSD(attribution.totalDelta)}
+                        {formatUSD(attr.totalDelta)}
                     </span>
                 </div>
              </div>
@@ -286,7 +288,7 @@ export const PnLVarianceExplainer: React.FC<PnLVarianceExplainerProps> = ({
                             Top 10 Movement Items
                         </h4>
                         <div className="space-y-2">
-                            {attribution.items.slice(0, 10).map((item, i) => (
+                            {attr.items.slice(0, 10).map((item, i) => (
                                 <div key={i} className="group flex flex-col bg-white rounded-xl border border-slate-200 shadow-sm overflow-hidden">
                                     <div className="flex items-center justify-between p-3">
                                         <div className="flex items-center gap-3 min-w-0">
@@ -323,13 +325,13 @@ export const PnLVarianceExplainer: React.FC<PnLVarianceExplainerProps> = ({
                         <div className="bg-white p-6 rounded-2xl border border-slate-200 shadow-sm space-y-4">
                             <h4 className="text-[10px] font-black text-slate-400 uppercase tracking-widest">Aggregate Attribution</h4>
                             <div className="space-y-3">
-                                <SummaryRow label="Market Dynamics" value={attribution.marketImpact} color="text-blue-600" />
-                                <SummaryRow label="Portfolio Inclusions" value={attribution.newDeals} color="text-emerald-600" />
-                                <SummaryRow label="Deal Closures" value={attribution.removedDeals} color="text-slate-500" />
-                                <SummaryRow label="Operational Edits" value={attribution.profileEdits} color="text-amber-600" />
+                                <SummaryRow label="Market Dynamics" value={attr.marketImpact} color="text-blue-600" />
+                                <SummaryRow label="Portfolio Inclusions" value={attr.newDeals} color="text-emerald-600" />
+                                <SummaryRow label="Deal Closures" value={attr.removedDeals} color="text-slate-500" />
+                                <SummaryRow label="Operational Edits" value={attr.profileEdits} color="text-amber-600" />
                                 <div className="pt-3 border-t border-slate-100 flex justify-between items-center">
                                     <span className="text-xs font-black text-slate-800 uppercase">Total Variance</span>
-                                    <span className={`font-mono font-black text-lg ${isProfitDelta ? 'text-emerald-600' : 'text-rose-600'}`}>{formatUSD(attribution.totalDelta)}</span>
+                                    <span className={`font-mono font-black text-lg ${isProfitDelta ? 'text-emerald-600' : 'text-rose-600'}`}>{formatUSD(attr.totalDelta)}</span>
                                 </div>
                             </div>
                         </div>
@@ -337,7 +339,7 @@ export const PnLVarianceExplainer: React.FC<PnLVarianceExplainerProps> = ({
                         <div className="space-y-4">
                             <h4 className="text-[10px] font-black text-slate-400 uppercase tracking-widest">Index Specific Impact</h4>
                             <div className="flex flex-wrap gap-2">
-                                {Object.entries(attribution.indexBreakdown)
+                                {Object.entries(attr.indexBreakdown)
                                     .sort((a,b) => Math.abs(b[1]) - Math.abs(a[1]))
                                     .map(([name, val]) => (
                                         <div key={name} className="px-3 py-2 bg-white border border-slate-200 rounded-xl shadow-sm">
@@ -362,11 +364,22 @@ export const PnLVarianceExplainer: React.FC<PnLVarianceExplainerProps> = ({
   );
 };
 
-const SummaryRow = ({ label, value, color }: { label: string, value: number, color: string }) => (
-    <div className="flex justify-between items-center">
-        <span className="text-[11px] font-bold text-slate-500">{label}</span>
-        <span className={`text-xs font-mono font-black ${color}`}>
-            {new Intl.NumberFormat('en-US', { style: 'currency', currency: 'USD', maximumFractionDigits: 0, signDisplay: 'always' }).format(value)}
-        </span>
-    </div>
-);
+// Fix: Ensure props are correctly typed for destructuring and use in the component body
+interface SummaryRowProps {
+    label: string;
+    value: number;
+    color: string;
+}
+
+const SummaryRow = ({ label, value, color }: SummaryRowProps) => {
+    // Cast to number to resolve "unknown" type error during formatting
+    const numericValue = Number(value || 0);
+    return (
+        <div className="flex justify-between items-center">
+            <span className="text-[11px] font-bold text-slate-500">{label}</span>
+            <span className={`text-xs font-mono font-black ${color}`}>
+                {new Intl.NumberFormat('en-US', { style: 'currency', currency: 'USD', maximumFractionDigits: 0, signDisplay: 'always' }).format(numericValue)}
+            </span>
+        </div>
+    );
+};
