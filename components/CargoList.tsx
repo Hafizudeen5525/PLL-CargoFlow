@@ -23,10 +23,6 @@ type ViewMode = 'table' | 'map' | 'calendar';
 const COLUMN_WIDTH = 180;
 const STRATEGY_COL_WIDTH = 210;
 
-interface HierarchyNode {
-    [key: string]: string[] | HierarchyNode;
-}
-
 export const CargoList: React.FC<CargoListProps> = ({ 
     profiles, onEdit, onDelete, onActualize, onBulkDelete, onBulkUpdate, onBulkImport 
 }) => {
@@ -39,7 +35,7 @@ export const CargoList: React.FC<CargoListProps> = ({
   
   const [searchTerm, setSearchTerm] = useState('');
   const [debouncedSearch, setDebouncedSearch] = useState('');
-  const [sortConfig, setSortConfig] = useState<{ key: keyof CargoProfile | null; direction: 'asc' | 'desc' }>({ key: null, direction: 'asc' });
+  const [sortConfig, setSortConfig] = useState<{ key: string | null; direction: 'asc' | 'desc' }>({ key: null, direction: 'asc' });
   
   // Advanced Filtering State
   const [activeFilters, setActiveFilters] = useState<Record<string, Set<any>>>({});
@@ -71,10 +67,12 @@ export const CargoList: React.FC<CargoListProps> = ({
     return () => document.removeEventListener('mousedown', handleClickOutside);
   }, []);
 
-  const headers: (keyof CargoProfile)[] = [
+  // Updated headers to include Cost, Revenue and SRC
+  const headerKeys = [
     'strategyName', 'buyer', 'source', 'deliveryDate', 'loadingDate', 
-    'absoluteBuyPrice', 'loadedVolume', 'absoluteSellPrice', 'deliveredVolume', 
-    'finalTotalPnL', 'pnlBucket'
+    'absoluteBuyPrice', 'loadedVolume', 'purchaseCost', 
+    'absoluteSellPrice', 'deliveredVolume', 'salesRevenue', 
+    'reconciledSrcCost', 'finalTotalPnL', 'pnlBucket'
   ];
 
   const processedProfiles = useMemo(() => {
@@ -92,8 +90,15 @@ export const CargoList: React.FC<CargoListProps> = ({
     if (sortConfig.key) {
       const { key, direction } = sortConfig;
       result.sort((a, b) => {
-        const aVal = a[key!];
-        const bVal = b[key!];
+        let aVal = (a as any)[key!];
+        let bVal = (b as any)[key!];
+        
+        // Handle virtual headers
+        if (key === 'purchaseCost') {
+            aVal = (a.absoluteBuyPrice * a.loadedVolume) + (a.isTieredPricing ? (a.absoluteTier2BuyPrice! * a.tier2LoadedVolume!) : 0);
+            bVal = (b.absoluteBuyPrice * b.loadedVolume) + (b.isTieredPricing ? (b.absoluteTier2BuyPrice! * b.tier2LoadedVolume!) : 0);
+        }
+
         if (aVal === bVal) return 0;
         if (aVal === undefined || aVal === null) return 1;
         if (bVal === undefined || bVal === null) return -1;
@@ -107,9 +112,9 @@ export const CargoList: React.FC<CargoListProps> = ({
   const filterData = useMemo(() => {
     const values: Record<string, any[]> = {};
     const strategyHierarchy: Record<string, string[]> = {};
-    const dateHierarchies: Record<string, any> = {}; // { deliveryDate: { 2025: { Jan: [days] } } }
+    const dateHierarchies: Record<string, any> = {};
 
-    headers.forEach(header => {
+    headerKeys.forEach(header => {
       if (header === 'strategyName') {
         profiles.forEach(p => {
           const group = getGroupName(p.strategyName);
@@ -120,7 +125,7 @@ export const CargoList: React.FC<CargoListProps> = ({
       } else if (header === 'deliveryDate' || header === 'loadingDate') {
         const hierarchy: any = {};
         profiles.forEach(p => {
-          const dStr = p[header] as string;
+          const dStr = (p as any)[header] as string;
           if (!dStr) return;
           const [y, m, d] = dStr.split('-');
           const monthName = new Date(parseInt(y), parseInt(m) - 1).toLocaleString('default', { month: 'long' });
@@ -129,15 +134,14 @@ export const CargoList: React.FC<CargoListProps> = ({
           hierarchy[y][monthName].add(dStr);
         });
         dateHierarchies[header] = hierarchy;
-      } else {
-        const uniqueSet = new Set(profiles.map(p => p[header]));
+      } else if (!['purchaseCost', 'salesRevenue'].includes(header)) {
+        const uniqueSet = new Set(profiles.map(p => (p as any)[header]));
         values[header] = Array.from(uniqueSet).sort();
       }
     });
     return { values, strategyHierarchy, dateHierarchies };
-  }, [profiles, headers]);
+  }, [profiles, headerKeys]);
 
-  // Derived Options for Export
   const availableExportYears = useMemo(() => {
     const years = new Set<string>();
     profiles.forEach(p => years.add(getPortfolioYear(p).toString()));
@@ -318,11 +322,6 @@ export const CargoList: React.FC<CargoListProps> = ({
     reader.readAsBinaryString(file);
   };
 
-  /**
-   * Helper to format tiered strategy names.
-   * Inserts 't' right after the last digit sequence in the strategy name.
-   * Example: "2026-PL9SB_59(PLL)" -> "2026-PL9SB_59t(PLL)"
-   */
   const formatTieredName = (name: string): string => {
       const match = name.match(/^(.*\d)(.*)$/);
       if (match) {
@@ -332,20 +331,11 @@ export const CargoList: React.FC<CargoListProps> = ({
   };
 
   const handleJarvisExport = () => {
-    // Determine profiles to export based on current config
     let exportProfiles = profiles;
-    
-    if (exportYear !== 'All') {
-        exportProfiles = exportProfiles.filter(p => getPortfolioYear(p).toString() === exportYear);
-    }
-    
-    if (exportGroup !== 'All') {
-        exportProfiles = exportProfiles.filter(p => getGroupName(p.strategyName) === exportGroup);
-    }
+    if (exportYear !== 'All') exportProfiles = exportProfiles.filter(p => getPortfolioYear(p).toString() === exportYear);
+    if (exportGroup !== 'All') exportProfiles = exportProfiles.filter(p => getGroupName(p.strategyName) === exportGroup);
 
-    if (exportProfiles.length === 0) {
-        return toast.error("No data found for the selected export filters");
-    }
+    if (exportProfiles.length === 0) return toast.error("No data found for the selected export filters");
 
     const workbook = XLSX.utils.book_new();
     const purchaseRows: any[] = [];
@@ -378,27 +368,14 @@ export const CargoList: React.FC<CargoListProps> = ({
             return row;
         };
 
-        // Push Primary Tier rows
         purchaseRows.push(buildRow('Buy', 1));
         salesRows.push(buildRow('Sell', 1));
-        // Add Primary Tier Cost row
-        costRows.push({ 
-            'Strategy Name': p.strategyName, 
-            'Incoterm': p.incoterms, 
-            'SRC': p.reconciledSrcCost || 0 
-        });
+        costRows.push({ 'Strategy Name': p.strategyName, 'Incoterm': p.incoterms, 'SRC': p.reconciledSrcCost || 0 });
         
         if (p.isTieredPricing) {
-            // Push Tier 2 rows for Purchase and Sales
             purchaseRows.push(buildRow('Buy', 2));
             salesRows.push(buildRow('Sell', 2));
-            
-            // Fix: Add matching row to Cost sheet for Tier 2 to ensure row count parity
-            costRows.push({ 
-                'Strategy Name': formatTieredName(p.strategyName), 
-                'Incoterm': p.incoterms, 
-                'SRC': 0 // SRC is typically captured only once per strategy leg in Jarvis
-            });
+            costRows.push({ 'Strategy Name': formatTieredName(p.strategyName), 'Incoterm': p.incoterms, 'SRC': 0 });
         }
     });
 
@@ -412,21 +389,19 @@ export const CargoList: React.FC<CargoListProps> = ({
     toast.success(`Exported ${exportProfiles.length} strategies to ${fileName}`);
   };
 
-  const handleSort = (key: keyof CargoProfile) => {
+  const handleSort = (key: string) => {
     setSortConfig(prev => ({ key, direction: prev.key === key && prev.direction === 'asc' ? 'desc' : 'asc' }));
   };
 
   const toggleSelectAll = useCallback(() => {
     const allVisibleSelected = processedProfiles.every(p => selectedIds.has(p.id));
     if (allVisibleSelected && processedProfiles.length > 0) {
-      // Deselect all visible
       setSelectedIds(prev => {
         const next = new Set(prev);
         processedProfiles.forEach(p => next.delete(p.id));
         return next;
       });
     } else {
-      // Select all visible
       setSelectedIds(prev => {
         const next = new Set(prev);
         processedProfiles.forEach(p => next.add(p.id));
@@ -486,29 +461,18 @@ export const CargoList: React.FC<CargoListProps> = ({
                             <div className="space-y-4">
                                 <div>
                                     <label className="block text-[10px] font-bold text-slate-500 uppercase mb-1.5">Portfolio Year</label>
-                                    <select 
-                                        value={exportYear} 
-                                        onChange={(e) => setExportYear(e.target.value)}
-                                        className="w-full bg-slate-50 border border-slate-200 rounded-lg text-xs font-medium p-2 focus:ring-2 focus:ring-indigo-500/20"
-                                    >
+                                    <select value={exportYear} onChange={(e) => setExportYear(e.target.value)} className="w-full bg-slate-50 border border-slate-200 rounded-lg text-xs font-medium p-2 focus:ring-2 focus:ring-indigo-500/20">
                                         {availableExportYears.map(y => <option key={y} value={y}>{y}</option>)}
                                     </select>
                                 </div>
                                 <div>
                                     <label className="block text-[10px] font-bold text-slate-500 uppercase mb-1.5">Portfolio Group</label>
-                                    <select 
-                                        value={exportGroup} 
-                                        onChange={(e) => setExportGroup(e.target.value)}
-                                        className="w-full bg-slate-50 border border-slate-200 rounded-lg text-xs font-medium p-2 focus:ring-2 focus:ring-indigo-500/20"
-                                    >
+                                    <select value={exportGroup} onChange={(e) => setExportGroup(e.target.value)} className="w-full bg-slate-50 border border-slate-200 rounded-lg text-xs font-medium p-2 focus:ring-2 focus:ring-indigo-500/20">
                                         {availableExportGroups.map(g => <option key={g} value={g}>{g}</option>)}
                                     </select>
                                 </div>
                                 <div className="pt-2">
-                                    <button 
-                                        onClick={handleJarvisExport}
-                                        className="w-full py-2.5 bg-indigo-600 text-white text-xs font-bold rounded-lg shadow-lg shadow-indigo-100 hover:bg-indigo-700 transition-all flex items-center justify-center gap-2"
-                                    >
+                                    <button onClick={handleJarvisExport} className="w-full py-2.5 bg-indigo-600 text-white text-xs font-bold rounded-lg shadow-lg shadow-indigo-100 hover:bg-indigo-700 transition-all flex items-center justify-center gap-2">
                                         <svg className="w-3.5 h-3.5" fill="none" stroke="currentColor" viewBox="0 0 24 24"><path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M4 16v1a3 3 0 003 3h10a3 3 0 003 3h10a3 3 0 003-3v-1m-4-4l-4 4m0 0l-4-4m4 4V4" /></svg>
                                         Generate XLSM
                                     </button>
@@ -528,51 +492,28 @@ export const CargoList: React.FC<CargoListProps> = ({
                     <div className="min-w-max relative h-full">
                         <div className="sticky top-0 bg-white z-40 border-b-2 border-slate-200 flex shadow-sm">
                             <div className="px-4 py-3 bg-slate-50 border-r border-slate-200 flex items-center w-12 shrink-0">
-                                <input 
-                                  type="checkbox" 
-                                  className="rounded border-slate-300 text-indigo-600 cursor-pointer" 
-                                  checked={isAllVisibleSelected}
-                                  ref={el => { if (el) el.indeterminate = isSomeVisibleSelected; }}
-                                  onChange={toggleSelectAll}
-                                />
+                                <input type="checkbox" className="rounded border-slate-300 text-indigo-600 cursor-pointer" checked={isAllVisibleSelected} ref={el => { if (el) el.indeterminate = isSomeVisibleSelected; }} onChange={toggleSelectAll} />
                             </div>
-                            {headers.map((header, idx) => {
+                            {headerKeys.map((header, idx) => {
                                 const isStrat = header === 'strategyName';
                                 const isSorted = sortConfig.key === header;
                                 const hasActiveFilter = (activeFilters[header]?.size ?? 0) > 0;
-                                
                                 return (
-                                    <div 
-                                        key={header} 
-                                        className={`px-4 py-3 bg-slate-50 border-r border-slate-100 flex items-center justify-between gap-2 relative shrink-0 ${isStrat ? 'sticky left-12 z-50 bg-slate-100 border-r-2 border-slate-200' : ''}`} 
-                                        style={{ width: isStrat ? STRATEGY_COL_WIDTH : COLUMN_WIDTH }}
-                                    >
+                                    <div key={header} className={`px-4 py-3 bg-slate-50 border-r border-slate-100 flex items-center justify-between gap-2 relative shrink-0 ${isStrat ? 'sticky left-12 z-50 bg-slate-100 border-r-2 border-slate-200' : ''}`} style={{ width: isStrat ? STRATEGY_COL_WIDTH : COLUMN_WIDTH }}>
                                         <span className={`font-bold truncate uppercase tracking-tight text-[10px] ${isSorted ? 'text-indigo-600' : 'text-slate-600'}`}>
                                             {header.replace(/([A-Z])/g, ' $1').trim()}
                                         </span>
-                                        <div className="flex items-center gap-1">
-                                            <button 
-                                                onClick={() => setOpenFilterMenu(header === openFilterMenu ? null : header)}
-                                                className={`p-1 rounded ${hasActiveFilter ? 'bg-indigo-100 text-indigo-600' : 'text-slate-400 hover:bg-slate-200'}`}
-                                            >
-                                                <svg className="w-3 h-3" fill="none" stroke="currentColor" viewBox="0 0 24 24"><path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M3 4a1 1 0 011-1h16a1 1 0 011 1v2.586a1 1 0 01-.293.707l-6.414 6.414a1 1 0 00-.293.707V17l-4 4v-6.586a1 1 0 00-.293-.707L3.293 7.293A1 1 0 013 6.586V4z" /></svg>
-                                            </button>
-                                            <button onClick={() => handleSort(header)} className={`p-1 rounded ${isSorted ? 'text-indigo-600' : 'text-slate-300 hover:text-slate-500'}`}>
-                                                <svg className={`w-3 h-3 transition-transform ${isSorted && sortConfig.direction === 'desc' ? 'rotate-180' : ''}`} fill="none" stroke="currentColor" viewBox="0 0 24 24"><path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M19 9l-7 7-7-7" /></svg>
-                                            </button>
-                                        </div>
-
+                                        {!['purchaseCost', 'salesRevenue'].includes(header) && (
+                                            <div className="flex items-center gap-1">
+                                                <button onClick={() => setOpenFilterMenu(header === openFilterMenu ? null : header)} className={`p-1 rounded ${hasActiveFilter ? 'bg-indigo-100 text-indigo-600' : 'text-slate-400 hover:bg-slate-200'}`}><svg className="w-3 h-3" fill="none" stroke="currentColor" viewBox="0 0 24 24"><path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M3 4a1 1 0 011-1h16a1 1 0 011 1v2.586a1 1 0 01-.293.707l-6.414 6.414a1 1 0 00-.293.707V17l-4 4v-6.586a1 1 0 00-.293-.707L3.293 7.293A1 1 0 013 6.586V4z" /></svg></button>
+                                                <button onClick={() => handleSort(header)} className={`p-1 rounded ${isSorted ? 'text-indigo-600' : 'text-slate-300 hover:text-slate-500'}`}><svg className={`w-3 h-3 transition-transform ${isSorted && sortConfig.direction === 'desc' ? 'rotate-180' : ''}`} fill="none" stroke="currentColor" viewBox="0 0 24 24"><path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M19 9l-7 7-7-7" /></svg></button>
+                                            </div>
+                                        )}
                                         <AnimatePresence>
                                             {openFilterMenu === header && (
-                                                <motion.div 
-                                                    ref={filterMenuRef} 
-                                                    initial={{ opacity: 0, y: 5 }} 
-                                                    animate={{ opacity: 1, y: 0 }} 
-                                                    exit={{ opacity: 0, y: 5 }} 
-                                                    className="absolute top-full left-0 mt-1 w-64 bg-white border border-slate-200 shadow-2xl rounded-xl p-3 z-[100] text-slate-700 font-normal normal-case"
-                                                >
+                                                <motion.div ref={filterMenuRef} initial={{ opacity: 0, y: 5 }} animate={{ opacity: 1, y: 0 }} exit={{ opacity: 0, y: 5 }} className="absolute top-full left-0 mt-1 w-64 bg-white border border-slate-200 shadow-2xl rounded-xl p-3 z-[100] text-slate-700 font-normal normal-case">
                                                     <div className="space-y-3">
-                                                        <input autoFocus type="text" placeholder="Search values..." value={filterSearch} onChange={(e) => setFilterSearch(e.target.value)} className="w-full text-[10px] px-2 py-1.5 border border-slate-200 rounded bg-slate-50 focus:ring-1 focus:ring-indigo-500" />
+                                                        <input autoFocus type="text" placeholder="Search..." value={filterSearch} onChange={(e) => setFilterSearch(e.target.value)} className="w-full text-[10px] px-2 py-1.5 border border-slate-200 rounded bg-slate-50 focus:ring-1 focus:ring-indigo-500" />
                                                         <div className="max-h-[300px] overflow-y-auto custom-scrollbar pr-1">
                                                             {isStrat ? (
                                                                 <div className="space-y-1">
@@ -586,9 +527,7 @@ export const CargoList: React.FC<CargoListProps> = ({
                                                                         return (
                                                                             <div key={group} className="text-[10px]">
                                                                                 <div className="flex items-center gap-2 px-1 py-1 hover:bg-slate-50 rounded">
-                                                                                    <button onClick={() => setExpandedNodes(prev => { const n = new Set(prev); if (n.has(`filter-strat-${group}`)) n.delete(`filter-strat-${group}`); else n.add(`filter-strat-${group}`); return n; })} className="p-0.5 hover:bg-slate-200 rounded text-slate-400">
-                                                                                        <svg className={`w-3 h-3 transition-transform ${isExp ? 'rotate-90' : ''}`} fill="none" stroke="currentColor" viewBox="0 0 24 24"><path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M9 5l7 7-7 7" /></svg>
-                                                                                    </button>
+                                                                                    <button onClick={() => setExpandedNodes(prev => { const n = new Set(prev); if (n.has(`filter-strat-${group}`)) n.delete(`filter-strat-${group}`); else n.add(`filter-strat-${group}`); return n; })} className="p-0.5 hover:bg-slate-200 rounded text-slate-400"><svg className={`w-3 h-3 transition-transform ${isExp ? 'rotate-90' : ''}`} fill="none" stroke="currentColor" viewBox="0 0 24 24"><path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M9 5l7 7-7 7" /></svg></button>
                                                                                     <input type="checkbox" checked={allSel} ref={el => { if (el) el.indeterminate = someSel && !allSel; }} onChange={() => bulkToggle(header, strats, !allSel)} className="rounded border-slate-300 text-indigo-600 w-3 h-3" />
                                                                                     <span className="font-bold cursor-pointer">{group}</span>
                                                                                 </div>
@@ -614,9 +553,7 @@ export const CargoList: React.FC<CargoListProps> = ({
                                                                         return (
                                                                             <div key={year} className="text-[10px]">
                                                                                 <div className="flex items-center gap-2 px-1 py-1 hover:bg-slate-50 rounded">
-                                                                                    <button onClick={() => setExpandedNodes(prev => { const n = new Set(prev); if (n.has(`filter-${header}-${year}`)) n.delete(`filter-${header}-${year}`); else n.add(`filter-${header}-${year}`); return n; })} className="p-0.5 hover:bg-slate-200 rounded text-slate-400">
-                                                                                        <svg className={`w-3 h-3 transition-transform ${isExpYear ? 'rotate-90' : ''}`} fill="none" stroke="currentColor" viewBox="0 0 24 24"><path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M9 5l7 7-7 7" /></svg>
-                                                                                    </button>
+                                                                                    <button onClick={() => setExpandedNodes(prev => { const n = new Set(prev); if (n.has(`filter-${header}-${year}`)) n.delete(`filter-${header}-${year}`); else n.add(`filter-${header}-${year}`); return n; })} className="p-0.5 hover:bg-slate-200 rounded text-slate-400"><svg className={`w-3 h-3 transition-transform ${isExpYear ? 'rotate-90' : ''}`} fill="none" stroke="currentColor" viewBox="0 0 24 24"><path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M9 5l7 7-7 7" /></svg></button>
                                                                                     <span className="font-bold">{year}</span>
                                                                                 </div>
                                                                                 {isExpYear && (
@@ -630,19 +567,14 @@ export const CargoList: React.FC<CargoListProps> = ({
                                                                                             return (
                                                                                                 <div key={month} className="mt-1">
                                                                                                     <div className="flex items-center gap-2 px-1 py-0.5 hover:bg-slate-50 rounded">
-                                                                                                        <button onClick={() => setExpandedNodes(prev => { const n = new Set(prev); if (n.has(`filter-${header}-${year}-${month}`)) n.delete(`filter-${header}-${year}-${month}`); else n.add(`filter-${header}-${year}-${month}`); return n; })} className="p-0.5 hover:bg-slate-200 rounded text-slate-400">
-                                                                                                            <svg className={`w-3 h-3 transition-transform ${isExpMonth ? 'rotate-90' : ''}`} fill="none" stroke="currentColor" viewBox="0 0 24 24"><path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M9 5l7 7-7 7" /></svg>
-                                                                                                        </button>
+                                                                                                        <button onClick={() => setExpandedNodes(prev => { const n = new Set(prev); if (n.has(`filter-${header}-${year}-${month}`)) n.delete(`filter-${header}-${year}-${month}`); else n.add(`filter-${header}-${year}-${month}`); return n; })} className="p-0.5 hover:bg-slate-200 rounded text-slate-400"><svg className={`w-3 h-3 transition-transform ${isExpMonth ? 'rotate-90' : ''}`} fill="none" stroke="currentColor" viewBox="0 0 24 24"><path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M9 5l7 7-7 7" /></svg></button>
                                                                                                         <input type="checkbox" checked={allSel} ref={el => { if (el) el.indeterminate = someSel && !allSel; }} onChange={() => bulkToggle(header, days, !allSel)} className="rounded border-slate-300 text-indigo-600 w-2.5 h-2.5" />
                                                                                                         <span className="text-slate-600">{month}</span>
                                                                                                     </div>
                                                                                                     {isExpMonth && (
                                                                                                         <div className="ml-4 border-l border-slate-200 pl-2 flex flex-col gap-1 mt-1">
                                                                                                             {days.map(dStr => (
-                                                                                                                <label key={dStr} className="flex items-center gap-2 px-1 hover:bg-slate-50 rounded cursor-pointer">
-                                                                                                                    <input type="checkbox" checked={currentSet.has(dStr)} onChange={() => toggleValueFilter(header, dStr)} className="rounded border-slate-300 text-indigo-600 w-2 h-2" />
-                                                                                                                    <span className="text-slate-500 font-mono">{dStr.split('-')[2]}</span>
-                                                                                                                </label>
+                                                                                                                <label key={dStr} className="flex items-center gap-2 px-1 hover:bg-slate-50 rounded cursor-pointer"><input type="checkbox" checked={currentSet.has(dStr)} onChange={() => toggleValueFilter(header, dStr)} className="rounded border-slate-300 text-indigo-600 w-2 h-2" /><span className="text-slate-500 font-mono">{dStr.split('-')[2]}</span></label>
                                                                                                             ))}
                                                                                                         </div>
                                                                                                     )}
@@ -657,10 +589,7 @@ export const CargoList: React.FC<CargoListProps> = ({
                                                                 </div>
                                                             ) : (
                                                                 filterData.values[header]?.filter(v => String(v).toLowerCase().includes(filterSearch.toLowerCase())).map(v => (
-                                                                    <label key={String(v)} className="flex items-center gap-2 px-1 py-1 hover:bg-slate-50 rounded cursor-pointer">
-                                                                        <input type="checkbox" checked={(activeFilters[header] as Set<any> | undefined)?.has(v)} onChange={() => toggleValueFilter(header, v)} className="rounded border-slate-300 text-indigo-600 w-3 h-3" />
-                                                                        <span className="text-[10px] truncate">{String(v ?? '(Blank)')}</span>
-                                                                    </label>
+                                                                    <label key={String(v)} className="flex items-center gap-2 px-1 py-1 hover:bg-slate-50 rounded cursor-pointer"><input type="checkbox" checked={(activeFilters[header] as Set<any> | undefined)?.has(v)} onChange={() => toggleValueFilter(header, v)} className="rounded border-slate-300 text-indigo-600 w-3 h-3" /><span className="text-[10px] truncate">{String(v ?? '(Blank)')}</span></label>
                                                                 ))
                                                             )}
                                                         </div>
@@ -677,40 +606,80 @@ export const CargoList: React.FC<CargoListProps> = ({
                             <div className="px-4 py-3 bg-slate-100 border-l border-slate-200 sticky right-0 z-[60] w-32 shrink-0 font-bold text-[10px] text-slate-600 uppercase text-center shadow-[-2px_0_5px_rgba(0,0,0,0.05)]">Actions</div>
                         </div>
                         <div className="bg-white">
-                            {processedProfiles.map((p) => (
-                                <div key={p.id} className="flex border-b border-slate-100 transition-colors hover:bg-indigo-50/30 group">
-                                    <div className="px-4 py-3 border-r border-slate-100 w-12 shrink-0 flex items-center bg-white">
-                                        <input type="checkbox" checked={selectedIds.has(p.id)} onChange={(e) => {
-                                            const next = new Set(selectedIds);
-                                            if (e.target.checked) next.add(p.id); else next.delete(p.id);
-                                            setSelectedIds(next);
-                                        }} className="rounded border-slate-300 text-indigo-600 cursor-pointer" />
-                                    </div>
-                                    
-                                    <div className="px-4 py-3 shrink-0 truncate text-[11px] font-bold text-slate-900 border-r-2 border-slate-200 sticky left-12 bg-white group-hover:bg-indigo-50/30 z-30" style={{ width: STRATEGY_COL_WIDTH }}>
-                                        {p.strategyName}
-                                        {p.isTieredPricing && <span className="ml-2 px-1 py-0.5 bg-indigo-50 text-indigo-600 rounded text-[9px]">2 TIER</span>}
-                                    </div>
+                            {processedProfiles.map((p) => {
+                                const purchaseT1 = p.absoluteBuyPrice * p.loadedVolume;
+                                const purchaseT2 = p.isTieredPricing ? (p.absoluteTier2BuyPrice! * p.tier2LoadedVolume!) : 0;
+                                const totalPurchase = purchaseT1 + purchaseT2;
 
-                                    <div className="px-4 py-3 shrink-0 truncate text-[11px] text-slate-600 border-r border-slate-50" style={{ width: COLUMN_WIDTH }}>{p.buyer || '-'}</div>
-                                    <div className="px-4 py-3 shrink-0 truncate text-[11px] text-slate-600 border-r border-slate-50" style={{ width: COLUMN_WIDTH }}>{p.source || '-'}</div>
-                                    <div className="px-4 py-3 shrink-0 truncate text-[11px] text-slate-600 border-r border-slate-50" style={{ width: COLUMN_WIDTH }}>{p.deliveryDate || '-'}</div>
-                                    <div className="px-4 py-3 shrink-0 truncate text-[11px] text-slate-600 border-r border-slate-50" style={{ width: COLUMN_WIDTH }}>{p.loadingDate || '-'}</div>
-                                    
-                                    <div className="px-4 py-3 shrink-0 truncate text-[11px] text-slate-600 border-r border-slate-50 text-right font-mono" style={{ width: COLUMN_WIDTH }}>{formatPrice(p.absoluteBuyPrice)}</div>
-                                    <div className="px-4 py-3 shrink-0 truncate text-[11px] text-slate-600 border-r border-slate-50 text-right font-mono" style={{ width: COLUMN_WIDTH }}>{p.loadedVolume?.toLocaleString()}</div>
-                                    <div className="px-4 py-3 shrink-0 truncate text-[11px] text-slate-600 border-r border-slate-50 text-right font-mono" style={{ width: COLUMN_WIDTH }}>{formatPrice(p.absoluteSellPrice)}</div>
-                                    <div className="px-4 py-3 shrink-0 truncate text-[11px] text-slate-600 border-r border-slate-50 text-right font-mono" style={{ width: COLUMN_WIDTH }}>{p.deliveredVolume?.toLocaleString()}</div>
+                                const salesT1 = p.absoluteSellPrice * p.deliveredVolume;
+                                const salesT2 = p.isTieredPricing ? (p.absoluteTier2SellPrice! * p.tier2DeliveredVolume!) : 0;
+                                const totalSales = salesT1 + salesT2;
 
-                                    <div className={`px-4 py-3 shrink-0 truncate text-[11px] font-bold border-r border-slate-50 text-right ${p.finalTotalPnL >= 0 ? 'text-emerald-600' : 'text-rose-600'}`} style={{ width: COLUMN_WIDTH }}>{formatCurrency(p.finalTotalPnL)}</div>
-                                    <div className="px-4 py-3 shrink-0 text-center border-r border-slate-50" style={{ width: COLUMN_WIDTH }}><span className={`px-2 py-0.5 rounded-full font-bold text-[9px] uppercase ${p.pnlBucket === PnLBucket.Realized ? 'bg-blue-100 text-blue-700' : 'bg-amber-100 text-amber-700'}`}>{p.pnlBucket}</span></div>
-                                    
-                                    <div className="px-4 py-3 border-l border-slate-100 sticky right-0 z-40 bg-white group-hover:bg-slate-50 w-32 shrink-0 flex items-center justify-center gap-1 shadow-[-2px_0_5px_rgba(0,0,0,0.05)]">
-                                        <button onClick={() => onEdit(p)} className="p-1 text-blue-600 hover:bg-blue-50 rounded"><svg className="w-3.5 h-3.5" fill="none" stroke="currentColor" viewBox="0 0 24 24"><path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M11 5H6a2 2 0 00-2 2v11a2 2 0 002 2h11a2 2 0 002-2v-5m-1.414-9.414a2 2 0 112.828 2.828L11.828 15H9v-2.828l8.586-8.586z" /></svg></button>
-                                        <button onClick={() => onDelete(p.id)} className="p-1 text-slate-400 hover:text-rose-600 hover:bg-rose-50 rounded"><svg className="w-3.5 h-3.5" fill="none" stroke="currentColor" viewBox="0 0 24 24"><path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M19 7l-.867 12.142A2 2 0 0116.138 21H7.862a2 2 0 01-1.995-1.858L5 7m5 4v6m4-6v6m1-10V4a1 1 0 00-1-1h-4a1 1 0 00-1 1v3M4 7h16" /></svg></button>
+                                const srcVal = p.reconciledSrcCost || 0;
+
+                                return (
+                                    <div key={p.id} className="flex border-b border-slate-100 transition-colors hover:bg-indigo-50/30 group">
+                                        <div className="px-4 py-3 border-r border-slate-100 w-12 shrink-0 flex items-center bg-white">
+                                            <input type="checkbox" checked={selectedIds.has(p.id)} onChange={(e) => {
+                                                const next = new Set(selectedIds);
+                                                if (e.target.checked) next.add(p.id); else next.delete(p.id);
+                                                setSelectedIds(next);
+                                            }} className="rounded border-slate-300 text-indigo-600 cursor-pointer" />
+                                        </div>
+                                        
+                                        <div className="px-4 py-3 shrink-0 truncate text-[11px] font-bold text-slate-900 border-r-2 border-slate-200 sticky left-12 bg-white group-hover:bg-indigo-50/30 z-30" style={{ width: STRATEGY_COL_WIDTH }}>
+                                            {p.strategyName}
+                                            {p.isTieredPricing && <span className="ml-2 px-1 py-0.5 bg-indigo-50 text-indigo-600 rounded text-[9px]">2 TIER</span>}
+                                        </div>
+
+                                        <div className="px-4 py-3 shrink-0 truncate text-[11px] text-slate-600 border-r border-slate-50" style={{ width: COLUMN_WIDTH }}>{p.buyer || '-'}</div>
+                                        <div className="px-4 py-3 shrink-0 truncate text-[11px] text-slate-600 border-r border-slate-50" style={{ width: COLUMN_WIDTH }}>{p.source || '-'}</div>
+                                        <div className="px-4 py-3 shrink-0 truncate text-[11px] text-slate-600 border-r border-slate-50" style={{ width: COLUMN_WIDTH }}>{p.deliveryDate || '-'}</div>
+                                        <div className="px-4 py-3 shrink-0 truncate text-[11px] text-slate-600 border-r border-slate-50" style={{ width: COLUMN_WIDTH }}>{p.loadingDate || '-'}</div>
+                                        
+                                        <div className="px-4 py-3 shrink-0 truncate text-[11px] text-slate-600 border-r border-slate-50 text-right font-mono" style={{ width: COLUMN_WIDTH }}>{formatPrice(p.absoluteBuyPrice)}</div>
+                                        <div className="px-4 py-3 shrink-0 truncate text-[11px] text-slate-600 border-r border-slate-50 text-right font-mono" style={{ width: COLUMN_WIDTH }}>{p.loadedVolume?.toLocaleString()}</div>
+                                        
+                                        {/* Purchase Cost Cell with Breakdown */}
+                                        <div className="px-4 py-3 shrink-0 border-r border-slate-50 text-right font-mono flex flex-col justify-center" style={{ width: COLUMN_WIDTH }}>
+                                            {p.isTieredPricing && (
+                                                <div className="text-[9px] text-slate-400 font-bold flex flex-col -space-y-1">
+                                                    <span>T1: {formatCurrency(purchaseT1)}</span>
+                                                    <span>T2: {formatCurrency(purchaseT2)}</span>
+                                                </div>
+                                            )}
+                                            <span className="text-[11px] font-bold text-slate-700">{formatCurrency(totalPurchase)}</span>
+                                        </div>
+
+                                        <div className="px-4 py-3 shrink-0 truncate text-[11px] text-slate-600 border-r border-slate-50 text-right font-mono" style={{ width: COLUMN_WIDTH }}>{formatPrice(p.absoluteSellPrice)}</div>
+                                        <div className="px-4 py-3 shrink-0 truncate text-[11px] text-slate-600 border-r border-slate-50 text-right font-mono" style={{ width: COLUMN_WIDTH }}>{p.deliveredVolume?.toLocaleString()}</div>
+                                        
+                                        {/* Sales Revenue Cell with Breakdown */}
+                                        <div className="px-4 py-3 shrink-0 border-r border-slate-50 text-right font-mono flex flex-col justify-center" style={{ width: COLUMN_WIDTH }}>
+                                            {p.isTieredPricing && (
+                                                <div className="text-[9px] text-slate-400 font-bold flex flex-col -space-y-1">
+                                                    <span>T1: {formatCurrency(salesT1)}</span>
+                                                    <span>T2: {formatCurrency(salesT2)}</span>
+                                                </div>
+                                            )}
+                                            <span className="text-[11px] font-bold text-slate-700">{formatCurrency(totalSales)}</span>
+                                        </div>
+
+                                        {/* SRC Column */}
+                                        <div className="px-4 py-3 shrink-0 truncate text-[11px] text-slate-600 border-r border-slate-50 text-right font-mono" style={{ width: COLUMN_WIDTH }}>
+                                            {formatCurrency(srcVal)}
+                                        </div>
+
+                                        <div className={`px-4 py-3 shrink-0 truncate text-[11px] font-bold border-r border-slate-50 text-right ${p.finalTotalPnL >= 0 ? 'text-emerald-600' : 'text-rose-600'}`} style={{ width: COLUMN_WIDTH }}>{formatCurrency(p.finalTotalPnL)}</div>
+                                        <div className="px-4 py-3 shrink-0 text-center border-r border-slate-50" style={{ width: COLUMN_WIDTH }}><span className={`px-2 py-0.5 rounded-full font-bold text-[9px] uppercase ${p.pnlBucket === PnLBucket.Realized ? 'bg-blue-100 text-blue-700' : 'bg-amber-100 text-amber-700'}`}>{p.pnlBucket}</span></div>
+                                        
+                                        <div className="px-4 py-3 border-l border-slate-100 sticky right-0 z-40 bg-white group-hover:bg-slate-50 w-32 shrink-0 flex items-center justify-center gap-1 shadow-[-2px_0_5px_rgba(0,0,0,0.05)]">
+                                            <button onClick={() => onEdit(p)} className="p-1 text-blue-600 hover:bg-blue-50 rounded"><svg className="w-3.5 h-3.5" fill="none" stroke="currentColor" viewBox="0 0 24 24"><path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M11 5H6a2 2 0 00-2 2v11a2 2 0 002 2h11a2 2 0 002-2v-5m-1.414-9.414a2 2 0 112.828 2.828L11.828 15H9v-2.828l8.586-8.586z" /></svg></button>
+                                            <button onClick={() => onDelete(p.id)} className="p-1 text-slate-400 hover:text-rose-600 hover:bg-rose-50 rounded"><svg className="w-3.5 h-3.5" fill="none" stroke="currentColor" viewBox="0 0 24 24"><path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M19 7l-.867 12.142A2 2 0 0116.138 21H7.862a2 2 0 01-1.995-1.858L5 7m5 4v6m4-6v6m1-10V4a1 1 0 00-1-1h-4a1 1 0 00-1 1v3M4 7h16" /></svg></button>
+                                        </div>
                                     </div>
-                                </div>
-                            ))}
+                                );
+                            })}
                         </div>
                     </div>
                 </div>

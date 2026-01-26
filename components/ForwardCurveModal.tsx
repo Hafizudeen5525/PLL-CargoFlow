@@ -9,8 +9,9 @@ interface ForwardCurveModalProps {
   onSave: () => void;
 }
 
-const COLUMNS = ['Month', 'BRIPE', 'JCC', 'Dated Brent', 'HH', 'HH Last Day', 'NBP', 'JKM', 'TTF', 'AECO', 'STN 2'];
-const INDICES = COLUMNS.slice(1);
+// Separate columns for different tabs
+const HISTORICAL_COLUMNS = ['Month', 'BRIPE', 'JCC', 'Dated Brent', 'HH', 'HH Last Day', 'NBP', 'JKM', 'TTF', 'AECO', 'STN 2'];
+const MANAGE_COLUMNS = ['Month', 'BRIPE', 'JCC', 'Dated Brent', 'HH', 'NBP', 'JKM', 'TTF', 'AECO', 'STN 2'];
 
 interface Selection {
     startRow: number;
@@ -48,6 +49,13 @@ export const ForwardCurveModal: React.FC<ForwardCurveModalProps> = ({ onClose, o
   // Evolution State
   const [evolutionIndex, setEvolutionIndex] = useState('TTF');
   const [evolutionContract, setEvolutionContract] = useState<string>('');
+
+  // Current active columns based on tab
+  const activeColumns = useMemo(() => {
+    return activeTab === 'historical' ? HISTORICAL_COLUMNS : MANAGE_COLUMNS;
+  }, [activeTab]);
+
+  const activeIndices = useMemo(() => activeColumns.slice(1), [activeColumns]);
 
   useEffect(() => {
     refreshDates();
@@ -138,8 +146,16 @@ export const ForwardCurveModal: React.FC<ForwardCurveModalProps> = ({ onClose, o
 
   const handleSave = () => {
     if (activeTab === 'manage') {
-        saveForwardCurve(curveDate, manageGrid.filter(r => r.month));
-        toast.success(`Curve saved for ${curveDate}`);
+        // Automatically sync HH Last Day to HH for the forward curve before saving
+        const syncedGrid = manageGrid.map(row => {
+            const nextPrices = { ...row.prices };
+            if (nextPrices['HH'] !== undefined) {
+                nextPrices['HH Last Day'] = nextPrices['HH'];
+            }
+            return { ...row, prices: nextPrices };
+        });
+        saveForwardCurve(curveDate, syncedGrid.filter(r => r.month));
+        toast.success(`Curve saved for ${curveDate} (HH Last Day synced to HH)`);
     } else {
         saveHistoricalCurve(historicalGrid.filter(r => r.month));
         toast.success(`Historical prices updated`);
@@ -175,7 +191,7 @@ export const ForwardCurveModal: React.FC<ForwardCurveModalProps> = ({ onClose, o
 
   const handleCellDoubleClick = (r: number, c: number) => {
       setEditingCell({ r, c });
-      const val = c === 0 ? currentGrid[r]?.month : currentGrid[r]?.prices[COLUMNS[c]];
+      const val = c === 0 ? currentGrid[r]?.month : currentGrid[r]?.prices[activeColumns[c]];
       setEditValue(String(val ?? ''));
   };
 
@@ -187,7 +203,7 @@ export const ForwardCurveModal: React.FC<ForwardCurveModalProps> = ({ onClose, o
           next[r].month = editValue;
       } else {
           const num = parseFloat(editValue.replace(/[^0-9.-]/g, ''));
-          next[r].prices[COLUMNS[c]] = isNaN(num) ? 0 : num;
+          next[r].prices[activeColumns[c]] = isNaN(num) ? 0 : num;
       }
       updateGridWithHistory(next);
       setEditingCell(null);
@@ -214,7 +230,7 @@ export const ForwardCurveModal: React.FC<ForwardCurveModalProps> = ({ onClose, o
       for (let r = rMin; r <= rMax; r++) {
           for (let c = cMin; c <= cMax; c++) {
               count++;
-              const val = c === 0 ? null : currentGrid[r]?.prices[COLUMNS[c]];
+              const val = c === 0 ? null : currentGrid[r]?.prices[activeColumns[c]];
               if (val !== null && val !== undefined && typeof val === 'number') {
                   sum += val;
                   numericCount++;
@@ -222,7 +238,7 @@ export const ForwardCurveModal: React.FC<ForwardCurveModalProps> = ({ onClose, o
           }
       }
       return { sum, count, numericCount, avg: numericCount > 0 ? sum / numericCount : 0 };
-  }, [selection, currentGrid]);
+  }, [selection, currentGrid, activeColumns]);
 
   const handleKeyDown = useCallback((e: React.KeyboardEvent) => {
       const isMod = e.ctrlKey || e.metaKey;
@@ -253,7 +269,7 @@ export const ForwardCurveModal: React.FC<ForwardCurveModalProps> = ({ onClose, o
           for (let r = rMin; r <= rMax; r++) {
               for (let c = cMin; c <= cMax; c++) {
                   if (c === 0) next[r].month = '';
-                  else delete next[r].prices[COLUMNS[c]];
+                  else delete next[r].prices[activeColumns[c]];
               }
           }
           updateGridWithHistory(next);
@@ -271,11 +287,11 @@ export const ForwardCurveModal: React.FC<ForwardCurveModalProps> = ({ onClose, o
           if (rMin === rMax) return;
           const next = JSON.parse(JSON.stringify(currentGrid));
           for (let c = cMin; c <= cMax; c++) {
-              const baseVal = c === 0 ? next[rMin].month : next[rMin].prices[COLUMNS[c]];
+              const baseVal = c === 0 ? next[rMin].month : next[rMin].prices[activeColumns[c]];
               for (let r = rMin + 1; r <= rMax; r++) {
                   if (c === 0) next[r].month = baseVal;
-                  else if (baseVal !== undefined) next[r].prices[COLUMNS[c]] = baseVal;
-                  else delete next[r].prices[COLUMNS[c]];
+                  else if (baseVal !== undefined) next[r].prices[activeColumns[c]] = baseVal;
+                  else delete next[r].prices[activeColumns[c]];
               }
           }
           updateGridWithHistory(next);
@@ -293,11 +309,10 @@ export const ForwardCurveModal: React.FC<ForwardCurveModalProps> = ({ onClose, o
           if (cMin === cMax) return;
           const next = JSON.parse(JSON.stringify(currentGrid));
           for (let r = rMin; r <= rMax; r++) {
-              const baseVal = cMin === 0 ? next[r].month : next[r].prices[COLUMNS[cMin]];
+              const baseVal = cMin === 0 ? next[r].month : next[r].prices[activeColumns[cMin]];
               for (let c = cMin + 1; c <= cMax; c++) {
-                  // Only fill if it's not the Month column or if we are filling the Month column specifically
                   if (c === 0) next[r].month = String(baseVal);
-                  else if (baseVal !== undefined) next[r].prices[COLUMNS[c]] = Number(baseVal);
+                  else if (baseVal !== undefined) next[r].prices[activeColumns[c]] = Number(baseVal);
               }
           }
           updateGridWithHistory(next);
@@ -315,7 +330,7 @@ export const ForwardCurveModal: React.FC<ForwardCurveModalProps> = ({ onClose, o
           for (let r = rMin; r <= rMax; r++) {
               let line = [];
               for (let c = cMin; c <= cMax; c++) {
-                  const val = c === 0 ? currentGrid[r]?.month : currentGrid[r]?.prices[COLUMNS[c]];
+                  const val = c === 0 ? currentGrid[r]?.month : currentGrid[r]?.prices[activeColumns[c]];
                   line.push(val ?? '');
               }
               tsv += line.join('\t') + '\n';
@@ -332,7 +347,7 @@ export const ForwardCurveModal: React.FC<ForwardCurveModalProps> = ({ onClose, o
           if (e.key === 'ArrowUp') nr = Math.max(0, endRow - 1);
           if (e.key === 'ArrowDown') nr = Math.min(currentGrid.length - 1, endRow + 1);
           if (e.key === 'ArrowLeft') nc = Math.max(0, endCol - 1);
-          if (e.key === 'ArrowRight') nc = Math.min(COLUMNS.length - 1, endCol + 1);
+          if (e.key === 'ArrowRight') nc = Math.min(activeColumns.length - 1, endCol + 1);
           if (nr !== endRow || nc !== endCol) {
               setSelection(e.shiftKey ? { ...selection, endRow: nr, endCol: nc } : { startRow: nr, startCol: nc, endRow: nr, endCol: nc });
               e.preventDefault();
@@ -340,11 +355,11 @@ export const ForwardCurveModal: React.FC<ForwardCurveModalProps> = ({ onClose, o
           if (e.key === 'Enter') { handleCellDoubleClick(endRow, endCol); e.preventDefault(); }
           if (e.key === 'Tab') {
               e.preventDefault();
-              const nextC = e.shiftKey ? Math.max(0, endCol - 1) : Math.min(COLUMNS.length - 1, endCol + 1);
+              const nextC = e.shiftKey ? Math.max(0, endCol - 1) : Math.min(activeColumns.length - 1, endCol + 1);
               setSelection({ startRow: endRow, startCol: nextC, endRow: endRow, endCol: nextC });
           }
       }
-  }, [selection, editingCell, currentGrid, editValue, undo, redo]);
+  }, [selection, editingCell, currentGrid, editValue, undo, redo, activeColumns]);
 
   const handlePaste = (e: React.ClipboardEvent) => {
       const text = e.clipboardData.getData('Text');
@@ -376,7 +391,7 @@ export const ForwardCurveModal: React.FC<ForwardCurveModalProps> = ({ onClose, o
           for (let r = rMin; r <= rMax; r++) {
               for (let c = cMin; c <= cMax; c++) {
                   if (c === 0) { const m = parseCurveDate(fillVal); next[r].month = m || fillVal; }
-                  else { const num = parseFloat(fillVal.replace(/[^0-9.-]/g, '')); if (!isNaN(num)) next[r].prices[COLUMNS[c]] = num; }
+                  else { const num = parseFloat(fillVal.replace(/[^0-9.-]/g, '')); if (!isNaN(num)) next[r].prices[activeColumns[c]] = num; }
               }
           }
       } else {
@@ -386,13 +401,13 @@ export const ForwardCurveModal: React.FC<ForwardCurveModalProps> = ({ onClose, o
               const cells = line.split('\t');
               cells.forEach((cell, cellIdx) => {
                   const c = startC + cellIdx;
-                  if (c >= COLUMNS.length) return;
+                  if (c >= activeColumns.length) return;
                   const val = cell.trim();
                   if (c === 0) { const m = parseCurveDate(val); next[r].month = m || val; }
                   else {
                       const num = parseFloat(val.replace(/[^0-9.-]/g, ''));
-                      if (!isNaN(num)) next[r].prices[COLUMNS[c]] = num;
-                      else if (val === '') delete next[r].prices[COLUMNS[c]];
+                      if (!isNaN(num)) next[r].prices[activeColumns[c]] = num;
+                      else if (val === '') delete next[r].prices[activeColumns[c]];
                   }
               });
           });
@@ -498,7 +513,7 @@ export const ForwardCurveModal: React.FC<ForwardCurveModalProps> = ({ onClose, o
                     <div className="flex-1 overflow-auto custom-scrollbar p-6 bg-slate-100/30">
                         <div className="bg-white border border-slate-300 rounded shadow-md min-w-max flex flex-col select-none relative">
                             <div className="flex sticky top-0 bg-slate-200 border-b-2 border-slate-300 divide-x divide-slate-300 z-20">
-                                {COLUMNS.map((col, idx) => (
+                                {activeColumns.map((col, idx) => (
                                     <div key={col} className={`px-4 py-2 text-[9px] font-black text-slate-600 uppercase tracking-tighter text-center ${idx === 0 ? 'w-32' : 'w-24'}`}>
                                         {col}
                                     </div>
@@ -508,10 +523,10 @@ export const ForwardCurveModal: React.FC<ForwardCurveModalProps> = ({ onClose, o
                             <div className="divide-y divide-slate-200">
                                 {currentGrid.map((row, rIdx) => (
                                     <div key={rIdx} className="flex divide-x divide-slate-200">
-                                        {COLUMNS.map((col, cIdx) => {
+                                        {activeColumns.map((col, cIdx) => {
                                             const isMonthCol = cIdx === 0;
                                             const active = editingCell?.r === rIdx && editingCell?.c === cIdx;
-                                            const val = isMonthCol ? row.month : row.prices[col];
+                                            const val = isMonthCol ? row.month : row.prices[activeColumns[cIdx]];
                                             const selected = isSelected(rIdx, cIdx);
 
                                             return (
@@ -566,7 +581,7 @@ export const ForwardCurveModal: React.FC<ForwardCurveModalProps> = ({ onClose, o
                     <div className="grid grid-cols-1 md:grid-cols-3 gap-4 bg-white p-5 rounded-2xl border border-slate-200 shadow-sm">
                         <div className="space-y-1">
                             <label className="text-[10px] font-black text-slate-400 uppercase">Benchmark</label>
-                            <select value={selectedAnalysisIndex} onChange={(e) => setSelectedAnalysisIndex(e.target.value)} className="w-full border border-slate-200 rounded-xl px-4 py-2.5 text-sm font-bold text-slate-700">{INDICES.map(idx => <option key={idx} value={idx}>{idx}</option>)}</select>
+                            <select value={selectedAnalysisIndex} onChange={(e) => setSelectedAnalysisIndex(e.target.value)} className="w-full border border-slate-200 rounded-xl px-4 py-2.5 text-sm font-bold text-slate-700">{activeIndices.map(idx => <option key={idx} value={idx}>{idx}</option>)}</select>
                         </div>
                         <div className="space-y-1">
                             <label className="text-[10px] font-black text-slate-400 uppercase">Baseline Curve</label>
@@ -598,7 +613,7 @@ export const ForwardCurveModal: React.FC<ForwardCurveModalProps> = ({ onClose, o
                     <div className="grid grid-cols-1 md:grid-cols-2 gap-4 bg-white p-5 rounded-2xl border border-slate-200 shadow-sm">
                         <div className="space-y-1">
                             <label className="text-[10px] font-black text-slate-400 uppercase">Index</label>
-                            <select value={evolutionIndex} onChange={(e) => setEvolutionIndex(e.target.value)} className="w-full border border-slate-200 rounded-xl px-4 py-2.5 text-sm font-bold text-slate-700">{INDICES.map(idx => <option key={idx} value={idx}>{idx}</option>)}</select>
+                            <select value={evolutionIndex} onChange={(e) => setEvolutionIndex(e.target.value)} className="w-full border border-slate-200 rounded-xl px-4 py-2.5 text-sm font-bold text-slate-700">{activeIndices.map(idx => <option key={idx} value={idx}>{idx}</option>)}</select>
                         </div>
                         <div className="space-y-1">
                             <label className="text-[10px] font-black text-slate-400 uppercase">Contract Month</label>

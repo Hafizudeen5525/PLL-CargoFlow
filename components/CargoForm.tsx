@@ -29,7 +29,8 @@ const InputGroup: React.FC<{
     hint?: string;
     children?: React.ReactNode;
     className?: string;
-}> = React.memo(({ label, name, value, onChange, type = "text", step, readOnly = false, disabled = false, hint, children, className = "" }) => (
+    footer?: React.ReactNode;
+}> = React.memo(({ label, name, value, onChange, type = "text", step, readOnly = false, disabled = false, hint, children, className = "", footer }) => (
     <div className={`flex flex-col group relative ${className}`}>
       <label className="text-[10px] font-bold text-slate-400 uppercase tracking-wide mb-1.5 ml-1">{label}</label>
       <div className="relative">
@@ -50,8 +51,56 @@ const InputGroup: React.FC<{
         {children}
       </div>
       {hint && <p className="text-[10px] text-slate-400 mt-1 ml-1">{hint}</p>}
+      {footer && <div className="mt-1.5">{footer}</div>}
     </div>
 ));
+
+/**
+ * Helper to extract index references from a text formula
+ */
+const FormulaIndicesDisplay: React.FC<{ formula: string, refDate: string }> = ({ formula, refDate }) => {
+    const indices = useMemo(() => {
+        if (!formula || !refDate) return [];
+        const found: { name: string, mDef: string, price: number }[] = [];
+        
+        // Match IndexName (MonthDef) or just IndexName
+        const regex = /([a-zA-Z0-9\s]+?)(?:\(([^)]+)\))?\b/g;
+        let match;
+        const seen = new Set();
+
+        // Use standard index names for detection
+        const standardNames = [...INDEX_OPTIONS, 'HENRY HUB', 'DUTCH TTF', 'BRENT'];
+
+        while ((match = regex.exec(formula)) !== null) {
+            const rawName = match[1].trim().toUpperCase();
+            const mDef = match[2] || 'n';
+            
+            // Check if it's a known index
+            const isKnown = standardNames.some(s => rawName === s || rawName.includes(s));
+            if (isKnown && !seen.has(`${rawName}_${mDef}`)) {
+                const { price } = getIndexPrice(rawName, refDate, mDef);
+                if (price > 0) {
+                    found.push({ name: rawName, mDef, price });
+                    seen.add(`${rawName}_${mDef}`);
+                }
+            }
+        }
+        return found;
+    }, [formula, refDate]);
+
+    if (indices.length === 0) return null;
+
+    return (
+        <div className="flex flex-wrap gap-2">
+            {indices.map((idx, i) => (
+                <div key={i} className="flex items-center gap-1.5 bg-slate-100 px-2 py-1 rounded-md border border-slate-200">
+                    <span className="text-[9px] font-bold text-slate-500 uppercase">{idx.name} ({idx.mDef}):</span>
+                    <span className="text-[10px] font-black text-blue-600 font-mono">${idx.price.toFixed(3)}</span>
+                </div>
+            ))}
+        </div>
+    );
+};
 
 const ComponentRow: React.FC<{
     type: 'buy' | 'sell' | 'tier2Sell' | 'tier2Buy';
@@ -96,6 +145,7 @@ const ComponentRow: React.FC<{
             </div>
             <div className="col-span-2 text-right">
                 <div className="text-[9px] font-bold text-slate-400 uppercase">Result</div>
+                <div className="text-[9px] text-slate-400 font-mono mb-0.5">Base: ${price.toFixed(3)}</div>
                 <div className="text-xs font-bold text-blue-600 truncate">${componentValue.toFixed(3)}</div>
             </div>
         </div>
@@ -246,7 +296,14 @@ export const CargoForm: React.FC<CargoFormProps> = ({ initialData, onSave, onCan
                     <InputGroup label="Loaded Volume (Tier 1)" name="loadedVolume" type="number" value={formData.loadedVolume} onChange={handleChange} />
 
                     {pricingMode === 'formula' ? (
-                        <InputGroup label="Purchase Formula" name="buyFormula" value={formData.buyFormula} onChange={handleChange} hint="e.g. JKM - 0.50" />
+                        <InputGroup 
+                            label="Purchase Formula" 
+                            name="buyFormula" 
+                            value={formData.buyFormula} 
+                            onChange={handleChange} 
+                            hint="e.g. JKM - 0.50" 
+                            footer={<FormulaIndicesDisplay formula={formData.buyFormula} refDate={formData.loadingDate} />}
+                        />
                     ) : (
                         <div className="space-y-3">
                             {[1, 2, 3].map(i => <ComponentRow key={i} idx={i} type="buy" formData={formData} onChange={handleChange} />)}
@@ -280,7 +337,14 @@ export const CargoForm: React.FC<CargoFormProps> = ({ initialData, onSave, onCan
                     <InputGroup label="Delivered Volume (Tier 1)" name="deliveredVolume" type="number" value={formData.deliveredVolume} onChange={handleChange} />
 
                     {pricingMode === 'formula' ? (
-                        <InputGroup label="Sales Formula" name="sellFormula" value={formData.sellFormula} onChange={handleChange} hint="e.g. 115% HH + 2.50" />
+                        <InputGroup 
+                            label="Sales Formula" 
+                            name="sellFormula" 
+                            value={formData.sellFormula} 
+                            onChange={handleChange} 
+                            hint="e.g. 115% HH + 2.50" 
+                            footer={<FormulaIndicesDisplay formula={formData.sellFormula} refDate={formData.deliveryDate} />}
+                        />
                     ) : (
                         <div className="space-y-3">
                             {[1, 2, 3].map(i => <ComponentRow key={i} idx={i} type="sell" formData={formData} onChange={handleChange} />)}
@@ -327,7 +391,13 @@ export const CargoForm: React.FC<CargoFormProps> = ({ initialData, onSave, onCan
                         <InputGroup label="Tier 2 Loaded Volume" name="tier2LoadedVolume" type="number" value={formData.tier2LoadedVolume} onChange={handleChange} />
                         
                         {pricingMode === 'formula' ? (
-                            <InputGroup label="Tier 2 Buy Formula" name="tier2BuyFormula" value={formData.tier2BuyFormula} onChange={handleChange} />
+                            <InputGroup 
+                                label="Tier 2 Buy Formula" 
+                                name="tier2BuyFormula" 
+                                value={formData.tier2BuyFormula} 
+                                onChange={handleChange} 
+                                footer={<FormulaIndicesDisplay formula={formData.tier2BuyFormula} refDate={formData.loadingDate} />}
+                            />
                         ) : (
                             <div className="space-y-3">
                                 {[1, 2, 3].map(i => <ComponentRow key={i} idx={i} type="tier2Buy" formData={formData} onChange={handleChange} />)}
@@ -354,7 +424,13 @@ export const CargoForm: React.FC<CargoFormProps> = ({ initialData, onSave, onCan
                         <InputGroup label="Tier 2 Delivered Volume" name="tier2DeliveredVolume" type="number" value={formData.tier2DeliveredVolume} onChange={handleChange} />
                         
                         {pricingMode === 'formula' ? (
-                            <InputGroup label="Tier 2 Sell Formula" name="tier2SellFormula" value={formData.tier2SellFormula} onChange={handleChange} />
+                            <InputGroup 
+                                label="Tier 2 Sell Formula" 
+                                name="tier2SellFormula" 
+                                value={formData.tier2SellFormula} 
+                                onChange={handleChange} 
+                                footer={<FormulaIndicesDisplay formula={formData.tier2SellFormula} refDate={formData.deliveryDate} />}
+                            />
                         ) : (
                             <div className="space-y-3">
                                 {[1, 2, 3].map(i => <ComponentRow key={i} idx={i} type="tier2Sell" formData={formData} onChange={handleChange} />)}

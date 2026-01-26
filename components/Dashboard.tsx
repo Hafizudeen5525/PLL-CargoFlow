@@ -48,6 +48,14 @@ const ShipIcon = ({ className, flip = false }: { className?: string, flip?: bool
     </svg>
 );
 
+interface FinancialStats {
+    pnl: number;
+    revenue: number;
+    purchase: number;
+    other: number;
+    vol: number;
+}
+
 export const Dashboard: React.FC<DashboardProps> = ({ profiles, marketData, forwardCurve, onRefreshMarket, onCargoClick, portfolioYear = 'All' }) => {
   const [curveView, setCurveView] = useState<'gas' | 'oil'>('gas');
   const [groupFilter, setGroupFilter] = useState<string>('All');
@@ -55,7 +63,7 @@ export const Dashboard: React.FC<DashboardProps> = ({ profiles, marketData, forw
   const [targetDate, setTargetDate] = useState<string>('');
   const [baselineDate, setBaselineDate] = useState<string>('');
   
-  const [activeDrillDown, setActiveDrillDown] = useState<'total' | 'volume' | 'realized' | 'unrealized' | null>(null);
+  const [activeDrillDown, setActiveDrillDown] = useState<string | null>(null);
 
   const [debugMode, setDebugMode] = useState<'single' | 'health' | 'tester' | 'gaps' | 'variance'>('health');
   const [baselineSnapshot, setBaselineSnapshot] = useState<{ profiles: CargoProfile[], date: string } | null>(null);
@@ -144,19 +152,56 @@ export const Dashboard: React.FC<DashboardProps> = ({ profiles, marketData, forw
   }, [viewProfiles, targetDate]);
 
   const targetStats = useMemo(() => {
-      return viewProfiles.reduce((acc, p) => ({
-          totalPnL: acc.totalPnL + (p.finalTotalPnL || 0),
-          totalVolume: acc.totalVolume + (p.deliveredVolume || 0),
-          realizedPnL: acc.realizedPnL + (p.pnlBucket === PnLBucket.Realized ? (p.finalTotalPnL || 0) : 0),
-          unrealizedPnL: acc.unrealizedPnL + (p.pnlBucket === PnLBucket.Unrealized ? (p.finalTotalPnL || 0) : 0)
-      }), { totalPnL: 0, totalVolume: 0, realizedPnL: 0, unrealizedPnL: 0 });
+      const initStats = () => ({ pnl: 0, revenue: 0, purchase: 0, other: 0, vol: 0 });
+      const acc = {
+          total: initStats(),
+          realized: initStats(),
+          unrealized: initStats()
+      };
+
+      viewProfiles.forEach(p => {
+          const pnl = p.finalTotalPnL || 0;
+          const revenue = p.finalSalesRevenue || 0;
+          const vol = p.deliveredVolume || 0;
+          
+          const totalPurchaseT1 = (p.loadedVolume || 0) * (p.absoluteBuyPrice || 0);
+          const totalPurchaseT2 = p.isTieredPricing ? (p.tier2LoadedVolume || 0) * (p.absoluteTier2BuyPrice || 0) : 0;
+          const purchase = (p.reconciledPurchaseCost > 0) ? p.reconciledPurchaseCost : (totalPurchaseT1 + totalPurchaseT2);
+          const other = pnl - revenue + purchase;
+
+          // Add to Total
+          acc.total.pnl += pnl;
+          acc.total.revenue += revenue;
+          acc.total.purchase += purchase;
+          acc.total.other += other;
+          acc.total.vol += vol;
+
+          // Add to Buckets
+          if (p.pnlBucket === PnLBucket.Realized) {
+              acc.realized.pnl += pnl;
+              acc.realized.revenue += revenue;
+              acc.realized.purchase += purchase;
+              acc.realized.other += other;
+              acc.realized.vol += vol;
+          } else {
+              acc.unrealized.pnl += pnl;
+              acc.unrealized.revenue += revenue;
+              acc.unrealized.purchase += purchase;
+              acc.unrealized.other += other;
+              acc.unrealized.vol += vol;
+          }
+      });
+
+      return acc;
   }, [viewProfiles]);
 
-  const getStatsFromDate = (dateStr: string) => {
-    let totalPnL = 0;
-    let totalVolume = 0;
-    let realizedPnL = 0;
-    let unrealizedPnL = 0;
+  const getStatsSnapshot = (dateStr: string) => {
+    const initStats = () => ({ pnl: 0, revenue: 0, purchase: 0, other: 0, vol: 0 });
+    const acc = {
+        total: initStats(),
+        realized: initStats(),
+        unrealized: initStats()
+    };
 
     let filtered = profiles;
     if (groupFilter !== 'All') {
@@ -164,20 +209,45 @@ export const Dashboard: React.FC<DashboardProps> = ({ profiles, marketData, forw
     }
 
     filtered.forEach(p => {
-        let calcProfile = p;
+        let cp = p;
         if (p.pnlBucket !== PnLBucket.Realized && dateStr) {
-            calcProfile = recalculateProfile(p, true, dateStr) as CargoProfile;
+            cp = recalculateProfile(p, true, dateStr) as CargoProfile;
         }
-        totalPnL += (calcProfile.finalTotalPnL || 0);
-        totalVolume += (calcProfile.deliveredVolume || 0);
-        if (calcProfile.pnlBucket === PnLBucket.Realized) realizedPnL += (calcProfile.finalTotalPnL || 0);
-        if (calcProfile.pnlBucket === PnLBucket.Unrealized) unrealizedPnL += (calcProfile.finalTotalPnL || 0);
+        
+        const pnl = cp.finalTotalPnL || 0;
+        const revenue = cp.finalSalesRevenue || 0;
+        const vol = cp.deliveredVolume || 0;
+        
+        const totalPurchaseT1 = (cp.loadedVolume || 0) * (cp.absoluteBuyPrice || 0);
+        const totalPurchaseT2 = cp.isTieredPricing ? (cp.tier2LoadedVolume || 0) * (cp.absoluteTier2BuyPrice || 0) : 0;
+        const purchase = (cp.reconciledPurchaseCost > 0) ? cp.reconciledPurchaseCost : (totalPurchaseT1 + totalPurchaseT2);
+        const other = pnl - revenue + purchase;
+
+        acc.total.pnl += pnl;
+        acc.total.revenue += revenue;
+        acc.total.purchase += purchase;
+        acc.total.other += other;
+        acc.total.vol += vol;
+
+        if (cp.pnlBucket === PnLBucket.Realized) {
+            acc.realized.pnl += pnl;
+            acc.realized.revenue += revenue;
+            acc.realized.purchase += purchase;
+            acc.realized.other += other;
+            acc.realized.vol += vol;
+        } else {
+            acc.unrealized.pnl += pnl;
+            acc.unrealized.revenue += revenue;
+            acc.unrealized.purchase += purchase;
+            acc.unrealized.other += other;
+            acc.unrealized.vol += vol;
+        }
     });
 
-    return { totalPnL, totalVolume, realizedPnL, unrealizedPnL };
-};
+    return acc;
+  };
 
-  const baselineStats = useMemo(() => getStatsFromDate(baselineDate), [profiles, groupFilter, baselineDate]);
+  const baselineStats = useMemo(() => getStatsSnapshot(baselineDate), [profiles, groupFilter, baselineDate]);
 
   const timelineEvents = useMemo(() => {
       const today = new Date();
@@ -253,11 +323,47 @@ export const Dashboard: React.FC<DashboardProps> = ({ profiles, marketData, forw
           </div>
       </div>
 
-      <div className="grid grid-cols-1 md:grid-cols-4 gap-4">
-        <StatCard title="Total Net P&L" value={targetStats.totalPnL} prevValue={baselineStats.totalPnL} compareDate={baselineDate} format={formatCurrency} colorClass={targetStats.totalPnL >= 0 ? 'text-emerald-600' : 'text-rose-600'} onClick={() => setActiveDrillDown('total')} />
-        <StatCard title="Total Volume" value={targetStats.totalVolume.toLocaleString()} prevValue={baselineStats.totalVolume} compareDate={baselineDate} suffix=" Vol" colorClass="text-slate-800" onClick={() => setActiveDrillDown('volume')} />
-        <StatCard title="Realized P&L" value={targetStats.realizedPnL} prevValue={baselineStats.realizedPnL} compareDate={baselineDate} format={formatCurrency} colorClass="text-blue-600" onClick={() => setActiveDrillDown('realized')} />
-        <StatCard title="Unrealized P&L" value={targetStats.unrealizedPnL} prevValue={baselineStats.unrealizedPnL} compareDate={baselineDate} format={formatCurrency} colorClass="text-amber-600" onClick={() => setActiveDrillDown('unrealized')} />
+      <div className="space-y-4">
+        {/* Main KPI Row */}
+        <div className="grid grid-cols-1 md:grid-cols-2 gap-4">
+            <FinancialHeroCard 
+                title="Total Net P&L" 
+                stats={targetStats.total} 
+                baseline={baselineStats.total} 
+                compareDate={baselineDate} 
+                isHero 
+                onClick={() => setActiveDrillDown('Total P&L')}
+            />
+            <StatCard 
+                title="Portfolio Gross Volume" 
+                value={targetStats.total.vol} 
+                prevValue={baselineStats.total.vol} 
+                compareDate={baselineDate} 
+                suffix=" Vol Units" 
+                colorClass="text-slate-800" 
+                onClick={() => setActiveDrillDown('Volume')}
+            />
+        </div>
+
+        {/* Realized / Unrealized Breakdown Row */}
+        <div className="grid grid-cols-1 md:grid-cols-2 gap-4">
+             <FinancialHeroCard 
+                title="Realized Performance" 
+                stats={targetStats.realized} 
+                baseline={baselineStats.realized} 
+                compareDate={baselineDate} 
+                colorClass="text-blue-600"
+                onClick={() => setActiveDrillDown('Realized P&L')}
+            />
+            <FinancialHeroCard 
+                title="Unrealized Projection" 
+                stats={targetStats.unrealized} 
+                baseline={baselineStats.unrealized} 
+                compareDate={baselineDate} 
+                colorClass="text-amber-600"
+                onClick={() => setActiveDrillDown('Unrealized P&L')}
+            />
+        </div>
       </div>
 
       <div className="grid grid-cols-1 lg:grid-cols-3 gap-6">
@@ -320,7 +426,6 @@ export const Dashboard: React.FC<DashboardProps> = ({ profiles, marketData, forw
           />
       </motion.div>
 
-      {/* Advanced Variance Analysis Section */}
       <motion.div variants={itemVariants} className="space-y-4">
           <div className="flex justify-between items-center">
               <h3 className="text-sm font-bold text-slate-500 uppercase tracking-widest">Portfolio & Market Variance Attribution</h3>
@@ -415,25 +520,94 @@ export const Dashboard: React.FC<DashboardProps> = ({ profiles, marketData, forw
       </motion.div>
 
       <AnimatePresence>
-          {activeDrillDown && <DrillDownTable profiles={viewProfiles} metricType={activeDrillDown} onClose={() => setActiveDrillDown(null)} targetDate={targetDate} format={formatCurrency} />}
+          {activeDrillDown && (
+            <DrillDownTable 
+                profiles={viewProfiles} 
+                metricType={activeDrillDown} 
+                onClose={() => setActiveDrillDown(null)} 
+                targetDate={targetDate} 
+                format={formatCurrency} 
+            />
+          )}
       </AnimatePresence>
     </motion.div>
   );
 };
 
-const StatCard = ({ title, value, prevValue, compareDate, format, suffix, colorClass, onClick }: any) => {
+/**
+ * Hero Card with sub-breakdown for Revenue, Purchase, and Other
+ */
+const FinancialHeroCard = ({ title, stats, baseline, compareDate, isHero, colorClass, onClick }: any) => {
+    const format = (val: number) => new Intl.NumberFormat('en-US', { style: 'currency', currency: 'USD', maximumFractionDigits: 0 }).format(val);
+    const delta = stats.pnl - baseline.pnl;
+    const isPositive = delta >= 0;
+
+    return (
+        <motion.div 
+            className={`bg-white p-6 rounded-2xl shadow-sm border transition-all flex flex-col justify-between h-full ${isHero ? 'border-indigo-100 ring-2 ring-indigo-50/50' : 'border-slate-100'} ${onClick ? 'cursor-pointer hover:shadow-md hover:-translate-y-1' : ''}`}
+            variants={{ hidden: { opacity: 0, y: 10 }, visible: { opacity: 1, y: 0 } }}
+            onClick={onClick}
+        >
+            <div>
+                <div className="flex justify-between items-start mb-4">
+                    <p className={`text-xs font-black uppercase tracking-widest ${isHero ? 'text-indigo-500' : 'text-slate-400'}`}>{title}</p>
+                    <div className={`px-2 py-1 rounded-lg text-[10px] font-bold ${isPositive ? 'bg-emerald-50 text-emerald-600' : 'bg-rose-50 text-rose-600'}`}>
+                        {isPositive ? '▲' : '▼'} {format(Math.abs(delta))}
+                    </div>
+                </div>
+                <p className={`text-3xl font-black ${stats.pnl >= 0 ? 'text-emerald-600' : 'text-rose-600'} ${colorClass || ''}`}>
+                    {format(stats.pnl)}
+                </p>
+                <p className="text-[10px] text-slate-400 mt-1 font-bold uppercase tracking-tight">Market Basis: {compareDate}</p>
+            </div>
+
+            {/* Sub-breakdown Row */}
+            <div className="grid grid-cols-3 gap-4 mt-8 pt-6 border-t border-slate-50">
+                <SubMetric label="Revenue" value={stats.revenue} baseline={baseline.revenue} format={format} color="text-indigo-600" />
+                <SubMetric label="Purchase" value={stats.purchase} baseline={baseline.purchase} format={format} color="text-rose-500" invert />
+                <SubMetric label="Other" value={stats.other} baseline={baseline.other} format={format} color="text-slate-600" />
+            </div>
+        </motion.div>
+    );
+};
+
+const SubMetric = ({ label, value, baseline, format, color, invert }: any) => {
+    const delta = value - baseline;
+    const isImproved = invert ? delta <= 0 : delta >= 0;
+    
+    return (
+        <div>
+            <p className="text-[9px] font-black text-slate-400 uppercase tracking-tighter mb-0.5">{label}</p>
+            <p className={`text-xs font-bold ${color}`}>{format(value)}</p>
+            <div className={`text-[8px] font-bold mt-0.5 ${isImproved ? 'text-emerald-500' : 'text-rose-400'}`}>
+                {delta >= 0 ? '+' : '-'}{format(Math.abs(delta))}
+            </div>
+        </div>
+    );
+};
+
+const StatCard = ({ title, value, prevValue, compareDate, format, suffix, colorClass, onClick, isHero, hint }: any) => {
     let delta = null;
     let isPositive = false;
     if (prevValue !== undefined && prevValue !== null && typeof value === 'number') {
         delta = value - prevValue;
         isPositive = delta >= 0;
     }
+    const displayVal = format ? format(value) : (typeof value === 'number' ? value.toLocaleString() : value);
+
     return (
-        <motion.div className={`bg-white p-6 rounded-xl shadow-sm border border-slate-100 transition-all ${onClick ? 'cursor-pointer hover:shadow-md hover:-translate-y-1' : ''}`} variants={{ hidden: { opacity: 0, y: 10 }, visible: { opacity: 1, y: 0 } }} onClick={onClick}>
-          <p className="text-xs font-bold text-slate-400 uppercase tracking-wider mb-2">{title}</p>
-          <p className={`text-2xl font-bold ${colorClass}`}>{format ? format(value) : value}{suffix}</p>
+        <motion.div 
+            className={`bg-white p-6 rounded-2xl shadow-sm border transition-all h-full ${isHero ? 'border-indigo-100 ring-1 ring-indigo-50/50' : 'border-slate-100'} ${onClick ? 'cursor-pointer hover:shadow-md hover:-translate-y-1' : ''}`} 
+            variants={{ hidden: { opacity: 0, y: 10 }, visible: { opacity: 1, y: 0 } }} 
+            onClick={onClick}
+        >
+          <div className="flex justify-between items-start mb-2">
+            <p className={`text-xs font-black uppercase tracking-widest ${isHero ? 'text-indigo-500' : 'text-slate-400'}`}>{title}</p>
+            {hint && <span className="text-[9px] font-bold text-slate-300 uppercase">{hint}</span>}
+          </div>
+          <p className={`text-3xl font-black ${colorClass}`}>{displayVal}{suffix}</p>
           {delta !== null && (
-              <div className="flex items-center gap-1.5 mt-1 text-[10px] font-bold">
+              <div className="flex items-center gap-1.5 mt-2 text-[10px] font-bold">
                   <span className={isPositive ? 'text-emerald-500' : 'text-rose-500'}>{isPositive ? '▲' : '▼'} {format ? format(Math.abs(delta)) : Math.abs(delta).toLocaleString()}</span>
                   <span className="text-slate-400 font-normal">vs {compareDate}</span>
               </div>
