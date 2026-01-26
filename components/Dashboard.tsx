@@ -16,6 +16,7 @@ interface DashboardProps {
   onRefreshMarket: () => void;
   onCargoClick?: (profile: CargoProfile) => void;
   portfolioYear?: string;
+  editingProfileId?: string;
 }
 
 const COLORS = ['#0088FE', '#00C49F', '#FFBB28', '#FF8042', '#8884d8', '#ec4899', '#6366f1'];
@@ -48,22 +49,19 @@ const ShipIcon = ({ className, flip = false }: { className?: string, flip?: bool
     </svg>
 );
 
-interface FinancialStats {
-    pnl: number;
-    revenue: number;
-    purchase: number;
-    other: number;
-    vol: number;
+interface DrillDownConfig {
+    bucket: 'Total' | 'Realized' | 'Unrealized';
+    metric: 'PnL' | 'Revenue' | 'Purchase' | 'Other' | 'Volume';
 }
 
-export const Dashboard: React.FC<DashboardProps> = ({ profiles, marketData, forwardCurve, onRefreshMarket, onCargoClick, portfolioYear = 'All' }) => {
+export const Dashboard: React.FC<DashboardProps> = ({ profiles, marketData, forwardCurve, onRefreshMarket, onCargoClick, portfolioYear = 'All', editingProfileId }) => {
   const [curveView, setCurveView] = useState<'gas' | 'oil'>('gas');
   const [groupFilter, setGroupFilter] = useState<string>('All');
   
   const [targetDate, setTargetDate] = useState<string>('');
   const [baselineDate, setBaselineDate] = useState<string>('');
   
-  const [activeDrillDown, setActiveDrillDown] = useState<string | null>(null);
+  const [activeDrillDown, setActiveDrillDown] = useState<DrillDownConfig | null>(null);
 
   const [debugMode, setDebugMode] = useState<'single' | 'health' | 'tester' | 'gaps' | 'variance'>('health');
   const [baselineSnapshot, setBaselineSnapshot] = useState<{ profiles: CargoProfile[], date: string } | null>(null);
@@ -150,6 +148,16 @@ export const Dashboard: React.FC<DashboardProps> = ({ profiles, marketData, forw
 
       return { errors, warnings, success };
   }, [viewProfiles, targetDate]);
+
+  const strategyMovements = useMemo(() => {
+      if (!baselineDate || !targetDate) return [];
+      return viewProfiles.map(p => {
+          const pBase = (p.pnlBucket === PnLBucket.Realized) ? p : recalculateProfile(p, true, baselineDate) as CargoProfile;
+          const pCurr = (p.pnlBucket === PnLBucket.Realized) ? p : recalculateProfile(p, true, targetDate) as CargoProfile;
+          const delta = (pCurr.finalTotalPnL || 0) - (pBase.finalTotalPnL || 0);
+          return { name: p.strategyName, delta };
+      }).filter(m => Math.abs(m.delta) > 0.01).sort((a,b) => Math.abs(b.delta) - Math.abs(a.delta));
+  }, [viewProfiles, baselineDate, targetDate]);
 
   const targetStats = useMemo(() => {
       const initStats = () => ({ pnl: 0, revenue: 0, purchase: 0, other: 0, vol: 0 });
@@ -324,15 +332,15 @@ export const Dashboard: React.FC<DashboardProps> = ({ profiles, marketData, forw
       </div>
 
       <div className="space-y-4">
-        {/* Main KPI Row */}
         <div className="grid grid-cols-1 md:grid-cols-2 gap-4">
             <FinancialHeroCard 
                 title="Total Net P&L" 
+                bucket="Total"
                 stats={targetStats.total} 
                 baseline={baselineStats.total} 
                 compareDate={baselineDate} 
                 isHero 
-                onClick={() => setActiveDrillDown('Total P&L')}
+                onDrillDown={(metric: any) => setActiveDrillDown({ bucket: 'Total', metric })}
             />
             <StatCard 
                 title="Portfolio Gross Volume" 
@@ -341,30 +349,35 @@ export const Dashboard: React.FC<DashboardProps> = ({ profiles, marketData, forw
                 compareDate={baselineDate} 
                 suffix=" Vol Units" 
                 colorClass="text-slate-800" 
-                onClick={() => setActiveDrillDown('Volume')}
+                onClick={() => setActiveDrillDown({ bucket: 'Total', metric: 'Volume' })}
             />
         </div>
 
-        {/* Realized / Unrealized Breakdown Row */}
         <div className="grid grid-cols-1 md:grid-cols-2 gap-4">
              <FinancialHeroCard 
                 title="Realized Performance" 
+                bucket="Realized"
                 stats={targetStats.realized} 
                 baseline={baselineStats.realized} 
                 compareDate={baselineDate} 
                 colorClass="text-blue-600"
-                onClick={() => setActiveDrillDown('Realized P&L')}
+                onDrillDown={(metric: any) => setActiveDrillDown({ bucket: 'Realized', metric })}
             />
             <FinancialHeroCard 
                 title="Unrealized Projection" 
+                bucket="Unrealized"
                 stats={targetStats.unrealized} 
                 baseline={baselineStats.unrealized} 
                 compareDate={baselineDate} 
                 colorClass="text-amber-600"
-                onClick={() => setActiveDrillDown('Unrealized P&L')}
+                onDrillDown={(metric: any) => setActiveDrillDown({ bucket: 'Unrealized', metric })}
             />
         </div>
       </div>
+
+      <motion.div variants={itemVariants}>
+          <StrategyTicker movements={strategyMovements} baselineDate={baselineDate} />
+      </motion.div>
 
       <div className="grid grid-cols-1 lg:grid-cols-3 gap-6">
           <motion.div variants={itemVariants} className="lg:col-span-2 bg-white rounded-xl shadow-lg border border-slate-200 overflow-hidden flex flex-col h-[500px]">
@@ -523,10 +536,15 @@ export const Dashboard: React.FC<DashboardProps> = ({ profiles, marketData, forw
           {activeDrillDown && (
             <DrillDownTable 
                 profiles={viewProfiles} 
-                metricType={activeDrillDown} 
+                config={activeDrillDown} 
                 onClose={() => setActiveDrillDown(null)} 
+                onCargoClick={(p) => {
+                    onCargoClick?.(p);
+                }}
                 targetDate={targetDate} 
                 format={formatCurrency} 
+                baselineDate={baselineDate}
+                editingProfileId={editingProfileId}
             />
           )}
       </AnimatePresence>
@@ -535,20 +553,59 @@ export const Dashboard: React.FC<DashboardProps> = ({ profiles, marketData, forw
 };
 
 /**
+ * Scrolling Movement Ticker
+ */
+const StrategyTicker = ({ movements, baselineDate }: { movements: { name: string, delta: number }[], baselineDate: string }) => {
+    if (movements.length === 0) return null;
+
+    return (
+        <div className="bg-slate-900 py-2.5 overflow-hidden whitespace-nowrap border-y border-slate-800 relative shadow-inner">
+            <div className="flex animate-marquee-slower items-center">
+                {[...movements, ...movements, ...movements].map((m, i) => (
+                    <div key={i} className="flex items-center gap-2 mx-10 text-[11px] font-black">
+                        <span className="text-slate-500 uppercase tracking-widest">{m.name}</span>
+                        <div className={`flex items-center gap-1.5 px-2 py-0.5 rounded ${m.delta >= 0 ? 'bg-emerald-500/10 text-emerald-400' : 'bg-rose-500/10 text-rose-400'}`}>
+                            <span>{m.delta >= 0 ? '▲' : '▼'}</span>
+                            <span className="font-mono">${Math.abs(m.delta).toLocaleString(undefined, { maximumFractionDigits: 0 })}</span>
+                        </div>
+                    </div>
+                ))}
+            </div>
+            <div className="absolute right-0 top-0 h-full w-24 bg-gradient-to-l from-slate-900 to-transparent pointer-events-none z-10"></div>
+            <div className="absolute left-0 top-0 h-full w-24 bg-gradient-to-r from-slate-900 to-transparent pointer-events-none z-10"></div>
+            <div className="absolute top-0 left-4 h-full flex items-center z-20">
+                <span className="text-[8px] font-black text-slate-500 uppercase bg-slate-900 px-2 py-1 border border-slate-800 rounded">LIVE MOVEMENTS VS {baselineDate}</span>
+            </div>
+            <style>{`
+                @keyframes marquee-slower {
+                    0% { transform: translateX(0); }
+                    100% { transform: translateX(-33.33%); }
+                }
+                .animate-marquee-slower {
+                    animation: marquee-slower 60s linear infinite;
+                }
+                .animate-marquee-slower:hover {
+                    animation-play-state: paused;
+                }
+            `}</style>
+        </div>
+    );
+};
+
+/**
  * Hero Card with sub-breakdown for Revenue, Purchase, and Other
  */
-const FinancialHeroCard = ({ title, stats, baseline, compareDate, isHero, colorClass, onClick }: any) => {
+const FinancialHeroCard = ({ title, stats, baseline, compareDate, isHero, colorClass, onDrillDown }: any) => {
     const format = (val: number) => new Intl.NumberFormat('en-US', { style: 'currency', currency: 'USD', maximumFractionDigits: 0 }).format(val);
     const delta = stats.pnl - baseline.pnl;
     const isPositive = delta >= 0;
 
     return (
         <motion.div 
-            className={`bg-white p-6 rounded-2xl shadow-sm border transition-all flex flex-col justify-between h-full ${isHero ? 'border-indigo-100 ring-2 ring-indigo-50/50' : 'border-slate-100'} ${onClick ? 'cursor-pointer hover:shadow-md hover:-translate-y-1' : ''}`}
+            className={`bg-white p-6 rounded-2xl shadow-sm border transition-all flex flex-col justify-between h-full ${isHero ? 'border-indigo-100 ring-2 ring-indigo-50/50' : 'border-slate-100'} hover:shadow-md hover:-translate-y-1`}
             variants={{ hidden: { opacity: 0, y: 10 }, visible: { opacity: 1, y: 0 } }}
-            onClick={onClick}
         >
-            <div>
+            <div className="cursor-pointer" onClick={() => onDrillDown('PnL')}>
                 <div className="flex justify-between items-start mb-4">
                     <p className={`text-xs font-black uppercase tracking-widest ${isHero ? 'text-indigo-500' : 'text-slate-400'}`}>{title}</p>
                     <div className={`px-2 py-1 rounded-lg text-[10px] font-bold ${isPositive ? 'bg-emerald-50 text-emerald-600' : 'bg-rose-50 text-rose-600'}`}>
@@ -561,23 +618,22 @@ const FinancialHeroCard = ({ title, stats, baseline, compareDate, isHero, colorC
                 <p className="text-[10px] text-slate-400 mt-1 font-bold uppercase tracking-tight">Market Basis: {compareDate}</p>
             </div>
 
-            {/* Sub-breakdown Row */}
             <div className="grid grid-cols-3 gap-4 mt-8 pt-6 border-t border-slate-50">
-                <SubMetric label="Revenue" value={stats.revenue} baseline={baseline.revenue} format={format} color="text-indigo-600" />
-                <SubMetric label="Purchase" value={stats.purchase} baseline={baseline.purchase} format={format} color="text-rose-500" invert />
-                <SubMetric label="Other" value={stats.other} baseline={baseline.other} format={format} color="text-slate-600" />
+                <SubMetric label="Revenue" value={stats.revenue} baseline={baseline.revenue} format={format} color="text-indigo-600" onClick={() => onDrillDown('Revenue')} />
+                <SubMetric label="Purchase" value={stats.purchase} baseline={baseline.purchase} format={format} color="text-rose-500" invert onClick={() => onDrillDown('Purchase')} />
+                <SubMetric label="Other" value={stats.other} baseline={baseline.other} format={format} color="text-slate-600" onClick={() => onDrillDown('Other')} />
             </div>
         </motion.div>
     );
 };
 
-const SubMetric = ({ label, value, baseline, format, color, invert }: any) => {
+const SubMetric = ({ label, value, baseline, format, color, invert, onClick }: any) => {
     const delta = value - baseline;
     const isImproved = invert ? delta <= 0 : delta >= 0;
     
     return (
-        <div>
-            <p className="text-[9px] font-black text-slate-400 uppercase tracking-tighter mb-0.5">{label}</p>
+        <div className="cursor-pointer group/sub" onClick={(e) => { e.stopPropagation(); onClick(); }}>
+            <p className="text-[9px] font-black text-slate-400 uppercase tracking-tighter mb-0.5 group-hover/sub:text-indigo-600 transition-colors">{label}</p>
             <p className={`text-xs font-bold ${color}`}>{format(value)}</p>
             <div className={`text-[8px] font-bold mt-0.5 ${isImproved ? 'text-emerald-500' : 'text-rose-400'}`}>
                 {delta >= 0 ? '+' : '-'}{format(Math.abs(delta))}
@@ -640,31 +696,100 @@ const HealthColumn = ({ title, items, color }: any) => {
     );
 };
 
-const DrillDownTable = ({ profiles, metricType, onClose, targetDate, format }: any) => {
+const DrillDownTable = ({ profiles, config, onClose, onCargoClick, targetDate, format, baselineDate, editingProfileId }: { profiles: CargoProfile[], config: DrillDownConfig, onClose: () => void, onCargoClick: (p: CargoProfile) => void, targetDate: string, format: (v: number) => string, baselineDate: string, editingProfileId?: string }) => {
+    const filtered = useMemo(() => {
+        if (config.bucket === 'Total') return profiles;
+        return profiles.filter(p => p.pnlBucket === (config.bucket as any));
+    }, [profiles, config]);
+
+    const getMovement = (p: CargoProfile) => {
+        const pBase = (p.pnlBucket === PnLBucket.Realized) ? p : recalculateProfile(p, true, baselineDate) as CargoProfile;
+        const pCurr = (p.pnlBucket === PnLBucket.Realized) ? p : recalculateProfile(p, true, targetDate) as CargoProfile;
+        
+        const getVal = (prof: CargoProfile) => {
+            if (config.metric === 'PnL') return prof.finalTotalPnL || 0;
+            if (config.metric === 'Revenue') return prof.finalSalesRevenue || 0;
+            if (config.metric === 'Purchase') {
+                 const t1 = (prof.loadedVolume || 0) * (prof.absoluteBuyPrice || 0);
+                 const t2 = prof.isTieredPricing ? (prof.tier2LoadedVolume || 0) * (prof.absoluteTier2BuyPrice || 0) : 0;
+                 return (prof.reconciledPurchaseCost > 0) ? prof.reconciledPurchaseCost : (t1 + t2);
+            }
+            if (config.metric === 'Other') return (prof.finalTotalPnL || 0) - (prof.finalSalesRevenue || 0) + ((prof.loadedVolume || 0) * (prof.absoluteBuyPrice || 0));
+            if (config.metric === 'Volume') return prof.deliveredVolume || 0;
+            return 0;
+        };
+        
+        const vCurr = getVal(pCurr);
+        const vBase = getVal(pBase);
+        return { val: vCurr, delta: vCurr - vBase };
+    };
+
+    const headerLabel = `${config.bucket} ${config.metric}`;
+
     return (
         <div className="fixed inset-0 bg-slate-900/60 backdrop-blur-sm z-[100] flex items-center justify-center p-6">
-            <motion.div initial={{ scale: 0.9, opacity: 0 }} animate={{ scale: 1, opacity: 1 }} className="bg-white rounded-2xl shadow-2xl w-full max-w-4xl max-h-[80vh] flex flex-col overflow-hidden">
+            <motion.div initial={{ scale: 0.9, opacity: 0 }} animate={{ scale: 1, opacity: 1 }} className="bg-white rounded-2xl shadow-2xl w-full max-w-5xl max-h-[80vh] flex flex-col overflow-hidden">
                 <div className="p-6 border-b border-slate-100 flex justify-between items-center">
-                    <h3 className="text-xl font-bold text-slate-800 uppercase">Drill Down: {metricType}</h3>
-                    <button onClick={onClose} className="text-slate-400 hover:text-slate-600"><svg className="w-6 h-6" fill="none" stroke="currentColor" viewBox="0 0 24 24"><path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M6 18L18 6M6 6l12 12" /></svg></button>
+                    <div>
+                        <h3 className="text-xl font-black text-slate-800 uppercase tracking-tight">{headerLabel}</h3>
+                        <p className="text-[10px] text-slate-400 font-bold uppercase mt-1">Comparison: {baselineDate} → {targetDate}</p>
+                    </div>
+                    <button onClick={onClose} className="p-2 bg-slate-50 text-slate-400 hover:text-rose-500 rounded-full transition-colors"><svg className="w-6 h-6" fill="none" stroke="currentColor" viewBox="0 0 24 24"><path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2.5} d="M6 18L18 6M6 6l12 12" /></svg></button>
                 </div>
-                <div className="flex-1 overflow-y-auto p-4 custom-scrollbar">
-                    <table className="w-full text-sm text-left">
-                        <thead className="text-xs text-slate-500 uppercase bg-slate-50 sticky top-0">
+                <div className="flex-1 overflow-y-auto p-4 custom-scrollbar bg-slate-50/30">
+                    <table className="w-full text-sm text-left border-separate border-spacing-y-2">
+                        <thead className="text-[10px] text-slate-400 uppercase font-black bg-white sticky top-0">
                             <tr>
-                                <th className="px-4 py-3 bg-slate-50">Strategy</th>
-                                <th className="px-4 py-3 bg-slate-50">Auto Group</th>
-                                <th className="px-4 py-3 text-right bg-slate-50">PnL ({targetDate})</th>
+                                <th className="px-6 py-4">Strategy</th>
+                                <th className="px-6 py-4">Group</th>
+                                <th className="px-6 py-4 text-right">Value</th>
+                                <th className="px-6 py-4 text-right">Movement</th>
                             </tr>
                         </thead>
-                        <tbody className="divide-y divide-slate-100">
-                            {profiles.map((p: any) => (
-                                <tr key={p.id} className="hover:bg-slate-50">
-                                    <td className="px-4 py-3 font-bold">{p.strategyName}</td>
-                                    <td className="px-4 py-3">{getGroupName(p.strategyName)}</td>
-                                    <td className={`px-4 py-3 text-right font-mono ${p.finalTotalPnL >= 0 ? 'text-emerald-600' : 'text-rose-600'}`}>{format(p.finalTotalPnL)}</td>
-                                </tr>
-                            ))}
+                        <tbody>
+                            {filtered.length === 0 ? (
+                                <tr><td colSpan={4} className="py-20 text-center text-slate-400 italic">No cargoes match this filter.</td></tr>
+                            ) : filtered.map((p) => {
+                                const { val, delta } = getMovement(p);
+                                const isPositive = delta >= 0;
+                                const isEditing = p.id === editingProfileId;
+
+                                return (
+                                    <tr 
+                                        key={p.id} 
+                                        className={`group transition-all rounded-xl border ${isEditing ? 'bg-indigo-50 border-indigo-200 ring-2 ring-indigo-500 ring-inset shadow-lg' : 'bg-white border-slate-100 hover:shadow-md'}`}
+                                    >
+                                        <td 
+                                            className={`px-6 py-4 font-bold rounded-l-xl cursor-pointer transition-colors ${isEditing ? 'text-indigo-800' : 'text-slate-700 hover:text-indigo-600'}`}
+                                            onClick={() => onCargoClick(p)}
+                                        >
+                                            <div className="flex items-center gap-3">
+                                                <motion.div 
+                                                    animate={isEditing ? { scale: [1, 1.1, 1], opacity: [1, 0.8, 1] } : {}}
+                                                    transition={{ repeat: Infinity, duration: 2 }}
+                                                >
+                                                    {p.strategyName}
+                                                </motion.div>
+                                                {isEditing ? (
+                                                    <span className="px-2 py-0.5 bg-indigo-600 text-white text-[9px] font-black rounded-full uppercase tracking-tighter animate-pulse">Editing Now</span>
+                                                ) : (
+                                                    <svg className="w-3 h-3 text-slate-300 opacity-0 group-hover:opacity-100" fill="none" stroke="currentColor" viewBox="0 0 24 24"><path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M15.232 5.232l3.536 3.536m-2.036-5.036a2.5 2.5 0 113.536 3.536L6.5 21.036H3v-3.572L16.732 3.732z" /></svg>
+                                                )}
+                                            </div>
+                                            <div className={`text-[9px] uppercase font-black mt-0.5 ${isEditing ? 'text-indigo-400' : 'text-slate-400'}`}>{p.source} → {p.buyer}</div>
+                                        </td>
+                                        <td className="px-6 py-4">
+                                            <span className={`px-2 py-1 rounded text-[9px] font-black uppercase ${isEditing ? 'bg-indigo-200 text-indigo-700' : 'bg-slate-100 text-slate-500'}`}>{getGroupName(p.strategyName)}</span>
+                                        </td>
+                                        <td className={`px-6 py-4 text-right font-mono font-bold ${config.metric === 'Volume' ? (isEditing ? 'text-indigo-700' : 'text-slate-700') : (val >= 0 ? 'text-emerald-600' : 'text-rose-600')}`}>
+                                            {config.metric === 'Volume' ? val.toLocaleString() : format(val)}
+                                        </td>
+                                        <td className={`px-6 py-4 text-right font-mono font-bold rounded-r-xl ${delta > 0.01 ? 'text-emerald-500' : delta < -0.01 ? 'text-rose-500' : 'text-slate-300'}`}>
+                                            {Math.abs(delta) > 0.01 ? `${isPositive ? '+' : '-'}${config.metric === 'Volume' ? Math.abs(delta).toLocaleString() : format(Math.abs(delta))}` : '—'}
+                                        </td>
+                                    </tr>
+                                );
+                            })}
                         </tbody>
                     </table>
                 </div>

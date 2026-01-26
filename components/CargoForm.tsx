@@ -10,6 +10,7 @@ import mammoth from 'mammoth';
 
 interface CargoFormProps {
   initialData?: CargoProfile;
+  source?: 'dashboard' | 'list';
   onSave: (data: CargoProfile) => void;
   onCancel: () => void;
 }
@@ -55,27 +56,18 @@ const InputGroup: React.FC<{
     </div>
 ));
 
-/**
- * Helper to extract index references from a text formula
- */
 const FormulaIndicesDisplay: React.FC<{ formula: string, refDate: string }> = ({ formula, refDate }) => {
     const indices = useMemo(() => {
         if (!formula || !refDate) return [];
         const found: { name: string, mDef: string, price: number }[] = [];
-        
-        // Match IndexName (MonthDef) or just IndexName
         const regex = /([a-zA-Z0-9\s]+?)(?:\(([^)]+)\))?\b/g;
         let match;
         const seen = new Set();
-
-        // Use standard index names for detection
         const standardNames = [...INDEX_OPTIONS, 'HENRY HUB', 'DUTCH TTF', 'BRENT'];
 
         while ((match = regex.exec(formula)) !== null) {
             const rawName = match[1].trim().toUpperCase();
             const mDef = match[2] || 'n';
-            
-            // Check if it's a known index
             const isKnown = standardNames.some(s => rawName === s || rawName.includes(s));
             if (isKnown && !seen.has(`${rawName}_${mDef}`)) {
                 const { price } = getIndexPrice(rawName, refDate, mDef);
@@ -152,7 +144,7 @@ const ComponentRow: React.FC<{
     );
 };
 
-export const CargoForm: React.FC<CargoFormProps> = ({ initialData, onSave, onCancel }) => {
+export const CargoForm: React.FC<CargoFormProps> = ({ initialData, source = 'list', onSave, onCancel }) => {
   const [formData, setFormData] = useState<any>({ ...EmptyCargoProfile });
   const [isProcessing, setIsProcessing] = useState(false);
   const [pricingMode, setPricingMode] = useState<'formula' | 'component'>('formula');
@@ -225,16 +217,24 @@ export const CargoForm: React.FC<CargoFormProps> = ({ initialData, onSave, onCan
 
   return (
     <motion.div initial={{ opacity: 0, scale: 0.95 }} animate={{ opacity: 1, scale: 1 }} className="bg-white rounded-xl shadow-2xl border border-slate-200 flex flex-col w-full max-w-5xl max-h-[90vh] overflow-hidden">
-      <div className="p-6 border-b border-slate-100 flex justify-between items-center">
-        <h2 className="text-xl font-bold text-slate-800">{initialData ? 'Edit Cargo' : 'New Cargo Profile'}</h2>
+      <div className="p-6 border-b border-slate-100 flex justify-between items-center bg-white z-10">
+        <div className="flex items-center gap-4">
+            <button 
+                onClick={onCancel}
+                className="p-2 text-slate-400 hover:text-indigo-600 hover:bg-indigo-50 rounded-full transition-all"
+                title={`Back to ${source === 'dashboard' ? 'Drilldown' : 'List'}`}
+            >
+                <svg className="w-6 h-6" fill="none" stroke="currentColor" viewBox="0 0 24 24"><path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2.5} d="M10 19l-7-7m0 0l7-7m-7 7h18" /></svg>
+            </button>
+            <h2 className="text-xl font-bold text-slate-800 tracking-tight">{initialData ? `Edit: ${initialData.strategyName}` : 'New Cargo Profile'}</h2>
+        </div>
         <div className="flex gap-2">
             <input type="file" accept="image/*,application/pdf" onChange={handleFileUpload} className="hidden" id="kts-upload" />
             <label htmlFor="kts-upload" className="px-4 py-2 bg-indigo-600 text-white text-sm font-medium rounded-lg shadow-sm cursor-pointer hover:bg-indigo-700">Auto-populate via KTS</label>
         </div>
       </div>
       
-      <form onSubmit={handleSubmit} className="flex-1 overflow-y-auto p-8 bg-slate-50/50 space-y-8">
-        {/* Logistics Section */}
+      <form onSubmit={handleSubmit} className="flex-1 overflow-y-auto p-8 bg-slate-50/50 space-y-8 custom-scrollbar">
         <div className="bg-white p-6 rounded-xl border border-slate-100 space-y-6 shadow-sm">
             <h3 className="text-sm font-bold text-slate-800 flex items-center gap-2">Logistics & Schedule</h3>
             <div className="grid grid-cols-1 md:grid-cols-4 gap-4">
@@ -253,7 +253,6 @@ export const CargoForm: React.FC<CargoFormProps> = ({ initialData, onSave, onCan
             </div>
         </div>
 
-        {/* Two-Tier Pricing Toggle */}
         <div className="bg-indigo-50/50 p-4 rounded-xl border border-indigo-100 flex items-center justify-between">
             <div className="flex items-center gap-3">
                 <div className={`w-10 h-10 rounded-full flex items-center justify-center ${formData.isTieredPricing ? 'bg-indigo-600 text-white' : 'bg-slate-200 text-slate-400'}`}>
@@ -261,7 +260,7 @@ export const CargoForm: React.FC<CargoFormProps> = ({ initialData, onSave, onCan
                 </div>
                 <div>
                     <h4 className="text-sm font-bold text-slate-800">Two-Tier Pricing</h4>
-                    <p className="text-[10px] text-slate-500 uppercase font-bold">Split one physical cargo into multiple pricing legs (Purchase & Sales)</p>
+                    <p className="text-[10px] text-slate-500 uppercase font-bold">Split one physical cargo into multiple pricing legs</p>
                 </div>
             </div>
             <label className="relative inline-flex items-center cursor-pointer">
@@ -270,7 +269,6 @@ export const CargoForm: React.FC<CargoFormProps> = ({ initialData, onSave, onCan
             </label>
         </div>
 
-        {/* Pricing Mode Selection */}
         <div className="flex justify-between items-center bg-white p-4 rounded-xl border border-slate-100 shadow-sm">
             <h3 className="text-sm font-bold text-slate-800">Pricing Configuration Mode</h3>
             <div className="flex bg-slate-100 p-1 rounded-lg text-[10px] font-bold">
@@ -279,11 +277,9 @@ export const CargoForm: React.FC<CargoFormProps> = ({ initialData, onSave, onCan
             </div>
         </div>
 
-        {/* Pricing Definition (Tier 1) */}
         <div className="bg-white p-6 rounded-xl border border-slate-100 space-y-6 shadow-sm">
             <h3 className="text-sm font-bold text-slate-800">Pricing Definition {formData.isTieredPricing && '(Tier 1)'}</h3>
             <div className="grid grid-cols-1 md:grid-cols-2 gap-8">
-                {/* Buy Side (Tier 1) */}
                 <div className="space-y-6">
                     <div className="flex justify-between items-center">
                         <h4 className="text-xs font-bold text-emerald-600 uppercase border-l-2 border-emerald-500 pl-2">Purchase (Buy) Tier 1</h4>
@@ -292,25 +288,15 @@ export const CargoForm: React.FC<CargoFormProps> = ({ initialData, onSave, onCan
                             <input type="number" name="buyPriceRounding" value={formData.buyPriceRounding} onChange={handleChange} className="w-12 text-xs border rounded p-1" min="0" max="6" />
                         </div>
                     </div>
-                    
                     <InputGroup label="Loaded Volume (Tier 1)" name="loadedVolume" type="number" value={formData.loadedVolume} onChange={handleChange} />
-
                     {pricingMode === 'formula' ? (
-                        <InputGroup 
-                            label="Purchase Formula" 
-                            name="buyFormula" 
-                            value={formData.buyFormula} 
-                            onChange={handleChange} 
-                            hint="e.g. JKM - 0.50" 
-                            footer={<FormulaIndicesDisplay formula={formData.buyFormula} refDate={formData.loadingDate} />}
-                        />
+                        <InputGroup label="Purchase Formula" name="buyFormula" value={formData.buyFormula} onChange={handleChange} hint="e.g. JKM - 0.50" footer={<FormulaIndicesDisplay formula={formData.buyFormula} refDate={formData.loadingDate} />} />
                     ) : (
                         <div className="space-y-3">
                             {[1, 2, 3].map(i => <ComponentRow key={i} idx={i} type="buy" formData={formData} onChange={handleChange} />)}
                             <InputGroup label="Overall Buy Constant" name="buyPriceOverallConstant" type="number" step="0.001" value={formData.buyPriceOverallConstant} onChange={handleChange} />
                         </div>
                     )}
-
                     <div className="p-4 bg-emerald-50 border border-emerald-100 rounded-xl space-y-4">
                         <div className="flex justify-between items-center">
                             <label className="text-[10px] font-bold text-emerald-700 uppercase">Unit Buy Price ($/Unit)</label>
@@ -323,8 +309,6 @@ export const CargoForm: React.FC<CargoFormProps> = ({ initialData, onSave, onCan
                         </InputGroup>
                     </div>
                 </div>
-
-                {/* Sell Side (Tier 1) */}
                 <div className="space-y-6">
                     <div className="flex justify-between items-center">
                         <h4 className="text-xs font-bold text-blue-600 uppercase border-l-2 border-blue-500 pl-2">Sales (Sell) Tier 1</h4>
@@ -333,25 +317,15 @@ export const CargoForm: React.FC<CargoFormProps> = ({ initialData, onSave, onCan
                             <input type="number" name="sellPriceRounding" value={formData.sellPriceRounding} onChange={handleChange} className="w-12 text-xs border rounded p-1" min="0" max="6" />
                         </div>
                     </div>
-
                     <InputGroup label="Delivered Volume (Tier 1)" name="deliveredVolume" type="number" value={formData.deliveredVolume} onChange={handleChange} />
-
                     {pricingMode === 'formula' ? (
-                        <InputGroup 
-                            label="Sales Formula" 
-                            name="sellFormula" 
-                            value={formData.sellFormula} 
-                            onChange={handleChange} 
-                            hint="e.g. 115% HH + 2.50" 
-                            footer={<FormulaIndicesDisplay formula={formData.sellFormula} refDate={formData.deliveryDate} />}
-                        />
+                        <InputGroup label="Sales Formula" name="sellFormula" value={formData.sellFormula} onChange={handleChange} hint="e.g. 115% HH + 2.50" footer={<FormulaIndicesDisplay formula={formData.sellFormula} refDate={formData.deliveryDate} />} />
                     ) : (
                         <div className="space-y-3">
                             {[1, 2, 3].map(i => <ComponentRow key={i} idx={i} type="sell" formData={formData} onChange={handleChange} />)}
                             <InputGroup label="Overall Sell Constant" name="sellPriceOverallConstant" type="number" step="0.001" value={formData.sellPriceOverallConstant} onChange={handleChange} />
                         </div>
                     )}
-
                     <div className="p-4 bg-blue-50 border border-blue-100 rounded-xl space-y-4">
                         <div className="flex justify-between items-center">
                             <label className="text-[10px] font-bold text-blue-700 uppercase">Unit Sell Price ($/Unit)</label>
@@ -367,11 +341,10 @@ export const CargoForm: React.FC<CargoFormProps> = ({ initialData, onSave, onCan
             </div>
         </div>
 
-        {/* Tier 2 Specific Inputs */}
         {formData.isTieredPricing && (
             <motion.div initial={{ opacity: 0, y: -10 }} animate={{ opacity: 1, y: 0 }} className="bg-white p-6 rounded-xl border border-indigo-200 space-y-6 shadow-sm border-dashed">
                 <div className="flex justify-between items-center">
-                    <h3 className="text-sm font-bold text-indigo-800">Second Tier Definition (Purchase & Sales)</h3>
+                    <h3 className="text-sm font-bold text-indigo-800">Second Tier Definition</h3>
                     <div className="flex items-center gap-4">
                          <div className="flex items-center gap-2">
                             <label className="text-[10px] font-bold text-slate-400 uppercase">Buy Rounding</label>
@@ -383,28 +356,18 @@ export const CargoForm: React.FC<CargoFormProps> = ({ initialData, onSave, onCan
                         </div>
                     </div>
                 </div>
-
                 <div className="grid grid-cols-1 md:grid-cols-2 gap-8">
-                    {/* Purchase Tier 2 */}
                     <div className="space-y-6">
                         <h4 className="text-xs font-bold text-emerald-600 uppercase border-l-2 border-emerald-500 pl-2">Purchase (Buy) Tier 2</h4>
                         <InputGroup label="Tier 2 Loaded Volume" name="tier2LoadedVolume" type="number" value={formData.tier2LoadedVolume} onChange={handleChange} />
-                        
                         {pricingMode === 'formula' ? (
-                            <InputGroup 
-                                label="Tier 2 Buy Formula" 
-                                name="tier2BuyFormula" 
-                                value={formData.tier2BuyFormula} 
-                                onChange={handleChange} 
-                                footer={<FormulaIndicesDisplay formula={formData.tier2BuyFormula} refDate={formData.loadingDate} />}
-                            />
+                            <InputGroup label="Tier 2 Buy Formula" name="tier2BuyFormula" value={formData.tier2BuyFormula} onChange={handleChange} footer={<FormulaIndicesDisplay formula={formData.tier2BuyFormula} refDate={formData.loadingDate} />} />
                         ) : (
                             <div className="space-y-3">
                                 {[1, 2, 3].map(i => <ComponentRow key={i} idx={i} type="tier2Buy" formData={formData} onChange={handleChange} />)}
                                 <InputGroup label="Overall Buy Tier 2 Constant" name="tier2BuyPriceOverallConstant" type="number" step="0.001" value={formData.tier2BuyPriceOverallConstant} onChange={handleChange} />
                             </div>
                         )}
-
                         <div className="p-4 bg-emerald-50 border border-emerald-100 rounded-xl space-y-4">
                             <div className="flex justify-between items-center">
                                 <label className="text-[10px] font-bold text-emerald-700 uppercase">Tier 2 Unit Buy Price</label>
@@ -417,27 +380,17 @@ export const CargoForm: React.FC<CargoFormProps> = ({ initialData, onSave, onCan
                             </InputGroup>
                         </div>
                     </div>
-
-                    {/* Sales Tier 2 */}
                     <div className="space-y-6">
                         <h4 className="text-xs font-bold text-blue-600 uppercase border-l-2 border-blue-500 pl-2">Sales (Sell) Tier 2</h4>
                         <InputGroup label="Tier 2 Delivered Volume" name="tier2DeliveredVolume" type="number" value={formData.tier2DeliveredVolume} onChange={handleChange} />
-                        
                         {pricingMode === 'formula' ? (
-                            <InputGroup 
-                                label="Tier 2 Sell Formula" 
-                                name="tier2SellFormula" 
-                                value={formData.tier2SellFormula} 
-                                onChange={handleChange} 
-                                footer={<FormulaIndicesDisplay formula={formData.tier2SellFormula} refDate={formData.deliveryDate} />}
-                            />
+                            <InputGroup label="Tier 2 Sell Formula" name="tier2SellFormula" value={formData.tier2SellFormula} onChange={handleChange} footer={<FormulaIndicesDisplay formula={formData.tier2SellFormula} refDate={formData.deliveryDate} />} />
                         ) : (
                             <div className="space-y-3">
                                 {[1, 2, 3].map(i => <ComponentRow key={i} idx={i} type="tier2Sell" formData={formData} onChange={handleChange} />)}
                                 <InputGroup label="Overall Sell Tier 2 Constant" name="tier2SellPriceOverallConstant" type="number" step="0.001" value={formData.tier2SellPriceOverallConstant} onChange={handleChange} />
                             </div>
                         )}
-
                         <div className="p-4 bg-blue-50 border border-blue-100 rounded-xl space-y-4">
                             <div className="flex justify-between items-center">
                                 <label className="text-[10px] font-bold text-blue-700 uppercase">Tier 2 Unit Sell Price</label>
@@ -454,7 +407,6 @@ export const CargoForm: React.FC<CargoFormProps> = ({ initialData, onSave, onCan
             </motion.div>
         )}
 
-        {/* SRC Section (DES Only) */}
         {formData.incoterms === 'DES' && (
           <div className="bg-white p-6 rounded-xl border border-blue-100 space-y-4 shadow-sm relative overflow-hidden">
             <div className="absolute top-0 right-0 p-2 bg-blue-50 text-blue-600 text-[10px] font-bold uppercase rounded-bl-lg">DES Specific Cost</div>
@@ -475,7 +427,6 @@ export const CargoForm: React.FC<CargoFormProps> = ({ initialData, onSave, onCan
           </div>
         )}
 
-        {/* Summary Footer Section */}
         <div className="bg-slate-900 text-white p-6 rounded-xl shadow-xl border border-slate-800 flex justify-between items-center">
             <div className="grid grid-cols-3 gap-12">
                 <div>
@@ -505,9 +456,19 @@ export const CargoForm: React.FC<CargoFormProps> = ({ initialData, onSave, onCan
         </div>
       </form>
       
-      <div className="p-6 border-t border-slate-100 flex justify-end gap-3 bg-white">
-        <button onClick={onCancel} className="px-4 py-2 text-slate-500 hover:bg-slate-50 rounded-lg">Cancel</button>
-        <button onClick={handleSubmit} className="px-6 py-2 bg-indigo-600 text-white font-bold rounded-lg shadow-lg hover:bg-indigo-700">Save Cargo Profile</button>
+      <div className="p-6 border-t border-slate-100 flex justify-end gap-3 bg-white z-10 shadow-lg">
+        <button 
+            onClick={onCancel} 
+            className="px-6 py-2.5 text-slate-600 font-bold hover:bg-slate-50 rounded-xl transition-all border border-slate-200"
+        >
+            {source === 'dashboard' ? 'Back to Dashboard' : 'Back to List'}
+        </button>
+        <button 
+            onClick={handleSubmit} 
+            className="px-8 py-2.5 bg-indigo-600 text-white font-black rounded-xl shadow-lg hover:bg-indigo-700 transition-all hover:-translate-y-0.5 active:translate-y-0"
+        >
+            Save Cargo Changes
+        </button>
       </div>
     </motion.div>
   );

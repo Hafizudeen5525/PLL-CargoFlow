@@ -16,7 +16,7 @@ import { getMarketData, getForwardCurve, recalculateProfile, getPortfolioYear } 
 const NAV_ITEMS = [
   { id: 'dashboard', label: 'Dashboard', icon: 'M4 6a2 2 0 012-2h2a2 2 0 012 2v2a2 2 0 01-2 2H6a2 2 0 01-2-2V6zM14 6a2 2 0 012-2h2a2 2 0 012 2v2a2 2 0 01-2 2h-2a2 2 0 01-2-2V6zM4 16a2 2 0 012-2h2a2 2 0 01-1 2H6a2 2 0 01-2-2v-2zM14 16a2 2 0 012-2h2a2 2 0 01-1 2h-2a2 2 0 01-2-2v-2z' },
   { id: 'cargos', label: 'Cargo List', icon: 'M9 5H7a2 2 0 00-2 2v12a2 2 0 002 2h10a2 2 0 002-2V7a2 2 0 00-2-2h-2M9 5a2 2 0 002 2h2a2 2 0 002-2M9 5a2 2 0 012-2h2a2 2 0 012 2' },
-  { id: 'exposure', label: 'Exposure View', icon: 'M9 19v-6a2 2 0 00-2-2H5a2 2 0 00-2 2v6a2 2 0 002 2h2a2 2 0 002-2zm0 0V9a2 2 0 012-2h2a2 2 0 012 2v10m-6 0a2 2 0 002 2h2a2 2 0 002-2m0 0V5a2 2 0 012-2h2a2 2 0 012 2v14a2 2 0 002 2h2a2 2 0 002-2v-6a2 2 0 01-2-2h-2a2 2 0 01-2 2v6' },
+  { id: 'exposure', label: 'Exposure View', icon: 'M9 19v-6a2 2 0 00-2-2H5a2 2 0 00-2 2v6a2 2 0 002 2h2a2 2 0 002-2zm0 0V9a2 2 0 012-2h2a2 2 0 012 2v10m-6 0a2 2 0 002 2h2a2 2 0 002-2m0 0V5a2 2 0 012-2h2a2 2 0 012 2v14a2 2 0 002 2h2a2 2 0 002-2v-6a2 2 0 01-2-2h-2a2 2 0 01-2 v6' },
   { id: 'discrepancy', label: 'TRMS Reconcile', icon: 'M9 5H7a2 2 0 00-2 2v12a2 2 0 002 2h10a2 2 0 002-2V7a2 2 0 00-2-2h-2M9 5a2 2 0 002 2h2a2 2 0 002-2M9 5a2 2 0 012-2h2a2 2 0 002-2M9 5a2 2 0 012 2h2a2 2 0 012 2m-3 7h3m-3 4h3m-6-4h.01M9 16h.01' },
 ];
 
@@ -47,6 +47,7 @@ const App: React.FC = () => {
   // Modals
   const [isEditing, setIsEditing] = useState(false);
   const [editingProfile, setEditingProfile] = useState<CargoProfile | undefined>(undefined);
+  const [formSource, setFormSource] = useState<'dashboard' | 'list'>('dashboard');
   const [isImporting, setIsImporting] = useState(false);
   const [isForwardCurveOpen, setIsForwardCurveOpen] = useState(false);
 
@@ -158,7 +159,6 @@ const App: React.FC = () => {
 
   const handleBulkImport = (newProfiles: CargoProfile[]) => {
     updateProfiles(prev => {
-        // Fix: Explicitly type existingMap and handle potential undefined spread for existing objects
         const existingMap = new Map<string, CargoProfile>(prev.map(p => [p.strategyName, p]));
         newProfiles.forEach(np => {
             const existing = existingMap.get(np.strategyName);
@@ -180,8 +180,9 @@ const App: React.FC = () => {
     ));
   };
 
-  const handleEdit = (p?: CargoProfile) => {
+  const handleEdit = (p?: CargoProfile, source: 'dashboard' | 'list' = 'list') => {
     setEditingProfile(p);
+    setFormSource(source);
     setIsEditing(true);
   };
 
@@ -253,7 +254,6 @@ const App: React.FC = () => {
             <h1 className="text-xl font-bold text-slate-800 capitalize">{NAV_ITEMS.find(n => n.id === view)?.label}</h1>
             
             <div className="flex items-center gap-4">
-                {/* History Controls */}
                 <div className="flex items-center gap-1 bg-slate-100 rounded-lg p-1 mr-2">
                     <button 
                         onClick={undo}
@@ -302,15 +302,16 @@ const App: React.FC = () => {
                             marketData={marketData}
                             forwardCurve={forwardCurve}
                             onRefreshMarket={handleMarketRefresh}
-                            onCargoClick={handleEdit}
+                            onCargoClick={(p) => handleEdit(p, 'dashboard')}
                             portfolioYear={portfolioYear}
+                            editingProfileId={editingProfile?.id}
                         />
                     </motion.div>
                 ) : view === 'cargos' ? (
                     <motion.div key="cargos" initial={{opacity:0, x:-20}} animate={{opacity:1, x:0}} exit={{opacity:0, x:20}} className="h-full">
                         <CargoList 
                             profiles={filteredProfiles} 
-                            onEdit={handleEdit} 
+                            onEdit={(p) => handleEdit(p, 'list')} 
                             onDelete={handleDeleteProfile}
                             onActualize={(p) => handleSaveProfile({...p, pnlBucket: PnLBucket.Realized})}
                             onBulkDelete={handleBulkDelete}
@@ -328,7 +329,7 @@ const App: React.FC = () => {
                             profiles={profiles} 
                             trmsData={trmsData}
                             onTrmsUpload={setTrmsData}
-                            onEditProfile={handleEdit}
+                            onEditProfile={(p) => handleEdit(p, 'list')}
                         />
                     </motion.div>
                 ) : null}
@@ -337,11 +338,15 @@ const App: React.FC = () => {
 
         <AnimatePresence>
             {isEditing && (
-                <div className="fixed inset-0 bg-slate-900/50 backdrop-blur-sm z-50 flex items-center justify-center p-4">
+                <div className="fixed inset-0 bg-slate-900/60 backdrop-blur-sm z-[150] flex items-center justify-center p-4">
                      <CargoForm 
                         initialData={editingProfile} 
+                        source={formSource}
                         onSave={handleSaveProfile} 
-                        onCancel={() => setIsEditing(false)} 
+                        onCancel={() => {
+                            setIsEditing(false);
+                            setEditingProfile(undefined);
+                        }} 
                     />
                 </div>
             )}
