@@ -686,7 +686,7 @@ export const CargoList: React.FC<CargoListProps> = ({
             ) : viewMode === 'map' ? (
                 <WorldMap profiles={processedProfiles} height="100%" />
             ) : (
-                <CalendarView profiles={processedProfiles} />
+                <CalendarView profiles={processedProfiles} onCargoClick={onEdit} />
             )}
         </AnimatePresence>
       </div>

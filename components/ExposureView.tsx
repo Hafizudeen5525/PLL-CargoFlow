@@ -6,6 +6,8 @@ import { motion, AnimatePresence } from 'framer-motion';
 
 interface ExposureViewProps {
     profiles: CargoProfile[];
+    onCargoClick?: (profile: CargoProfile) => void;
+    editingProfileId?: string;
 }
 
 const INDICES = ['HH', 'TTF', 'JKM', 'Brent', 'NBP', 'JCC', 'AECO', 'Other'];
@@ -23,7 +25,7 @@ const getIndexType = (formula: string) => {
     return 'Other';
 };
 
-export const ExposureView: React.FC<ExposureViewProps> = ({ profiles }) => {
+export const ExposureView: React.FC<ExposureViewProps> = ({ profiles, onCargoClick, editingProfileId }) => {
     const [tableYear, setTableYear] = useState<number>(new Date().getFullYear() + 1);
     const [groupByMode, setGroupByMode] = useState<'group' | 'source'>('group');
     const [selectedCategory, setSelectedCategory] = useState<string | null>(null);
@@ -426,26 +428,51 @@ export const ExposureView: React.FC<ExposureViewProps> = ({ profiles }) => {
                             
                             <div className="flex-1 overflow-y-auto p-4 space-y-3 custom-scrollbar">
                                 {contributors.length > 0 ? (
-                                    contributors.map((p) => (
-                                        <div key={p.id} className="p-4 rounded-2xl border border-slate-100 bg-slate-50/30 flex items-center justify-between hover:border-indigo-200 transition-all group">
-                                            <div className="min-w-0">
-                                                <div className="font-bold text-slate-800 truncate">{p.strategyName}</div>
-                                                <div className="text-[10px] text-slate-500 mt-1 flex items-center gap-2">
-                                                    <span className="font-bold text-slate-400">{p.source}</span>
-                                                    <svg className="w-3 h-3 text-slate-300" fill="none" stroke="currentColor" viewBox="0 0 24 24"><path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M14 5l7 7m0 0l-7 7m7-7H3" /></svg>
-                                                    <span className="font-bold text-slate-400">{p.buyer}</span>
+                                    contributors.map((p) => {
+                                        const isEditing = p.id === editingProfileId;
+                                        return (
+                                            <div 
+                                                key={p.id} 
+                                                onClick={() => onCargoClick?.(p)}
+                                                className={`p-4 rounded-2xl border transition-all group cursor-pointer ${
+                                                    isEditing 
+                                                    ? 'bg-indigo-50 border-indigo-200 ring-1 ring-indigo-500 shadow-md' 
+                                                    : 'border-slate-100 bg-slate-50/30 hover:border-indigo-200 hover:shadow-sm'
+                                                }`}
+                                            >
+                                                <div className="flex items-center justify-between">
+                                                    <div className="min-w-0 flex-1">
+                                                        <div className="flex items-center gap-2">
+                                                            <motion.div 
+                                                                animate={isEditing ? { scale: [1, 1.05, 1] } : {}}
+                                                                transition={{ repeat: Infinity, duration: 2 }}
+                                                                className={`font-bold truncate ${isEditing ? 'text-indigo-800' : 'text-slate-800'}`}
+                                                            >
+                                                                {p.strategyName}
+                                                            </motion.div>
+                                                            {isEditing && (
+                                                                <span className="px-1.5 py-0.5 bg-indigo-600 text-white text-[8px] font-black rounded-full uppercase tracking-tighter animate-pulse">Editing</span>
+                                                            )}
+                                                            <svg className={`w-3 h-3 text-slate-300 opacity-0 group-hover:opacity-100 transition-opacity ${isEditing ? 'text-indigo-400 opacity-100' : ''}`} fill="none" stroke="currentColor" viewBox="0 0 24 24"><path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M15.232 5.232l3.536 3.536m-2.036-5.036a2.5 2.5 0 113.536 3.536L6.5 21.036H3v-3.572L16.732 3.732z" /></svg>
+                                                        </div>
+                                                        <div className="text-[10px] text-slate-500 mt-1 flex items-center gap-2">
+                                                            <span className="font-bold text-slate-400">{p.source}</span>
+                                                            <svg className="w-3 h-3 text-slate-300" fill="none" stroke="currentColor" viewBox="0 0 24 24"><path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M14 5l7 7m0 0l-7 7m7-7H3" /></svg>
+                                                            <span className="font-bold text-slate-400">{p.buyer}</span>
+                                                        </div>
+                                                    </div>
+                                                    <div className="text-right ml-4">
+                                                        <div className={`text-sm font-mono font-bold ${p._specificContribution < 0 ? 'text-rose-600' : 'text-indigo-600'}`}>
+                                                            {p._specificContribution > 0 ? '+' : ''}{(p._specificContribution / 1000).toLocaleString('en-US')}k
+                                                        </div>
+                                                        <div className="text-[9px] font-bold text-slate-400 uppercase tracking-tighter mt-0.5">
+                                                            {p._specificContribution < 0 ? 'Purchase Leg' : 'Sales Leg'}
+                                                        </div>
+                                                    </div>
                                                 </div>
                                             </div>
-                                            <div className="text-right ml-4">
-                                                <div className={`text-sm font-mono font-bold ${p._specificContribution < 0 ? 'text-rose-600' : 'text-indigo-600'}`}>
-                                                    {p._specificContribution > 0 ? '+' : ''}{(p._specificContribution / 1000).toLocaleString('en-US')}k
-                                                </div>
-                                                <div className="text-[9px] font-bold text-slate-400 uppercase tracking-tighter mt-0.5">
-                                                    {p._specificContribution < 0 ? 'Purchase Leg' : 'Sales Leg'}
-                                                </div>
-                                            </div>
-                                        </div>
-                                    ))
+                                        );
+                                    })
                                 ) : (
                                     <div className="py-12 text-center text-slate-400 italic">No contributors found for this selection.</div>
                                 )}
@@ -534,7 +561,7 @@ export const ExposureView: React.FC<ExposureViewProps> = ({ profiles }) => {
                             </div>
                             <div className="flex-1 overflow-y-auto custom-scrollbar p-3 space-y-3">
                                 {filteredFloating.length > 0 ? (
-                                    filteredFloating.map(p => <CargoCard key={p.id} profile={p} status="floating" />)
+                                    filteredFloating.map(p => <CargoCard key={p.id} profile={p} status="floating" onClick={() => onCargoClick?.(p)} isEditing={p.id === editingProfileId} />)
                                 ) : (
                                     <div className="py-20 text-center text-slate-400 text-sm">No floating cargoes match filters</div>
                                 )}
@@ -548,7 +575,7 @@ export const ExposureView: React.FC<ExposureViewProps> = ({ profiles }) => {
                             </div>
                             <div className="flex-1 overflow-y-auto custom-scrollbar p-3 space-y-2 opacity-70">
                                 {filteredFixed.length > 0 ? (
-                                    filteredFixed.map(p => <CargoCard key={p.id} profile={p} status="fixed" />)
+                                    filteredFixed.map(p => <CargoCard key={p.id} profile={p} status="fixed" onClick={() => onCargoClick?.(p)} isEditing={p.id === editingProfileId} />)
                                 ) : (
                                     <div className="py-20 text-center text-slate-300 text-xs italic">No fixed positions</div>
                                 )}
@@ -561,15 +588,23 @@ export const ExposureView: React.FC<ExposureViewProps> = ({ profiles }) => {
     );
 };
 
-const CargoCard: React.FC<{ profile: any, status: 'floating' | 'fixed' }> = ({ profile, status }) => {
+const CargoCard: React.FC<{ profile: any, status: 'floating' | 'fixed', onClick?: () => void, isEditing?: boolean }> = ({ profile, status, onClick, isEditing }) => {
     const f = (profile.sellFormula || profile.buyFormula || '').toUpperCase();
     const color = f.includes('JKM') ? 'bg-emerald-500' : f.includes('TTF') ? 'bg-blue-500' : f.includes('HH') ? 'bg-amber-500' : 'bg-slate-400';
     return (
-        <div className={`p-4 rounded-xl border bg-white flex items-center justify-between shadow-sm border-slate-200 transition-all ${status === 'floating' ? 'hover:border-blue-300 hover:shadow-md' : 'grayscale-[0.4]'}`}>
+        <div 
+            onClick={onClick}
+            className={`p-4 rounded-xl border bg-white flex items-center justify-between shadow-sm transition-all cursor-pointer ${
+                status === 'floating' ? 'hover:border-blue-300 hover:shadow-md' : 'grayscale-[0.4]'
+            } ${isEditing ? 'border-indigo-500 ring-1 ring-indigo-500 bg-indigo-50/50' : 'border-slate-200'}`}
+        >
             <div className="flex items-center gap-3 min-w-0">
                 <div className={`w-2 h-8 rounded-full shrink-0 ${color}`} />
                 <div className="min-w-0">
-                    <div className="text-xs font-bold text-slate-800 truncate">{profile.strategyName}</div>
+                    <div className="flex items-center gap-2">
+                         <div className={`text-xs font-bold truncate ${isEditing ? 'text-indigo-800' : 'text-slate-800'}`}>{profile.strategyName}</div>
+                         {isEditing && <span className="w-1.5 h-1.5 bg-indigo-500 rounded-full animate-pulse"></span>}
+                    </div>
                     <div className="text-[10px] text-slate-400 truncate">{profile.source} → {profile.buyer}</div>
                 </div>
             </div>

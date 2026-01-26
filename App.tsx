@@ -321,7 +321,11 @@ const App: React.FC = () => {
                     </motion.div>
                 ) : view === 'exposure' ? (
                     <motion.div key="exposure" initial={{opacity:0, x:-20}} animate={{opacity:1, x:0}} exit={{opacity:0, x:20}} className="h-full">
-                         <ExposureView profiles={filteredProfiles} />
+                         <ExposureView 
+                            profiles={filteredProfiles} 
+                            onCargoClick={(p) => handleEdit(p, 'list')}
+                            editingProfileId={editingProfile?.id}
+                        />
                     </motion.div>
                 ) : view === 'discrepancy' ? (
                     <motion.div key="discrepancy" initial={{opacity:0, x:-20}} animate={{opacity:1, x:0}} exit={{opacity:0, x:20}} className="h-full">
