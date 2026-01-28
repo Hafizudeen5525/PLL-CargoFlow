@@ -68,7 +68,7 @@ export const ExposureView: React.FC<ExposureViewProps> = ({ profiles, onCargoCli
     });
     const [showInfo, setShowInfo] = useState(false);
     const [showHolidayManager, setShowHolidayManager] = useState(false);
-    
+
     useEffect(() => {
         localStorage.setItem('exposure_holidays_named', JSON.stringify(holidays));
     }, [holidays]);
@@ -116,7 +116,7 @@ export const ExposureView: React.FC<ExposureViewProps> = ({ profiles, onCargoCli
             if (!grid[exp.pricingMonth]) return;
             const fixD = getFixationDate(exp.index, exp.pricingMonth);
             const fixTs = fixD.getTime();
-            
+
             let mult = 0;
             if (exp.index === 'HH Last Day') {
                 mult = simDate < fixTs ? 1 : 0;
@@ -125,7 +125,7 @@ export const ExposureView: React.FC<ExposureViewProps> = ({ profiles, onCargoCli
                 if (simDate < startTs) mult = 1;
                 else if (simDate < fixTs) mult = 1 - ((simDate - startTs) / (fixTs - startTs));
             }
-            
+
             const cell = grid[exp.pricingMonth][exp.index] || grid[exp.pricingMonth]['Other'];
             cell.floating += exp.volume * mult;
             cell.base += exp.volume;
@@ -138,7 +138,7 @@ export const ExposureView: React.FC<ExposureViewProps> = ({ profiles, onCargoCli
      */
     const riskMetrics = useMemo(() => {
         const historical = getHistoricalCurve();
-        
+
         // 1. Calculate Net Floating Deltas (Position Values)
         const netDeltaPerIndex: Record<string, number> = {};
         profilePricingExposures.forEach(exp => {
@@ -180,17 +180,17 @@ export const ExposureView: React.FC<ExposureViewProps> = ({ profiles, onCargoCli
         let standaloneSum = 0;
         activeIndices.forEach(idx => {
             const indexShocks = dailyShocks[idx] || [];
-            const sortedIdxShocks = [...indexShocks].sort((a,b) => a-b);
+            const sortedIdxShocks = [...indexShocks].sort((a, b) => a - b);
             const idxWorst = sortedIdxShocks[varIndex] || 0;
             standaloneSum += Math.abs(netDeltaPerIndex[idx] * idxWorst);
         });
 
         const diversification = standaloneSum > 0 ? (1 - (var95 / standaloneSum)) * 100 : 0;
 
-        return { 
-            var: var95, 
-            cvar: cvar95, 
-            totalExposure: Object.values(netDeltaPerIndex).reduce((a,b) => a + Math.abs(b), 0), 
+        return {
+            var: var95,
+            cvar: cvar95,
+            totalExposure: Object.values(netDeltaPerIndex).reduce((a, b) => a + Math.abs(b), 0),
             confidence: 'Historical Simulation (256-Day)',
             diversification,
             standaloneRiskSum: standaloneSum,
@@ -198,7 +198,7 @@ export const ExposureView: React.FC<ExposureViewProps> = ({ profiles, onCargoCli
                 index: idx,
                 usdDelta: netDeltaPerIndex[idx],
                 worstShock: Math.min(...(dailyShocks[idx] || [0])),
-                avgShock: (dailyShocks[idx] || [0]).reduce((a,b)=>a+b,0)/256
+                avgShock: (dailyShocks[idx] || [0]).reduce((a, b) => a + b, 0) / 256
             })),
             worstDays: sortedOutcomes.slice(0, 10).map(v => Math.abs(v))
         };
@@ -210,7 +210,7 @@ export const ExposureView: React.FC<ExposureViewProps> = ({ profiles, onCargoCli
         <div className="flex flex-col gap-6 p-2 h-full">
             {/* Risk Analytics Header */}
             <div className="grid grid-cols-1 md:grid-cols-4 gap-4 shrink-0">
-                <motion.div 
+                <motion.div
                     whileHover={{ scale: 1.02 }}
                     onClick={() => setAuditOpen(true)}
                     className="bg-slate-900 p-6 rounded-2xl border border-slate-800 shadow-xl flex flex-col justify-between overflow-hidden relative group cursor-pointer"
@@ -224,8 +224,8 @@ export const ExposureView: React.FC<ExposureViewProps> = ({ profiles, onCargoCli
                         <p className="text-[10px] text-slate-500 font-bold uppercase mt-2">Worst 5% Probability Outcome</p>
                     </div>
                 </motion.div>
-                
-                <motion.div 
+
+                <motion.div
                     whileHover={{ scale: 1.02 }}
                     onClick={() => setAuditOpen(true)}
                     className="bg-slate-900 p-6 rounded-2xl border border-slate-800 shadow-xl flex flex-col justify-between overflow-hidden relative group cursor-pointer"
@@ -244,7 +244,7 @@ export const ExposureView: React.FC<ExposureViewProps> = ({ profiles, onCargoCli
                     <div>
                         <span className="text-[10px] font-black text-slate-400 uppercase tracking-widest block mb-1">Diversification Benefit</span>
                         <div className="flex items-baseline gap-2">
-                             <h3 className="text-3xl font-black text-indigo-600">{(riskMetrics.diversification || 0).toFixed(1)}%</h3>
+                            <h3 className="text-3xl font-black text-indigo-600">{(riskMetrics.diversification || 0).toFixed(1)}%</h3>
                         </div>
                         <p className="text-[10px] text-slate-400 mt-2 font-bold uppercase tracking-tighter">Correlation risk reduction</p>
                     </div>
@@ -266,8 +266,8 @@ export const ExposureView: React.FC<ExposureViewProps> = ({ profiles, onCargoCli
             <div className="grid grid-cols-1 xl:grid-cols-4 gap-6 h-full">
                 <AnimatePresence>
                     {showInfo && (
-                        <motion.aside 
-                            initial={{ opacity: 0, width: 0 }} 
+                        <motion.aside
+                            initial={{ opacity: 0, width: 0 }}
                             animate={{ opacity: 1, width: 'auto' }}
                             exit={{ opacity: 0, width: 0 }}
                             className="xl:col-span-1 bg-slate-900 text-slate-300 p-6 rounded-2xl border border-slate-800 shadow-xl overflow-hidden hidden xl:flex flex-col"
@@ -308,7 +308,7 @@ export const ExposureView: React.FC<ExposureViewProps> = ({ profiles, onCargoCli
                                 </div>
                             </div>
                         </div>
-                        
+
                         <div className="overflow-x-auto custom-scrollbar">
                             <table className="w-full text-xs text-left border-collapse min-w-[1200px]">
                                 <thead>
@@ -321,7 +321,7 @@ export const ExposureView: React.FC<ExposureViewProps> = ({ profiles, onCargoCli
                                 <tbody className="divide-y divide-slate-100">
                                     {tableData.months.map(m => {
                                         const [y, mon] = m.split('-');
-                                        const monthName = new Date(parseInt(y), parseInt(mon)-1, 1).toLocaleString('en-US', { month: 'short' });
+                                        const monthName = new Date(parseInt(y), parseInt(mon) - 1, 1).toLocaleString('en-US', { month: 'short' });
                                         return (
                                             <tr key={m} className="hover:bg-indigo-50/30 transition-colors group">
                                                 <td className="px-6 py-3 font-bold sticky left-0 group-hover:bg-indigo-50/30 bg-white text-slate-700 border-r border-slate-50">
@@ -365,7 +365,7 @@ export const ExposureView: React.FC<ExposureViewProps> = ({ profiles, onCargoCli
 
             <AnimatePresence>
                 {auditOpen && (
-                    <RiskAuditModal 
+                    <RiskAuditModal
                         onClose={() => setAuditOpen(false)}
                         metrics={riskMetrics}
                     />
@@ -374,9 +374,9 @@ export const ExposureView: React.FC<ExposureViewProps> = ({ profiles, onCargoCli
 
             <AnimatePresence>
                 {showHolidayManager && (
-                    <HolidayManager 
-                        onClose={() => setShowHolidayManager(false)} 
-                        holidays={holidays} 
+                    <HolidayManager
+                        onClose={() => setShowHolidayManager(false)}
+                        holidays={holidays}
                         onUpdateHolidays={setHolidays}
                     />
                 )}
@@ -384,9 +384,9 @@ export const ExposureView: React.FC<ExposureViewProps> = ({ profiles, onCargoCli
 
             <AnimatePresence>
                 {drillDownCell && (
-                    <DrillDownModal 
-                        cell={drillDownCell} 
-                        onClose={() => setDrillDownCell(null)} 
+                    <DrillDownModal
+                        cell={drillDownCell}
+                        onClose={() => setDrillDownCell(null)}
                         profiles={profiles}
                         simDate={simDate}
                         onCargoClick={onCargoClick}
@@ -424,7 +424,7 @@ const RiskAuditModal = ({ onClose, metrics }: any) => {
                             <div className="bg-slate-900 p-6 rounded-2xl text-white font-mono space-y-3">
                                 {(metrics.worstDays || []).map((val: number, i: number) => (
                                     <div key={i} className="flex items-center gap-4 text-xs">
-                                        <span className="text-slate-500 w-20">Rank #{i+1}</span>
+                                        <span className="text-slate-500 w-20">Rank #{i + 1}</span>
                                         <div className="flex-1 h-2 bg-slate-800 rounded-full overflow-hidden">
                                             <div style={{ width: `${metrics.cvar ? (val / metrics.cvar) * 100 : 0}%` }} className="h-full bg-rose-500 opacity-60"></div>
                                         </div>
@@ -505,8 +505,8 @@ const HolidayManager = ({ onClose, holidays, onUpdateHolidays }: any) => {
     const [viewYear, setViewYear] = useState(2025);
     const [viewMonth, setViewMonth] = useState(new Date().getUTCMonth());
 
-    const nextMonth = () => viewMonth === 11 ? (setViewMonth(0), setViewYear(viewYear+1)) : setViewMonth(viewMonth+1);
-    const prevMonth = () => viewMonth === 0 ? (setViewMonth(11), setViewYear(viewYear-1)) : setViewMonth(viewMonth-1);
+    const nextMonth = () => viewMonth === 11 ? (setViewMonth(0), setViewYear(viewYear + 1)) : setViewMonth(viewMonth + 1);
+    const prevMonth = () => viewMonth === 0 ? (setViewMonth(11), setViewYear(viewYear - 1)) : setViewMonth(viewMonth - 1);
 
     const toggleHoliday = (ds: string) => {
         const next = { ...holidays };
@@ -524,7 +524,7 @@ const HolidayManager = ({ onClose, holidays, onUpdateHolidays }: any) => {
     const expiries = useMemo(() => {
         const map: Record<string, string[]> = {};
         const indices = ['Dated Brent', 'JCC', 'BRIPE', 'HH', 'TTF', 'NBP', 'JKM', 'AECO'];
-        
+
         const pricingMonths = [
             new Date(Date.UTC(viewYear, viewMonth - 1, 1)),
             new Date(Date.UTC(viewYear, viewMonth, 1)),
@@ -534,7 +534,7 @@ const HolidayManager = ({ onClose, holidays, onUpdateHolidays }: any) => {
         pricingMonths.forEach(pDate => {
             const mKey = `${pDate.getUTCFullYear()}-${String(pDate.getUTCMonth() + 1).padStart(2, '0')}`;
             const mName = pDate.toLocaleString('en-US', { month: 'short', timeZone: 'UTC' }).toUpperCase();
-            
+
             indices.forEach(idx => {
                 const d = getFixationDate(idx, mKey);
                 if (d.getUTCFullYear() === viewYear && d.getUTCMonth() === viewMonth) {
@@ -578,8 +578,8 @@ const HolidayManager = ({ onClose, holidays, onUpdateHolidays }: any) => {
                             const dayExpiries = expiries[ds] || [];
                             const isWeekend = new Date(ds).getUTCDay() === 0 || new Date(ds).getUTCDay() === 6;
                             return (
-                                <div 
-                                    key={i} 
+                                <div
+                                    key={i}
                                     onClick={() => toggleHoliday(ds)}
                                     className={`bg-white min-h-[110px] p-2 flex flex-col gap-1 transition-all cursor-pointer hover:bg-indigo-50/50 group ${hName ? 'bg-amber-50/30' : ''}`}
                                 >
@@ -614,12 +614,12 @@ const DrillDownModal = ({ cell, onClose, profiles, simDate, onCargoClick }: any)
     const contributors = useMemo(() => {
         const { month, index } = cell;
         const results: any[] = [];
-        profiles.forEach(p => {
+        profiles.forEach((p: CargoProfile) => {
             if (p.pnlBucket === PnLBucket.Realized) return;
             const process = (formula: string, vol: number, type: string, isTier2: boolean) => {
                 if (!formula || vol <= 0) return;
                 if (getIndexType(formula) !== index) return;
-                
+
                 const refD = type === 'Buy' ? p.loadingDate : p.deliveryDate;
                 let mDef = 'n';
                 if (!isTier2) mDef = type === 'Buy' ? (p.buyPrice1MonthDef || 'n') : (p.sellPrice1MonthDef || 'n');
@@ -629,7 +629,7 @@ const DrillDownModal = ({ cell, onClose, profiles, simDate, onCargoClick }: any)
                 if (pMonths.includes(month)) {
                     const fixD = getFixationDate(index, month);
                     const fixTs = fixD.getTime();
-                    
+
                     let mult = 0;
                     if (index === 'HH Last Day') {
                         mult = simDate < fixTs ? 1 : 0;
@@ -638,7 +638,7 @@ const DrillDownModal = ({ cell, onClose, profiles, simDate, onCargoClick }: any)
                         if (simDate < startTs) mult = 1;
                         else if (simDate < fixTs) mult = 1 - ((simDate - startTs) / (fixTs - startTs));
                     }
-                    
+
                     results.push({
                         id: p.id,
                         name: p.strategyName,
@@ -652,7 +652,7 @@ const DrillDownModal = ({ cell, onClose, profiles, simDate, onCargoClick }: any)
                     });
                 }
             };
-            
+
             process(p.buyFormula, p.loadedVolume || 0, 'Buy', false);
             process(p.sellFormula, p.deliveredVolume || 0, 'Sell', false);
             if (p.isTieredPricing) {
@@ -693,18 +693,18 @@ const DrillDownModal = ({ cell, onClose, profiles, simDate, onCargoClick }: any)
                                     </div>
                                 </div>
                             </div>
-                            
+
                             <div className="space-y-1.5">
                                 <div className="flex justify-between items-center text-[9px] font-bold text-slate-400 uppercase tracking-widest">
                                     <span>Fixed Portfolio</span>
                                     <span className={c.isFixed ? 'text-slate-500' : 'text-indigo-600'}>{(c.mult * 100).toFixed(0)}% Floating Exposure</span>
                                 </div>
                                 <div className="h-2 w-full bg-slate-200 rounded-full overflow-hidden flex">
-                                    <div 
+                                    <div
                                         style={{ width: `${(1 - c.mult) * 100}%` }}
                                         className="h-full bg-slate-300 transition-all duration-300"
                                     />
-                                    <div 
+                                    <div
                                         style={{ width: `${c.mult * 100}%` }}
                                         className={`h-full ${c.type === 'Buy' ? 'bg-gradient-to-r from-rose-400 to-rose-500' : 'bg-gradient-to-r from-indigo-400 to-indigo-500'} transition-all duration-300 relative`}
                                     >
