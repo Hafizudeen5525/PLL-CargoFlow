@@ -382,7 +382,8 @@ export const CargoList: React.FC<CargoListProps> = ({
                 } else {
                     row['Buyer'] = p.buyer; row['Delivery Date'] = p.deliveryDate;
                 }
-                row[`${type} Volume`] = (p as any)[volKey];
+                const volHeader = type === 'Buy' ? 'Loaded Volume' : 'Delivered Volume';
+                row[volHeader] = (p as any)[volKey];
                 row[`${type} Formula`] = (p as any)[formulaKey];
                 for (let i = 1; i <= 3; i++) {
                     row[`${type} Price ${i} Weightage`] = (p as any)[`${prefix}${i}Weightage`];
