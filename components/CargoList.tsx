@@ -33,7 +33,6 @@ export const CargoList: React.FC<CargoListProps> = ({
     const [isImportingJarvis, setIsImportingJarvis] = useState(false);
     const fileInputRef = useRef<HTMLInputElement>(null);
     const filterMenuRef = useRef<HTMLDivElement>(null);
-    const exportPopoverRef = useRef<HTMLDivElement>(null);
 
     const [searchTerm, setSearchTerm] = useState('');
     const [debouncedSearch, setDebouncedSearch] = useState('');
@@ -56,17 +55,24 @@ export const CargoList: React.FC<CargoListProps> = ({
     }, [searchTerm]);
 
     useEffect(() => {
-        const handleClickOutside = (event: MouseEvent) => {
-            if (filterMenuRef.current && !filterMenuRef.current.contains(event.target as Node)) {
-                setOpenFilterMenu(null);
-                setFilterSearch('');
-            }
-            if (exportPopoverRef.current && !exportPopoverRef.current.contains(event.target as Node)) {
-                setIsExportPopoverOpen(false);
+        const handleEvents = (event: any) => {
+            if (event.type === 'mousedown') {
+                if (filterMenuRef.current && !filterMenuRef.current.contains(event.target as Node)) {
+                    setOpenFilterMenu(null);
+                    setFilterSearch('');
+                }
+            } else if (event.type === 'keydown') {
+                if (event.key === 'Escape') {
+                    setIsExportPopoverOpen(false);
+                }
             }
         };
-        document.addEventListener('mousedown', handleClickOutside);
-        return () => document.removeEventListener('mousedown', handleClickOutside);
+        document.addEventListener('mousedown', handleEvents);
+        document.addEventListener('keydown', handleEvents);
+        return () => {
+            document.removeEventListener('mousedown', handleEvents);
+            document.removeEventListener('keydown', handleEvents);
+        };
     }, []);
 
     const headerKeys = [
@@ -484,9 +490,9 @@ export const CargoList: React.FC<CargoListProps> = ({
                         <svg className="w-4 h-4" fill="none" stroke="currentColor" viewBox="0 0 24 24"><path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M4 16v1a3 3 0 003 3h10a3 3 0 003 3h10a3 3 0 003-3v-1m-4-8l-4-4m0 0L8 8m4-4v12" /></svg>
                         Import Jarvis
                     </button>
-                    <div className="relative">
+                    <div className="flex items-center">
                         <button
-                            onClick={() => setIsExportPopoverOpen(!isExportPopoverOpen)}
+                            onClick={() => setIsExportPopoverOpen(true)}
                             className={`whitespace-nowrap text-[10px] sm:text-xs font-bold px-3 py-1.5 rounded-lg border transition-colors flex items-center gap-2 shadow-sm ${isExportPopoverOpen ? 'bg-indigo-600 text-white border-indigo-600' : 'text-slate-600 bg-white border-slate-200 hover:bg-slate-50'}`}
                         >
                             <svg className="w-4 h-4" fill="none" stroke="currentColor" viewBox="0 0 24 24"><path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M4 16v1a3 3 0 003 3h10a3 3 0 003 3h10a3 3 0 003-3v-1m-4-4l-4 4m0 0l-4-4m4 4V4" /></svg>
@@ -495,35 +501,77 @@ export const CargoList: React.FC<CargoListProps> = ({
 
                         <AnimatePresence>
                             {isExportPopoverOpen && (
-                                <motion.div
-                                    ref={exportPopoverRef}
-                                    initial={{ opacity: 0, y: 10, scale: 0.95 }}
-                                    animate={{ opacity: 1, y: 0, scale: 1 }}
-                                    exit={{ opacity: 0, y: 10, scale: 0.95 }}
-                                    className="absolute right-0 mt-2 w-72 bg-white border border-slate-200 shadow-2xl rounded-xl p-5 z-[100] text-slate-700"
-                                >
-                                    <h4 className="text-xs font-black text-slate-400 uppercase tracking-widest mb-4">Export Configuration</h4>
-                                    <div className="space-y-4">
-                                        <div>
-                                            <label className="block text-xs font-bold text-slate-500 uppercase mb-1.5">Portfolio Year</label>
-                                            <select value={exportYear} onChange={(e) => setExportYear(e.target.value)} className="w-full bg-slate-50 border border-slate-200 rounded-lg text-sm font-medium p-2.5 focus:ring-2 focus:ring-indigo-500/20">
-                                                {availableExportYears.map(y => <option key={y} value={y}>{y}</option>)}
-                                            </select>
+                                <div className="fixed inset-0 z-[100] flex items-center justify-center p-4">
+                                    <motion.div
+                                        initial={{ opacity: 0 }}
+                                        animate={{ opacity: 1 }}
+                                        exit={{ opacity: 0 }}
+                                        onClick={() => setIsExportPopoverOpen(false)}
+                                        className="absolute inset-0 bg-slate-900/60 backdrop-blur-sm"
+                                    />
+                                    <motion.div
+                                        initial={{ opacity: 0, scale: 0.9, y: 20 }}
+                                        animate={{ opacity: 1, scale: 1, y: 0 }}
+                                        exit={{ opacity: 0, scale: 0.9, y: 20 }}
+                                        className="relative w-full max-w-sm bg-white rounded-2xl shadow-2xl overflow-hidden border border-slate-200"
+                                    >
+                                        <div className="p-6">
+                                            <div className="flex items-center justify-between mb-6">
+                                                <div>
+                                                    <h3 className="text-lg font-bold text-slate-800">Export Jarvis</h3>
+                                                    <p className="text-xs text-slate-500">Configure your export parameters</p>
+                                                </div>
+                                                <button
+                                                    onClick={() => setIsExportPopoverOpen(false)}
+                                                    className="p-2 hover:bg-slate-100 rounded-full transition-colors"
+                                                >
+                                                    <svg className="w-5 h-5 text-slate-400" fill="none" stroke="currentColor" viewBox="0 0 24 24"><path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M6 18L18 6M6 6l12 12" /></svg>
+                                                </button>
+                                            </div>
+
+                                            <div className="space-y-5">
+                                                <div>
+                                                    <label className="block text-sm font-bold text-slate-700 mb-2">Portfolio Year</label>
+                                                    <select
+                                                        value={exportYear}
+                                                        onChange={(e) => setExportYear(e.target.value)}
+                                                        className="w-full bg-slate-50 border border-slate-200 rounded-xl text-sm font-medium p-3 focus:ring-4 focus:ring-indigo-500/10 focus:border-indigo-500 transition-all outline-none"
+                                                    >
+                                                        {availableExportYears.map(y => <option key={y} value={y}>{y}</option>)}
+                                                    </select>
+                                                </div>
+                                                <div>
+                                                    <label className="block text-sm font-bold text-slate-700 mb-2">Portfolio Group</label>
+                                                    <select
+                                                        value={exportGroup}
+                                                        onChange={(e) => setExportGroup(e.target.value)}
+                                                        className="w-full bg-slate-50 border border-slate-200 rounded-xl text-sm font-medium p-3 focus:ring-4 focus:ring-indigo-500/10 focus:border-indigo-500 transition-all outline-none"
+                                                    >
+                                                        {availableExportGroups.map(g => <option key={g} value={g}>{g}</option>)}
+                                                    </select>
+                                                </div>
+                                                <div className="pt-4 flex gap-3">
+                                                    <button
+                                                        onClick={() => setIsExportPopoverOpen(false)}
+                                                        className="flex-1 py-3 text-sm font-bold text-slate-600 bg-slate-100 rounded-xl hover:bg-slate-200 transition-all"
+                                                    >
+                                                        Cancel
+                                                    </button>
+                                                    <button
+                                                        onClick={(e) => {
+                                                            handleJarvisExport();
+                                                            setIsExportPopoverOpen(false);
+                                                        }}
+                                                        className="flex-[2] py-3 bg-indigo-600 text-white text-sm font-bold rounded-xl shadow-lg shadow-indigo-200 hover:bg-indigo-700 hover:shadow-indigo-300 transition-all flex items-center justify-center gap-2"
+                                                    >
+                                                        <svg className="w-4 h-4" fill="none" stroke="currentColor" viewBox="0 0 24 24"><path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M4 16v1a3 3 0 003 3h10a3 3 0 003 3h10a3 3 0 003-3v-1m-4-4l-4 4m0 0l-4-4m4 4V4" /></svg>
+                                                        Generate XLSM
+                                                    </button>
+                                                </div>
+                                            </div>
                                         </div>
-                                        <div>
-                                            <label className="block text-xs font-bold text-slate-500 uppercase mb-1.5">Portfolio Group</label>
-                                            <select value={exportGroup} onChange={(e) => setExportGroup(e.target.value)} className="w-full bg-slate-50 border border-slate-200 rounded-lg text-sm font-medium p-2.5 focus:ring-2 focus:ring-indigo-500/20">
-                                                {availableExportGroups.map(g => <option key={g} value={g}>{g}</option>)}
-                                            </select>
-                                        </div>
-                                        <div className="pt-2">
-                                            <button onClick={handleJarvisExport} className="w-full py-2.5 bg-indigo-600 text-white text-xs font-bold rounded-lg shadow-lg shadow-indigo-100 hover:bg-indigo-700 transition-all flex items-center justify-center gap-2">
-                                                <svg className="w-3.5 h-3.5" fill="none" stroke="currentColor" viewBox="0 0 24 24"><path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M4 16v1a3 3 0 003 3h10a3 3 0 003 3h10a3 3 0 003-3v-1m-4-4l-4 4m0 0l-4-4m4 4V4" /></svg>
-                                                Generate XLSM
-                                            </button>
-                                        </div>
-                                    </div>
-                                </motion.div>
+                                    </motion.div>
+                                </div>
                             )}
                         </AnimatePresence>
                     </div>
