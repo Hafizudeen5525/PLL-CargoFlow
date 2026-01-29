@@ -231,8 +231,8 @@ export const CargoList: React.FC<CargoListProps> = ({
                                 const count = (seenInSheetCount.get(cleanStratName) || 0) + 1;
                                 seenInSheetCount.set(cleanStratName, count);
 
-                                let isTier2Leg = count > 1 || cleanStratName.includes('t(') || cleanStratName.endsWith('t');
-                                const lookupName = cleanStratName.replace('t(', '(').replace(/t$/, '');
+                                let isTier2Leg = count > 1 || /(\d)t(?:\(|$)/.test(cleanStratName);
+                                const lookupName = cleanStratName.replace(/(\d)t(\(|$)/, '$1$2');
 
                                 if (!mergedData[lookupName]) mergedData[lookupName] = { ...EmptyCargoProfile, strategyName: lookupName };
 
@@ -350,6 +350,7 @@ export const CargoList: React.FC<CargoListProps> = ({
     };
 
     const formatTieredName = (name: string): string => {
+        // Find the last digit and insert 't' after it
         const match = name.match(/^(.*\d)(.*)$/);
         if (match) {
             return match[1] + 't' + match[2];
