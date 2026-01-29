@@ -23,7 +23,7 @@ export const MARKET_INTELLIGENCE = {
         'STN 2': 0.048,
         'Other': 0.030
     } as Record<string, number>,
-    
+
     correlations: {
         'Dated Brent': { 'Dated Brent': 1.0, 'JKM': 0.78, 'TTF': 0.72, 'HH': 0.25, 'JCC': 0.95 },
         'JKM': { 'Dated Brent': 0.78, 'JKM': 1.0, 'TTF': 0.92, 'HH': 0.35 },
@@ -52,16 +52,16 @@ export function generateHistoricalShocks(days: number = 256): Record<string, num
     for (let d = 0; d < days; d++) {
         // Generate common market factor (correlated move)
         const commonShock = rnd();
-        
+
         indices.forEach(idx => {
             const vol = MARKET_INTELLIGENCE.volatilities[idx] || 0.03;
             const idiosyncratic = rnd();
-            
+
             // Correlate based on benchmark (approx 70% common for gas, 30% idiosyncratic)
             // This ensures TTF/JKM move together in the simulation
             const correlationFactor = idx === 'HH' ? 0.3 : 0.85;
             const shock = (commonShock * correlationFactor) + (idiosyncratic * (1 - correlationFactor));
-            
+
             results[idx].push(shock * vol);
         });
     }
@@ -83,9 +83,9 @@ export function getCorrelation(idxA: string, idxB: string): number {
     if (idxA === idxB) return 1.0;
     const a = idxA.includes('Brent') ? 'Dated Brent' : idxA;
     const b = idxB.includes('Brent') ? 'Dated Brent' : idxB;
-    return MARKET_INTELLIGENCE.correlations[a]?.[b] || 
-           MARKET_INTELLIGENCE.correlations[b]?.[a] || 
-           0.4;
+    return MARKET_INTELLIGENCE.correlations[a]?.[b] ||
+        MARKET_INTELLIGENCE.correlations[b]?.[a] ||
+        0.4;
 }
 
 export interface PricingMetadata {
@@ -144,10 +144,10 @@ export function getGroupName(strategyName: string = ''): string {
 export const isBusinessDay = (date: Date): boolean => {
     const holidaysRaw = localStorage.getItem('exposure_holidays_named');
     const holidays = holidaysRaw ? Object.keys(JSON.parse(holidaysRaw)) : [];
-    
+
     const day = date.getUTCDay();
     if (day === 0 || day === 6) return false;
-    
+
     const dateStr = date.toISOString().split('T')[0];
     return !holidays.includes(dateStr);
 };
@@ -176,19 +176,19 @@ export const getFixationDate = (index: string, pricingMonthStr: string): Date =>
     const [y, m] = pricingMonthStr.split('-').map(Number);
     const pricingMonthIndex = m - 1;
     const idx = index.toUpperCase();
-    
+
     if (['BRIPE', 'JCC', 'DATED BRENT', 'BRENT'].includes(idx)) {
         return getLastBusinessDayOfMonth(y, pricingMonthIndex);
     }
-    
+
     if (['HH', 'HH LAST DAY', 'AECO', 'STN 2', 'STATION 2'].includes(idx)) {
         return getOffsetBusinessDay(new Date(Date.UTC(y, pricingMonthIndex, 1)), -3);
     }
-    
+
     if (['NBP', 'TTF'].includes(idx)) {
         return getOffsetBusinessDay(new Date(Date.UTC(y, pricingMonthIndex, 1)), -1);
     }
-    
+
     if (idx === 'JKM') {
         let d = new Date(Date.UTC(y, pricingMonthIndex - 1, 15));
         while (!isBusinessDay(d)) {
@@ -196,7 +196,7 @@ export const getFixationDate = (index: string, pricingMonthStr: string): Date =>
         }
         return d;
     }
-    
+
     return new Date(Date.UTC(y, pricingMonthIndex, 1));
 };
 
@@ -224,16 +224,16 @@ function toMonthKey(date: Date): string {
 export function getIndexPrice(index: string, refDateStr: string, monthDef: string, curveDate?: string): { price: number, details: string, monthUsed: string } {
     const curve = getForwardCurve(curveDate);
     const historical = getHistoricalCurve();
-    
+
     if (!index || !refDateStr) return { price: 0, details: 'Missing Index or Ref Date', monthUsed: '' };
-    
+
     const baseDate = new Date(refDateStr);
     const d = new Date(baseDate.getFullYear(), baseDate.getMonth(), 15);
-    
+
     const targetMonths: string[] = [];
     let label = monthDef || 'n';
     const cleanDef = (monthDef || 'n').toLowerCase().replace(/\s/g, '');
-    
+
     const avgMatch = cleanDef.match(/\(?(\d+),(\d+),(\d+)\)?/);
     if (avgMatch) {
         const count = parseInt(avgMatch[1]);
@@ -253,7 +253,7 @@ export function getIndexPrice(index: string, refDateStr: string, monthDef: strin
         } else if (cleanDef === 'n') {
             offset = 0;
         }
-        
+
         const date = new Date(d.getFullYear(), d.getMonth() + offset, 15);
         targetMonths.push(toMonthKey(date));
     }
@@ -267,7 +267,7 @@ export function getIndexPrice(index: string, refDateStr: string, monthDef: strin
         let p = 0;
         const curveRow = curve.find(r => r.month === m);
         const histRow = historical.find(r => r.month === m);
-        
+
         if (histRow?.prices[canonicalIndex]) {
             p = histRow.prices[canonicalIndex];
         } else if (curveRow?.prices[canonicalIndex]) {
@@ -277,7 +277,7 @@ export function getIndexPrice(index: string, refDateStr: string, monthDef: strin
         if (p > 0) {
             total += p;
             foundCount++;
-            priceDetails.push(`${m}:$${p.toFixed(2)}`);
+            priceDetails.push(`${m}:$${p.toLocaleString(undefined, { minimumFractionDigits: 2, maximumFractionDigits: 3 })}`);
         }
     });
 
@@ -375,7 +375,7 @@ function formatMonthStr(dateStr: string): string {
 
 export function recalculateProfile(p: Partial<CargoProfile>, useMarket: boolean = true, curveDate?: string): Partial<CargoProfile> {
     const up: CargoProfile = { ...EmptyCargoProfile, ...(p as any), id: (p as any).id || '' };
-    
+
     if (up.pnlBucket !== PnLBucket.Realized && useMarket) {
         if (!up.isBuyPriceManual) {
             const rawBuyPrice = calculateLegPrice(up, 'buy', curveDate);
@@ -385,7 +385,7 @@ export function recalculateProfile(p: Partial<CargoProfile>, useMarket: boolean 
             const rawSellPrice = calculateLegPrice(up, 'sell', curveDate);
             up.absoluteSellPrice = applyRounding(rawSellPrice, up.sellPriceRounding);
         }
-        
+
         if (up.isTieredPricing) {
             if (!up.isTier2SellPriceManual) {
                 const rawTier2Sell = calculateLegPrice(up, 'tier2Sell', curveDate);
@@ -404,7 +404,7 @@ export function recalculateProfile(p: Partial<CargoProfile>, useMarket: boolean 
     const t1Revenue = (up.deliveredVolume || 0) * (up.absoluteSellPrice || 0);
     const t2Revenue = up.isTieredPricing ? (up.tier2DeliveredVolume || 0) * (up.absoluteTier2SellPrice || 0) : 0;
     up.salesRevenue = t1Revenue + t2Revenue;
-    
+
     const t1PurchaseCost = (up.loadedVolume || 0) * (up.absoluteBuyPrice || 0);
     const t2PurchaseCost = up.isTieredPricing ? (up.tier2LoadedVolume || 0) * (up.absoluteTier2BuyPrice || 0) : 0;
     const totalPurchaseCost = t1PurchaseCost + t2PurchaseCost;
@@ -422,25 +422,25 @@ export function recalculateProfile(p: Partial<CargoProfile>, useMarket: boolean 
     up.finalTotalCost = basePurchaseCost + finalSrcCost;
 
     up.finalPhysicalPnL = up.finalSalesRevenue - up.finalTotalCost;
-    
+
     // DECISION: Exclude Hedges from the reported bottom-line Net P&L.
     // They remain available in totalHedgingPnL for informative display.
-    up.finalTotalPnL = up.finalPhysicalPnL; 
-    
+    up.finalTotalPnL = up.finalPhysicalPnL;
+
     return up;
 }
 
 export function actualizeProfile(p: CargoProfile): CargoProfile {
-  return { ...p, pnlBucket: PnLBucket.Realized };
+    return { ...p, pnlBucket: PnLBucket.Realized };
 }
 
 export function generateStrategyName(p: Partial<CargoProfile>): string {
-  const date = p.deliveryDate || p.loadingDate || new Date().toISOString().split('T')[0];
-  const year = date.split('-')[0];
-  const src = (p.source || 'UNK').slice(0, 3).toUpperCase();
-  const buy = (p.buyer || 'TBD').slice(0, 3).toUpperCase();
-  const rand = Math.floor(Math.random() * 900) + 100;
-  return `${year}_${src}_${buy}_${rand}`;
+    const date = p.deliveryDate || p.loadingDate || new Date().toISOString().split('T')[0];
+    const year = date.split('-')[0];
+    const src = (p.source || 'UNK').slice(0, 3).toUpperCase();
+    const buy = (p.buyer || 'TBD').slice(0, 3).toUpperCase();
+    const rand = Math.floor(Math.random() * 900) + 100;
+    return `${year}_${src}_${buy}_${rand}`;
 }
 
 export function findDataGaps(profiles: CargoProfile[], curveDate?: string): DataGap[] {
