@@ -67,7 +67,7 @@ const App: React.FC = () => {
 
   // History Helper
   const updateProfiles = useCallback((newProfiles: CargoProfile[] | ((prev: CargoProfile[]) => CargoProfile[])) => {
-    setProfiles(prev => {
+    setProfiles((prev: CargoProfile[]) => {
       const next = typeof newProfiles === 'function' ? newProfiles(prev) : newProfiles;
       if (JSON.stringify(next) === JSON.stringify(prev)) return prev;
       setPast(history => [...history, prev].slice(-MAX_HISTORY));
@@ -117,8 +117,8 @@ const App: React.FC = () => {
   }, [undo, redo]);
 
   const handleSaveProfile = (profile: CargoProfile) => {
-    updateProfiles(prev => {
-      const idx = prev.findIndex(p => p.id === profile.id);
+    updateProfiles((prev: CargoProfile[]) => {
+      const idx = prev.findIndex((p: CargoProfile) => p.id === profile.id);
       if (idx >= 0) {
         const newProfiles = [...prev];
         newProfiles[idx] = profile;
@@ -133,18 +133,18 @@ const App: React.FC = () => {
 
   const handleDeleteProfile = (id: string) => {
     if (confirm('Delete this cargo?')) {
-      updateProfiles(prev => prev.filter(p => p.id !== id));
+      updateProfiles((prev: CargoProfile[]) => prev.filter((p: CargoProfile) => p.id !== id));
     }
   };
 
   const handleBulkDelete = (ids: Set<string>) => {
     if (confirm(`Delete ${ids.size} cargoes?`)) {
-      updateProfiles(prev => prev.filter(p => !ids.has(p.id)));
+      updateProfiles((prev: CargoProfile[]) => prev.filter((p: CargoProfile) => !ids.has(p.id)));
     }
   };
 
   const handleBulkUpdate = (ids: Set<string>, updates: Partial<CargoProfile>) => {
-    updateProfiles(prev => prev.map(p => {
+    updateProfiles((prev: CargoProfile[]) => prev.map((p: CargoProfile) => {
       if (ids.has(p.id)) {
         return recalculateProfile({ ...p, ...updates }, p.pnlBucket !== PnLBucket.Realized) as CargoProfile;
       }
@@ -153,9 +153,9 @@ const App: React.FC = () => {
   };
 
   const handleBulkImport = (newProfiles: CargoProfile[]) => {
-    updateProfiles(prev => {
-        const existingMap = new Map<string, CargoProfile>(prev.map(p => [p.strategyName, p]));
-        newProfiles.forEach(np => {
+    updateProfiles((prev: CargoProfile[]) => {
+        const existingMap = new Map<string, CargoProfile>(prev.map((p: CargoProfile) => [p.strategyName, p]));
+        newProfiles.forEach((np: CargoProfile) => {
             const existing = existingMap.get(np.strategyName);
             if (existing) {
                 existingMap.set(np.strategyName, { ...(existing as CargoProfile), ...np });
@@ -170,7 +170,7 @@ const App: React.FC = () => {
   const handleMarketRefresh = () => {
     setMarketData(getMarketData());
     setForwardCurve(getForwardCurve());
-    updateProfiles(prev => prev.map(p => 
+    updateProfiles((prev: CargoProfile[]) => prev.map((p: CargoProfile) => 
       p.pnlBucket === PnLBucket.Realized ? p : (recalculateProfile(p, true) as CargoProfile)
     ));
   };
@@ -183,12 +183,12 @@ const App: React.FC = () => {
 
   const filteredProfiles = useMemo(() => {
     if (portfolioYear === 'All') return profiles;
-    return profiles.filter(p => getPortfolioYear(p).toString() === portfolioYear);
+    return profiles.filter((p: CargoProfile) => getPortfolioYear(p).toString() === portfolioYear);
   }, [profiles, portfolioYear]);
 
   const availableYears = useMemo(() => {
       const years = new Set<string>();
-      profiles.forEach(p => years.add(getPortfolioYear(p).toString()));
+      profiles.forEach((p: CargoProfile) => years.add(getPortfolioYear(p).toString()));
       const sorted = Array.from(years).sort().reverse();
       return ['All', ...sorted];
   }, [profiles]);
@@ -201,7 +201,7 @@ const App: React.FC = () => {
       </div>
 
       <nav className="flex-1 px-4 space-y-2 mt-4">
-        {NAV_ITEMS.map(item => (
+        {NAV_ITEMS.map((item: any) => (
           <button
             key={item.id}
             onClick={() => {
@@ -230,7 +230,7 @@ const App: React.FC = () => {
                   onChange={(e) => setPortfolioYear(e.target.value)}
                   className="w-full bg-slate-800 border-none rounded-lg text-sm text-slate-300 focus:ring-1 focus:ring-blue-500"
                >
-                   {availableYears.map(y => <option key={y} value={y}>{y}</option>)}
+                   {availableYears.map((y: string) => <option key={y} value={y}>{y}</option>)}
                </select>
            </div>
 
@@ -290,7 +290,7 @@ const App: React.FC = () => {
               >
                 <svg className="w-6 h-6" fill="none" stroke="currentColor" viewBox="0 0 24 24"><path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M4 6h16M4 12h16M4 18h16" /></svg>
               </button>
-              <h1 className="text-lg lg:text-xl font-bold text-slate-800 capitalize truncate">{NAV_ITEMS.find(n => n.id === view)?.label}</h1>
+              <h1 className="text-lg lg:text-xl font-bold text-slate-800 capitalize truncate">{NAV_ITEMS.find((n: any) => n.id === view)?.label}</h1>
             </div>
             
             <div className="flex items-center gap-2 lg:gap-4">
@@ -343,7 +343,7 @@ const App: React.FC = () => {
                             marketData={marketData}
                             forwardCurve={forwardCurve}
                             onRefreshMarket={handleMarketRefresh}
-                            onCargoClick={(p) => handleEdit(p, 'dashboard')}
+                            onCargoClick={(p: CargoProfile) => handleEdit(p, 'dashboard')}
                             portfolioYear={portfolioYear}
                             editingProfileId={editingProfile?.id}
                         />
@@ -352,9 +352,9 @@ const App: React.FC = () => {
                     <motion.div key="cargos" initial={{opacity:0, x:-20}} animate={{opacity:1, x:0}} exit={{opacity:0, x:20}} className="h-full">
                         <CargoList 
                             profiles={filteredProfiles} 
-                            onEdit={(p) => handleEdit(p, 'list')} 
+                            onEdit={(p: CargoProfile) => handleEdit(p, 'list')} 
                             onDelete={handleDeleteProfile}
-                            onActualize={(p) => handleSaveProfile({...p, pnlBucket: PnLBucket.Realized})}
+                            onActualize={(p: CargoProfile) => handleSaveProfile({...p, pnlBucket: PnLBucket.Realized})}
                             onBulkDelete={handleBulkDelete}
                             onBulkUpdate={handleBulkUpdate}
                             onBulkImport={handleBulkImport}
@@ -365,7 +365,7 @@ const App: React.FC = () => {
                     <motion.div key="exposure" initial={{opacity:0, x:-20}} animate={{opacity:1, x:0}} exit={{opacity:0, x:20}} className="h-full">
                          <ExposureView 
                             profiles={filteredProfiles} 
-                            onCargoClick={(p) => handleEdit(p, 'list')}
+                            onCargoClick={(p: CargoProfile) => handleEdit(p, 'list')}
                             editingProfileId={editingProfile?.id}
                             portfolioYear={portfolioYear}
                         />
@@ -376,7 +376,7 @@ const App: React.FC = () => {
                             profiles={profiles} 
                             trmsData={trmsData}
                             onTrmsUpload={setTrmsData}
-                            onEditProfile={(p) => handleEdit(p, 'list')}
+                            onEditProfile={(p: CargoProfile) => handleEdit(p, 'list')}
                         />
                     </motion.div>
                 ) : null}
@@ -403,10 +403,10 @@ const App: React.FC = () => {
                   <BulkImportModal 
                       existingProfiles={profiles}
                       onClose={() => setIsImporting(false)}
-                      onImport={(newProfiles) => {
-                          updateProfiles(prev => {
-                              const map = new Map(prev.map(p => [p.id, p]));
-                              newProfiles.forEach(p => map.set(p.id, p));
+                      onImport={(newProfiles: CargoProfile[]) => {
+                          updateProfiles((prev: CargoProfile[]) => {
+                              const map = new Map(prev.map((p: CargoProfile) => [p.id, p]));
+                              newProfiles.forEach((p: CargoProfile) => map.set(p.id, p));
                               return Array.from(map.values());
                           });
                       }}

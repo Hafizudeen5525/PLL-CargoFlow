@@ -34,17 +34,17 @@ export interface CargoProfile {
   finalTotalPnL: number;
   volumeUnit?: string;
   pricingEndDate?: string;
-
+  
   // Manual Overrides & Rounding
   isBuyPriceManual?: boolean;
   isSellPriceManual?: boolean;
   buyPriceRounding?: number;
   sellPriceRounding?: number;
-
+  
   // SRC (Shipping Related Cost) for DES cargoes
   srcUnitFee?: number;
   reconciledSrcCost?: number;
-
+  
   loadingWindowStart?: string;
   loadingWindowEnd?: string;
   deliveryWindowStart?: string;
@@ -135,7 +135,7 @@ export interface CargoProfile {
   sellPrice3Constant?: number;
   sellPriceOverallConstant?: number;
   sellPriceOverallConstantWeightage?: number;
-
+  
   jarvisNo?: string;
 }
 
