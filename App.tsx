@@ -385,7 +385,7 @@ const App: React.FC = () => {
 
         <AnimatePresence>
             {isEditing && (
-                <div className="fixed inset-0 bg-slate-900/60 backdrop-blur-sm z-[150] flex items-center justify-center p-0 sm:p-4">
+                <div className="fixed inset-0 bg-slate-900/60 backdrop-blur-sm z-[400] flex items-center justify-center p-0 sm:p-4">
                      <CargoForm 
                         initialData={editingProfile} 
                         source={formSource}
@@ -399,7 +399,7 @@ const App: React.FC = () => {
                 </div>
             )}
             {isImporting && (
-                <div className="fixed inset-0 bg-slate-900/60 backdrop-blur-sm z-[150] flex items-center justify-center p-0 sm:p-4">
+                <div className="fixed inset-0 bg-slate-900/60 backdrop-blur-sm z-[400] flex items-center justify-center p-0 sm:p-4">
                   <BulkImportModal 
                       existingProfiles={profiles}
                       onClose={() => setIsImporting(false)}
@@ -414,12 +414,14 @@ const App: React.FC = () => {
                 </div>
             )}
             {isForwardCurveOpen && (
-                <ForwardCurveModal 
-                    onClose={() => setIsForwardCurveOpen(false)}
-                    onSave={() => {
-                        handleMarketRefresh(); 
-                    }}
-                />
+                <div className="fixed inset-0 bg-slate-900/60 backdrop-blur-sm z-[400] flex items-center justify-center p-0 sm:p-4">
+                    <ForwardCurveModal 
+                        onClose={() => setIsForwardCurveOpen(false)}
+                        onSave={() => {
+                            handleMarketRefresh(); 
+                        }}
+                    />
+                </div>
             )}
         </AnimatePresence>
       </main>
