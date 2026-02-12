@@ -15,11 +15,7 @@ const COLUMN_MAPPING: Record<string, string[]> = {
   source: ['source', 'origin', 'load port', 'loading port'],
   buyer: ['buyer', 'customer', 'client', 'destination', 'disport'],
   deliveryDate: ['delivery date', 'arrival', 'end date', 'del date'],
-  deliveryWindowStart: ['delivery start', 'del start'],
-  deliveryWindowEnd: ['delivery end', 'del end'],
   loadingDate: ['loading date', 'load date', 'bl date'],
-  loadingWindowStart: ['loading start', 'load start'],
-  loadingWindowEnd: ['loading end', 'load end'],
   deliveredVolume: ['volume', 'vol', 'quantity', 'qty', 'mmbtu', 'bbl', 'delivered volume'],
   loadedVolume: ['loaded volume', 'load vol'],
   sellFormula: ['sell formula', 'sales formula'],
@@ -32,24 +28,6 @@ const COLUMN_MAPPING: Record<string, string[]> = {
   incoterms: ['incoterms', 'terms'],
   pnlBucket: ['status', 'bucket', 'state']
 };
-
-const formatMonthStr = (dateStr: string): string => {
-    if (!dateStr) return '';
-    try {
-        const parts = dateStr.split('-');
-        if (parts.length === 3) {
-            const y = parseInt(parts[0]);
-            const m = parseInt(parts[1]) - 1;
-            const d = parseInt(parts[2]);
-            const date = new Date(y, m, d);
-            if (isNaN(date.getTime())) return '';
-            const monthShort = date.toLocaleString('en-US', { month: 'short' });
-            const yearShort = y.toString().slice(2);
-            return `${monthShort}-${yearShort}`;
-        }
-    } catch(e) {}
-    return '';
-}
 
 interface DiffCellProps {
     row: any;
@@ -98,30 +76,14 @@ const DiffCell = ({ row, field, rowIndex, format, className = "", isIgnored, onT
 
 export const BulkImportModal: React.FC<BulkImportModalProps> = ({ existingProfiles, onClose, onImport }) => {
   const [inputText, setInputText] = useState('');
-  const [parsedRows, setParsedRows] = useState<(CargoProfile & { _status: 'New' | 'Update' | 'No Change', _changes?: Record<string, {old: any, new: any}>, totalLoadedVolume?: number, totalDeliveredVolume?: number })[]>([]);
+  const [parsedRows, setParsedRows] = useState<any[]>([]);
   const [step, setStep] = useState<'paste' | 'preview'>('paste');
   const [selectedIndices, setSelectedIndices] = useState<Set<number>>(new Set());
   const [ignoredChanges, setIgnoredChanges] = useState<Record<number, Set<string>>>({});
 
   const parseDate = (raw: string): string => {
     if (!raw) return '';
-    const str = raw.trim();
-    const months: Record<string, string> = {
-        jan: '01', feb: '02', mar: '03', apr: '04', may: '05', jun: '06',
-        jul: '07', aug: '08', sep: '09', oct: '10', nov: '11', dec: '12',
-        january: '01', february: '02', march: '03', april: '04', june: '06',
-        july: '07', august: '08', september: '09', october: '10', november: '11', december: '12'
-    };
-    const ddMmmYy = str.match(/^(\d{1,2})[\s\-\/]+([a-zA-Z]{3,})[\s\-\/]+(\d{2,4})$/);
-    if (ddMmmYy) {
-        const d = ddMmmYy[1].padStart(2, '0');
-        const mStr = ddMmmYy[2].toLowerCase().slice(0, 3);
-        let y = ddMmmYy[3];
-        if (y.length === 2) y = `20${y}`;
-        const m = months[mStr];
-        if (m) return `${y}-${m}-${d}`;
-    }
-    const d = new Date(str);
+    const d = new Date(raw);
     if (!isNaN(d.getTime())) return d.toISOString().split('T')[0];
     return '';
   };
@@ -136,7 +98,7 @@ export const BulkImportModal: React.FC<BulkImportModalProps> = ({ existingProfil
         const headers = rows[0].split(/\t|,/).map(h => h.trim().toLowerCase().replace(/['"]+/g, ''));
         const mapIndices: Record<string, number> = {};
         
-        headers.forEach((h: string, index: number) => {
+        headers.forEach((h, index) => {
             for (const [key, aliases] of Object.entries(COLUMN_MAPPING)) {
                 if (aliases.some(alias => h.includes(alias))) {
                     if (mapIndices[key] === undefined) mapIndices[key] = index;
@@ -158,7 +120,7 @@ export const BulkImportModal: React.FC<BulkImportModalProps> = ({ existingProfil
                     if (key.includes('Volume')) {
                         const volNum = parseFloat(rawVal.replace(/[^0-9.-]/g, ''));
                         if (!isNaN(volNum)) (parsedFields as any)[key] = volNum;
-                    } else if (key.includes('Date') || key.includes('Start') || key.includes('End')) {
+                    } else if (key.includes('Date')) {
                         (parsedFields as any)[key] = parseDate(rawVal);
                     } else if (['absoluteSellPrice', 'absoluteBuyPrice', 'salesRevenue', 'reconciledPurchaseCost', 'finalTotalPnL'].includes(key)) {
                         const cleanNum = parseFloat(rawVal.replace(/[^0-9.-]/g, ''));
@@ -185,25 +147,24 @@ export const BulkImportModal: React.FC<BulkImportModalProps> = ({ existingProfil
                 
                 // --- Robust Tiered Volume Splitting Logic ---
                 if (existingMatch.isTieredPricing) {
-                    // Purchase Volume Split
+                    // Logic: Fill Tier 1 up to the current existing Tier 1 volume first
                     if (parsedFields.loadedVolume !== undefined) {
                         const incomingTotal = parsedFields.loadedVolume;
-                        const t1Capacity = existingMatch.loadedVolume || 0;
-                        if (t1Capacity > 0 && incomingTotal > t1Capacity) {
-                            merged.loadedVolume = t1Capacity;
-                            merged.tier2LoadedVolume = incomingTotal - t1Capacity;
+                        const t1Threshold = existingMatch.loadedVolume || 0;
+                        if (t1Threshold > 0 && incomingTotal > t1Threshold) {
+                            merged.loadedVolume = t1Threshold;
+                            merged.tier2LoadedVolume = incomingTotal - t1Threshold;
                         } else {
                             merged.loadedVolume = incomingTotal;
                             merged.tier2LoadedVolume = 0;
                         }
                     }
-                    // Sales Volume Split
                     if (parsedFields.deliveredVolume !== undefined) {
                         const incomingTotal = parsedFields.deliveredVolume;
-                        const t1Capacity = existingMatch.deliveredVolume || 0;
-                        if (t1Capacity > 0 && incomingTotal > t1Capacity) {
-                            merged.deliveredVolume = t1Capacity;
-                            merged.tier2DeliveredVolume = incomingTotal - t1Capacity;
+                        const t1Threshold = existingMatch.deliveredVolume || 0;
+                        if (t1Threshold > 0 && incomingTotal > t1Threshold) {
+                            merged.deliveredVolume = t1Threshold;
+                            merged.tier2DeliveredVolume = incomingTotal - t1Threshold;
                         } else {
                             merged.deliveredVolume = incomingTotal;
                             merged.tier2DeliveredVolume = 0;
@@ -215,7 +176,7 @@ export const BulkImportModal: React.FC<BulkImportModalProps> = ({ existingProfil
                 finalProfile = recalculateProfile(merged, !isRealized) as CargoProfile;
                 status = 'Update';
 
-                // Track changes for all keys
+                // Detect changes
                 (Object.keys(finalProfile) as Array<keyof CargoProfile>).forEach(key => {
                     if (key === 'id') return;
                     const oldVal = (existingMatch as any)[key];
@@ -227,13 +188,12 @@ export const BulkImportModal: React.FC<BulkImportModalProps> = ({ existingProfil
                     }
                 });
 
-                // Virtual 'Total Volume' changes for preview UI
+                // Add virtual "Total Volume" tracking for the preview table
                 const oldTotalDel = (existingMatch.deliveredVolume || 0) + (existingMatch.tier2DeliveredVolume || 0);
                 const newTotalDel = (finalProfile.deliveredVolume || 0) + (finalProfile.tier2DeliveredVolume || 0);
                 if (Math.abs(oldTotalDel - newTotalDel) > 0.1) {
                     changes['totalDeliveredVolume'] = { old: oldTotalDel, new: newTotalDel };
                 }
-
                 const oldTotalLoad = (existingMatch.loadedVolume || 0) + (existingMatch.tier2LoadedVolume || 0);
                 const newTotalLoad = (finalProfile.loadedVolume || 0) + (finalProfile.tier2LoadedVolume || 0);
                 if (Math.abs(oldTotalLoad - newTotalLoad) > 0.1) {
@@ -305,7 +265,7 @@ export const BulkImportModal: React.FC<BulkImportModalProps> = ({ existingProfil
     <div className="fixed inset-0 bg-slate-900/60 backdrop-blur-sm flex items-center justify-center p-4 z-50">
       <motion.div initial={{ opacity: 0, scale: 0.95 }} animate={{ opacity: 1, scale: 1 }} className="bg-white rounded-xl shadow-2xl w-full max-w-7xl max-h-[90vh] flex flex-col overflow-hidden">
         <div className="p-6 border-b border-slate-100 flex justify-between items-center bg-white">
-            <h2 className="text-xl font-bold text-slate-800">Bulk Import: {step === 'paste' ? 'Paste Data' : 'Review Splits'}</h2>
+            <h2 className="text-xl font-bold text-slate-800">Bulk Import: {step === 'paste' ? 'Paste Data' : 'Review Changes & Splits'}</h2>
             <button onClick={onClose} className="text-slate-400 hover:text-slate-600"><svg className="w-6 h-6" fill="none" stroke="currentColor" viewBox="0 0 24 24"><path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M6 18L18 6M6 6l12 12" /></svg></button>
         </div>
 
@@ -313,7 +273,7 @@ export const BulkImportModal: React.FC<BulkImportModalProps> = ({ existingProfil
             {step === 'paste' ? (
                 <textarea 
                     className="w-full h-64 p-4 border border-slate-300 rounded-lg font-mono text-xs focus:ring-2 focus:ring-blue-500/20"
-                    placeholder="Paste Strategy Name | Source | Total Volume..."
+                    placeholder="Paste Strategy Name | Source | Volume | Status"
                     value={inputText}
                     onChange={(e) => setInputText(e.target.value)}
                 />
@@ -328,7 +288,7 @@ export const BulkImportModal: React.FC<BulkImportModalProps> = ({ existingProfil
                                 <th className="px-4 py-4">Loading Date</th>
                                 <th className="px-4 py-4">Delivery Date</th>
                                 <th className="px-4 py-4 text-right">Total Vol (MT/U)</th>
-                                <th className="px-4 py-4 text-right">Net P&L</th>
+                                <th className="px-4 py-4 text-right">P&L</th>
                             </tr>
                         </thead>
                         <tbody className="divide-y divide-slate-100">
@@ -348,8 +308,8 @@ export const BulkImportModal: React.FC<BulkImportModalProps> = ({ existingProfil
                                             <DiffCell row={row} rowIndex={i} field="totalDeliveredVolume" format={(v) => v?.toLocaleString()} isIgnored={ignoredChanges[i]?.has("totalDeliveredVolume")} onToggle={(idx, f) => { const s = new Set(ignoredChanges[idx] || []); if (s.has(f)) s.delete(f); else s.add(f); setIgnoredChanges({ ...ignoredChanges, [idx]: s }); }} className="font-mono" />
                                         </div>
                                     </td>
-                                    <td className={`px-4 py-3 text-right font-mono font-bold ${row.finalTotalPnL >= 0 ? 'text-emerald-600' : 'text-rose-600'}`}>
-                                        <DiffCell row={row} rowIndex={i} field="finalTotalPnL" format={(v) => Number(v).toLocaleString()} isIgnored={ignoredChanges[i]?.has("finalTotalPnL")} onToggle={(idx, f) => { const s = new Set(ignoredChanges[idx] || []); if (s.has(f)) s.delete(f); else s.add(f); setIgnoredChanges({ ...ignoredChanges, [idx]: s }); }} />
+                                    <td className="px-4 py-3 text-right">
+                                        <DiffCell row={row} rowIndex={i} field="finalTotalPnL" format={(v) => Number(v).toLocaleString()} isIgnored={ignoredChanges[i]?.has("finalTotalPnL")} onToggle={(idx, f) => { const s = new Set(ignoredChanges[idx] || []); if (s.has(f)) s.delete(f); else s.add(f); setIgnoredChanges({ ...ignoredChanges, [idx]: s }); }} className={`font-mono font-bold ${row.finalTotalPnL >= 0 ? 'text-emerald-600' : 'text-rose-600'}`} />
                                     </td>
                                 </tr>
                             ))}
