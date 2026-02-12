@@ -16,13 +16,10 @@ interface Attribution {
     marketImpact: number;
     profileEdits: number;
     totalDelta: number;
-    
-    // Advanced Analytics
     topIndexDriver: { name: string; impact: number; priceChange: number } | null;
     topGroupAffected: { name: string; impact: number } | null;
     indexBreakdown: Record<string, number>;
     groupBreakdown: Record<string, number>;
-    
     items: AttributionItem[];
 }
 
@@ -60,20 +57,17 @@ export const PnLVarianceExplainer: React.FC<PnLVarianceExplainerProps> = ({
         items: []
     };
 
-    // Fix: Explicitly type Maps to ensure values are treated as CargoProfile and not unknown
-    const currentMap = new Map<string, CargoProfile>(currentProfiles.map(p => [p.strategyName, p]));
-    const baselineMap = new Map<string, CargoProfile>(baselineProfiles.map(p => [p.strategyName, p]));
+    const currentMap = new Map<string, CargoProfile>(currentProfiles.map((p: CargoProfile) => [p.strategyName, p]));
+    const baselineMap = new Map<string, CargoProfile>(baselineProfiles.map((p: CargoProfile) => [p.strategyName, p]));
     const allStrategies = Array.from(new Set([...currentMap.keys(), ...baselineMap.keys()]));
 
-    // Temporary storage for index price changes to avoid redundant lookups
     const indexPriceChanges: Record<string, { totalImpact: number, totalMove: number, count: number }> = {};
 
-    allStrategies.forEach(strategy => {
+    allStrategies.forEach((strategy: string) => {
         const current = currentMap.get(strategy);
         const baseline = baselineMap.get(strategy);
         const group = getGroupName(strategy);
 
-        // Scenario 1: New Deal
         if (current && !baseline) {
             const pnl = (recalculateProfile(current, true, currentCurveDate) as CargoProfile).finalTotalPnL || 0;
             attr.newDeals += pnl;
@@ -81,7 +75,6 @@ export const PnLVarianceExplainer: React.FC<PnLVarianceExplainerProps> = ({
             return;
         }
 
-        // Scenario 2: Deal Removed
         if (!current && baseline) {
             const pnl = (recalculateProfile(baseline, true, baselineCurveDate) as CargoProfile).finalTotalPnL || 0;
             attr.removedDeals -= pnl;
@@ -94,11 +87,9 @@ export const PnLVarianceExplainer: React.FC<PnLVarianceExplainerProps> = ({
             const pBaseAtNewMarket = recalculateProfile(baseline, true, currentCurveDate) as CargoProfile;
             const pCurr = recalculateProfile(current, true, currentCurveDate) as CargoProfile;
 
-            // 1. Market Impact Attribution (Baseline Profile, Moving Curve)
             const mImpact = (pBaseAtNewMarket.finalTotalPnL || 0) - (pBase.finalTotalPnL || 0);
             attr.marketImpact += mImpact;
             
-            // Sub-driver analysis for market impact
             const marketSubDrivers: { name: string, impact: number }[] = [];
             
             const attributeLeg = (type: 'buy' | 'sell' | 'tier2Buy' | 'tier2Sell', p: CargoProfile) => {
@@ -106,7 +97,6 @@ export const PnLVarianceExplainer: React.FC<PnLVarianceExplainerProps> = ({
                 const vol = (type === 'buy' || type === 'tier2Buy') ? -(p.loadedVolume || 0) : (p.deliveredVolume || 0);
                 if (!refDate || vol === 0) return;
 
-                // Check 3 components
                 for (let i = 1; i <= 3; i++) {
                     const idx = (p as any)[`${type}PriceIndex${i}`] || (i === 1 ? getIndexType((p as any)[`${type}Formula`]) : null);
                     const weight = Number((p as any)[`${type}Price${i}Weightage`] ?? (i === 1 ? 1 : 0));
@@ -146,17 +136,15 @@ export const PnLVarianceExplainer: React.FC<PnLVarianceExplainerProps> = ({
                     category: 'Market', 
                     impact: mImpact, 
                     details: 'Market Price Variance',
-                    subDrivers: marketSubDrivers.sort((a,b) => Math.abs(b.impact) - Math.abs(a.impact))
+                    subDrivers: marketSubDrivers.sort((a: any, b: any) => Math.abs(b.impact) - Math.abs(a.impact))
                 });
                 attr.groupBreakdown[group] = (attr.groupBreakdown[group] || 0) + mImpact;
             }
 
-            // 2. Profile Edit Impact (Moving Profile, Current Curve)
             const eImpact = (pCurr.finalTotalPnL || 0) - (pBaseAtNewMarket.finalTotalPnL || 0);
             attr.profileEdits += eImpact;
 
             if (Math.abs(eImpact) > 10) {
-                // Determine what changed
                 const changedFields = [];
                 if (Math.abs((current.deliveredVolume || 0) - (baseline.deliveredVolume || 0)) > 0.1) changedFields.push('Volume');
                 if (current.sellFormula !== baseline.sellFormula) changedFields.push('Formula');
@@ -177,9 +165,8 @@ export const PnLVarianceExplainer: React.FC<PnLVarianceExplainerProps> = ({
 
     attr.totalDelta = attr.newDeals + attr.removedDeals + attr.marketImpact + attr.profileEdits;
 
-    // Identify Primary Drivers
     let maxIdx = '', maxIdxVal = 0;
-    Object.entries(attr.indexBreakdown).forEach(([name, val]) => {
+    Object.entries(attr.indexBreakdown).forEach(([name, val]: [string, number]) => {
         if (Math.abs(val) > Math.abs(maxIdxVal)) { maxIdx = name; maxIdxVal = val; }
     });
     if (maxIdx) {
@@ -191,12 +178,12 @@ export const PnLVarianceExplainer: React.FC<PnLVarianceExplainerProps> = ({
     }
 
     let maxGrp = '', maxGrpVal = 0;
-    Object.entries(attr.groupBreakdown).forEach(([name, val]) => {
+    Object.entries(attr.groupBreakdown).forEach(([name, val]: [string, number]) => {
         if (Math.abs(val) > Math.abs(maxGrpVal)) { maxGrp = name; maxGrpVal = val; }
     });
     if (maxGrp) attr.topGroupAffected = { name: maxGrp, impact: maxGrpVal };
 
-    attr.items.sort((a,b) => Math.abs(b.impact) - Math.abs(a.impact));
+    attr.items.sort((a: any, b: any) => Math.abs(b.impact) - Math.abs(a.impact));
     return attr;
   }, [currentProfiles, baselineProfiles, currentCurveDate, baselineCurveDate]);
 
@@ -212,14 +199,12 @@ export const PnLVarianceExplainer: React.FC<PnLVarianceExplainerProps> = ({
     return <div className="bg-white border border-slate-200 rounded-xl p-4 text-center text-xs text-slate-400 italic">No significant portfolio variance detected.</div>;
   }
 
-  // Fix: Explicitly narrow attribution to avoid "unknown" errors during comparison
   const attr = attribution as Attribution;
   const isProfitDelta = attr.totalDelta >= 0;
   const hasEdits = Math.abs(attr.profileEdits) > 1000;
 
   return (
     <div className="bg-white border border-slate-200 rounded-2xl overflow-hidden shadow-sm hover:shadow-md transition-all">
-      {/* Narrative Summary Bar */}
       <div 
         onClick={() => setIsExpanded(!isExpanded)}
         className="p-5 flex flex-col md:flex-row justify-between items-center gap-6 cursor-pointer hover:bg-slate-50/50"
@@ -271,7 +256,6 @@ export const PnLVarianceExplainer: React.FC<PnLVarianceExplainerProps> = ({
         </div>
       </div>
 
-      {/* Expanded Walk Breakdown */}
       <AnimatePresence>
         {isExpanded && (
             <motion.div 
@@ -281,14 +265,13 @@ export const PnLVarianceExplainer: React.FC<PnLVarianceExplainerProps> = ({
                 className="border-t border-slate-100 bg-slate-50/30 overflow-hidden"
             >
                 <div className="grid grid-cols-1 lg:grid-cols-2 gap-8 p-8">
-                    {/* Visual Drivers List */}
                     <div className="space-y-6">
                         <h4 className="text-[10px] font-black text-slate-400 uppercase tracking-widest flex items-center gap-2">
                             <span className="w-1 h-3 bg-blue-500 rounded-full"></span>
                             Top 10 Movement Items
                         </h4>
                         <div className="space-y-2">
-                            {attr.items.slice(0, 10).map((item, i) => (
+                            {attr.items.slice(0, 10).map((item: AttributionItem, i: number) => (
                                 <div key={i} className="group flex flex-col bg-white rounded-xl border border-slate-200 shadow-sm overflow-hidden">
                                     <div className="flex items-center justify-between p-3">
                                         <div className="flex items-center gap-3 min-w-0">
@@ -308,7 +291,7 @@ export const PnLVarianceExplainer: React.FC<PnLVarianceExplainerProps> = ({
                                     </div>
                                     {item.subDrivers && item.subDrivers.length > 0 && (
                                         <div className="px-3 pb-3 pt-1 border-t border-slate-50 flex flex-wrap gap-2">
-                                            {item.subDrivers.map((sd, j) => (
+                                            {item.subDrivers.map((sd: any, j: number) => (
                                                 <div key={j} className="px-2 py-0.5 bg-slate-50 rounded text-[9px] font-bold text-slate-500 flex items-center gap-1">
                                                     {sd.name}: <span className={sd.impact >= 0 ? 'text-emerald-600' : 'text-rose-600'}>{formatUSD(sd.impact)}</span>
                                                 </div>
@@ -320,7 +303,6 @@ export const PnLVarianceExplainer: React.FC<PnLVarianceExplainerProps> = ({
                         </div>
                     </div>
 
-                    {/* Summary Statistics */}
                     <div className="space-y-8">
                         <div className="bg-white p-6 rounded-2xl border border-slate-200 shadow-sm space-y-4">
                             <h4 className="text-[10px] font-black text-slate-400 uppercase tracking-widest">Aggregate Attribution</h4>
@@ -340,8 +322,8 @@ export const PnLVarianceExplainer: React.FC<PnLVarianceExplainerProps> = ({
                             <h4 className="text-[10px] font-black text-slate-400 uppercase tracking-widest">Index Specific Impact</h4>
                             <div className="flex flex-wrap gap-2">
                                 {Object.entries(attr.indexBreakdown)
-                                    .sort((a,b) => Math.abs(b[1]) - Math.abs(a[1]))
-                                    .map(([name, val]) => (
+                                    .sort((a: [string, number], b: [string, number]) => Math.abs(b[1]) - Math.abs(a[1]))
+                                    .map(([name, val]: [string, number]) => (
                                         <div key={name} className="px-3 py-2 bg-white border border-slate-200 rounded-xl shadow-sm">
                                             <span className="block text-[9px] font-black text-slate-400 uppercase tracking-tighter mb-0.5">{name}</span>
                                             <span className={`text-[11px] font-mono font-bold ${val >= 0 ? 'text-emerald-600' : 'text-rose-600'}`}>{formatUSD(val)}</span>
@@ -364,7 +346,6 @@ export const PnLVarianceExplainer: React.FC<PnLVarianceExplainerProps> = ({
   );
 };
 
-// Fix: Ensure props are correctly typed for destructuring and use in the component body
 interface SummaryRowProps {
     label: string;
     value: number;
@@ -372,7 +353,6 @@ interface SummaryRowProps {
 }
 
 const SummaryRow = ({ label, value, color }: SummaryRowProps) => {
-    // Cast to number to resolve "unknown" type error during formatting
     const numericValue = Number(value || 0);
     return (
         <div className="flex justify-between items-center">

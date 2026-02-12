@@ -1,4 +1,3 @@
-
 import React, { useMemo, useState } from 'react';
 import { CargoProfile, PnLBucket } from '../types';
 import { getIndexType, getIndexPrice, ForwardCurveRow, getHistoricalCurve, getForwardCurve } from '../services/calculationService';
@@ -42,9 +41,8 @@ export const IndexWeightedPrices: React.FC<IndexWeightedPricesProps> = ({
 
   const weightedResults = useMemo(() => {
     const targetFullCurve = getForwardCurve(curveDate);
-    const historicalCurve = getHistoricalCurve();
 
-    const results: IndexWeightedResult[] = INDEX_ORDER.map(idx => {
+    const results: IndexWeightedResult[] = INDEX_ORDER.map((idx: string) => {
         const stats = { 
             numerator: 0, 
             denominator: 0, 
@@ -54,7 +52,7 @@ export const IndexWeightedPrices: React.FC<IndexWeightedPricesProps> = ({
 
         let hasExposure = false;
 
-        profiles.forEach(p => {
+        profiles.forEach((p: CargoProfile) => {
           if (p.pnlBucket === PnLBucket.Realized) return;
 
           const processLeg = (formula: string | undefined, volume: number, isBuy: boolean) => {
@@ -95,14 +93,14 @@ export const IndexWeightedPrices: React.FC<IndexWeightedPricesProps> = ({
         });
 
         if (!hasExposure) {
-            const targetMonths = targetFullCurve.filter(r => portfolioYear === 'All' || r.month.startsWith(portfolioYear));
+            const targetMonths = targetFullCurve.filter((r: ForwardCurveRow) => portfolioYear === 'All' || r.month.startsWith(portfolioYear));
             
             if (targetMonths.length > 0) {
                 let sumTarget = 0;
                 let sumBaseline = 0;
                 let count = 0;
 
-                targetMonths.forEach(mRow => {
+                targetMonths.forEach((mRow: ForwardCurveRow) => {
                     const month = mRow.month;
                     const { price: tPrice } = getIndexPrice(idx, `${month}-15`, 'n', curveDate);
                     const { price: bPrice } = getIndexPrice(idx, `${month}-15`, 'n', baselineCurveDate);
@@ -127,7 +125,7 @@ export const IndexWeightedPrices: React.FC<IndexWeightedPricesProps> = ({
                         weightedPrice: sumTarget / count,
                         baselineWeightedPrice: sumBaseline / count,
                         totalExposure: 0,
-                        breakdown: Object.values(stats.breakdown).sort((a,b) => a.month.localeCompare(b.month)),
+                        breakdown: Object.values(stats.breakdown).sort((a: MonthlyContribution, b: MonthlyContribution) => a.month.localeCompare(b.month)),
                         isMarketAverage: true
                     };
                 }
@@ -138,14 +136,14 @@ export const IndexWeightedPrices: React.FC<IndexWeightedPricesProps> = ({
             index: idx,
             weightedPrice: stats.denominator > 0 ? stats.numerator / stats.denominator : 0,
             baselineWeightedPrice: stats.denominator > 0 ? stats.baselineNumerator / stats.denominator : 0,
-            totalExposure: Object.values(stats.breakdown).reduce((a,b) => a + b.exposure, 0),
-            breakdown: Object.values(stats.breakdown).sort((a,b) => a.month.localeCompare(b.month)),
+            totalExposure: Object.values(stats.breakdown).reduce((a: number, b: MonthlyContribution) => a + b.exposure, 0),
+            breakdown: Object.values(stats.breakdown).sort((a: MonthlyContribution, b: MonthlyContribution) => a.month.localeCompare(b.month)),
             isMarketAverage: false
         };
     });
 
     return results;
-  }, [profiles, curveDate, baselineCurveDate, forwardCurve, portfolioYear]);
+  }, [profiles, curveDate, baselineCurveDate, portfolioYear]);
 
   return (
     <div className="space-y-4">
@@ -168,7 +166,7 @@ export const IndexWeightedPrices: React.FC<IndexWeightedPricesProps> = ({
       </div>
       
       <div className="grid grid-cols-1 md:grid-cols-2 lg:grid-cols-3 xl:grid-cols-5 gap-4">
-          {weightedResults.map((res) => {
+          {weightedResults.map((res: IndexWeightedResult) => {
               const delta = res.weightedPrice - res.baselineWeightedPrice;
               const isPositive = delta >= 0;
               const hasPrice = res.weightedPrice > 0;
@@ -243,7 +241,7 @@ export const IndexWeightedPrices: React.FC<IndexWeightedPricesProps> = ({
                             </tr>
                         </thead>
                         <tbody className="divide-y divide-slate-50">
-                            {selectedIdxDetail.breakdown.map((row) => {
+                            {selectedIdxDetail.breakdown.map((row: MonthlyContribution) => {
                                 const mDelta = row.price - row.baselinePrice;
                                 return (
                                     <tr key={row.month} className="hover:bg-slate-50 group">

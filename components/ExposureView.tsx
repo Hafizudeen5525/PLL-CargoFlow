@@ -2,7 +2,7 @@
 import React, { useState, useEffect, useMemo } from 'react';
 import { CargoProfile, PnLBucket } from '../types';
 import { motion, AnimatePresence } from 'framer-motion';
-import { getFixationDate, getIndexType, getHistoricalCurve, MARKET_INTELLIGENCE, generateHistoricalShocks, getExposureMultiplier } from '../services/calculationService';
+import { getFixationDate, getIndexType, getHistoricalCurve, generateHistoricalShocks, getExposureMultiplier, getPricingMonths, ForwardCurveRow } from '../services/calculationService';
 
 interface ExposureViewProps {
     profiles: CargoProfile[];
@@ -36,29 +36,6 @@ const HOLIDAY_DEFAULTS: Record<string, string> = {
     '2025-12-26': "Boxing Day (UK) / 2nd Christmas (NL)",
 };
 
-const getPricingMonths = (refDateStr: string, monthDef: string = 'n'): string[] => {
-    if (!refDateStr) return [];
-    const base = new Date(refDateStr);
-    const d = new Date(base.getFullYear(), base.getMonth(), 15);
-    const results: string[] = [];
-    const cleanDef = (monthDef || 'n').toLowerCase().replace(/\s/g, '');
-    const avgMatch = cleanDef.match(/\(?(\d+),(\d+),(\d+)\)?/);
-    if (avgMatch) {
-        const count = parseInt(avgMatch[1]), lag = parseInt(avgMatch[2]);
-        for (let i = 0; i < count; i++) {
-            const t = new Date(d.getFullYear(), d.getMonth() - lag - i, 15);
-            results.push(`${t.getFullYear()}-${String(t.getMonth() + 1).padStart(2, '0')}`);
-        }
-    } else {
-        let offset = 0;
-        if (cleanDef.includes('n-')) offset = -parseInt(cleanDef.split('n-')[1] || '0');
-        else if (cleanDef.includes('n+')) offset = parseInt(cleanDef.split('n+')[1] || '0');
-        const t = new Date(d.getFullYear(), d.getMonth() + offset, 15);
-        results.push(`${t.getFullYear()}-${String(t.getMonth() + 1).padStart(2, '0')}`);
-    }
-    return results;
-};
-
 interface PricingExposure {
     profileId: string;
     strategyName: string;
@@ -77,6 +54,7 @@ export const ExposureView: React.FC<ExposureViewProps> = ({ profiles, onCargoCli
     });
     const [showInfo, setShowInfo] = useState(false);
     const [showHolidayManager, setShowHolidayManager] = useState(false);
+    const [showGross, setShowGross] = useState(false);
     
     useEffect(() => {
         localStorage.setItem('exposure_holidays_named', JSON.stringify(holidays));
@@ -85,7 +63,7 @@ export const ExposureView: React.FC<ExposureViewProps> = ({ profiles, onCargoCli
     const simDate = useMemo(() => new Date().getTime(), []);
 
     const profilePricingExposures = useMemo<PricingExposure[]>(() => {
-        return profiles.flatMap(p => {
+        return profiles.flatMap((p: CargoProfile) => {
             if (p.pnlBucket === PnLBucket.Realized) return [];
             const results: PricingExposure[] = [];
             const processLeg = (formula: string, vol: number, isBuy: boolean, isTier2: boolean) => {
@@ -97,7 +75,7 @@ export const ExposureView: React.FC<ExposureViewProps> = ({ profiles, onCargoCli
                 else mDef = isBuy ? (p.tier2BuyPrice1MonthDef || 'n') : (p.tier2SellPrice1MonthDef || 'n');
                 const pricingMonths = getPricingMonths(refDate, mDef);
                 const volPerMonth = vol / pricingMonths.length;
-                pricingMonths.forEach(m => {
+                pricingMonths.forEach((m: string) => {
                     results.push({ profileId: p.id, strategyName: p.strategyName, index, pricingMonth: m, volume: isBuy ? -volPerMonth : volPerMonth });
                 });
             };
@@ -119,14 +97,11 @@ export const ExposureView: React.FC<ExposureViewProps> = ({ profiles, onCargoCli
             const mKey = `${d.getFullYear()}-${String(d.getMonth() + 1).padStart(2, '0')}`;
             months.push(mKey);
             grid[mKey] = {};
-            INDICES.forEach(idx => grid[mKey][idx] = { floating: 0, base: 0 });
+            INDICES.forEach((idx: string) => grid[mKey][idx] = { floating: 0, base: 0 });
         }
-        profilePricingExposures.forEach(exp => {
+        profilePricingExposures.forEach((exp: PricingExposure) => {
             if (!grid[exp.pricingMonth]) return;
-            
-            // USE PRECISE BUSINESS DAY MULTIPLIER
             const mult = getExposureMultiplier(exp.index, exp.pricingMonth, simDate, holidays);
-            
             const cell = grid[exp.pricingMonth][exp.index] || grid[exp.pricingMonth]['Other'];
             cell.floating += exp.volume * mult;
             cell.base += exp.volume;
@@ -134,17 +109,14 @@ export const ExposureView: React.FC<ExposureViewProps> = ({ profiles, onCargoCli
         return { months, grid };
     }, [profilePricingExposures, tableYear, simDate, holidays]);
 
-    /**
-     * HISTORICAL SIMULATION RISK ENGINE
-     */
     const riskMetrics = useMemo(() => {
         const historical = getHistoricalCurve();
         const netDeltaPerIndex: Record<string, number> = {};
-        profilePricingExposures.forEach(exp => {
+        profilePricingExposures.forEach((exp: PricingExposure) => {
             const fixD = getFixationDate(exp.index, exp.pricingMonth, holidays);
             if (simDate < fixD.getTime()) {
-                const prices = historical.map(r => r.prices[exp.index]).filter(p => p > 0);
-                const currentPrice = prices.length > 0 ? prices[prices.length - 1] : 10.0;
+                const prices = historical.map((r: ForwardCurveRow) => r.prices[exp.index]).filter((p: number | undefined) => p !== undefined && p > 0);
+                const currentPrice = prices.length > 0 ? (prices[prices.length - 1] as number) : 10.0;
                 netDeltaPerIndex[exp.index] = (netDeltaPerIndex[exp.index] || 0) + (exp.volume * currentPrice);
             }
         });
@@ -157,23 +129,23 @@ export const ExposureView: React.FC<ExposureViewProps> = ({ profiles, onCargoCli
 
         for (let d = 0; d < 256; d++) {
             let simDayPnL = 0;
-            activeIndices.forEach(idx => {
+            activeIndices.forEach((idx: string) => {
                 const shock = dailyShocks[idx]?.[d] || 0;
                 simDayPnL += (netDeltaPerIndex[idx] * shock);
             });
             dailyPnLOutcomes.push(simDayPnL);
         }
 
-        const sortedOutcomes = [...dailyPnLOutcomes].sort((a, b) => a - b);
+        const sortedOutcomes = [...dailyPnLOutcomes].sort((a: number, b: number) => a - b);
         const varIndex = Math.floor(256 * 0.05);
         const var95 = Math.abs(sortedOutcomes[varIndex]);
         const tailOutcomes = sortedOutcomes.slice(0, varIndex + 1);
-        const cvar95 = Math.abs(tailOutcomes.reduce((a, b) => a + b, 0) / tailOutcomes.length);
+        const cvar95 = Math.abs(tailOutcomes.reduce((a: number, b: number) => a + b, 0) / tailOutcomes.length);
 
         let standaloneSum = 0;
-        activeIndices.forEach(idx => {
+        activeIndices.forEach((idx: string) => {
             const indexShocks = dailyShocks[idx] || [];
-            const sortedIdxShocks = [...indexShocks].sort((a,b) => a-b);
+            const sortedIdxShocks = [...indexShocks].sort((a: number, b: number) => a - b);
             const idxWorst = sortedIdxShocks[varIndex] || 0;
             standaloneSum += Math.abs(netDeltaPerIndex[idx] * idxWorst);
         });
@@ -183,17 +155,17 @@ export const ExposureView: React.FC<ExposureViewProps> = ({ profiles, onCargoCli
         return { 
             var: var95, 
             cvar: cvar95, 
-            totalExposure: Object.values(netDeltaPerIndex).reduce((a,b) => a + Math.abs(b), 0), 
+            totalExposure: Object.values(netDeltaPerIndex).reduce((a: number, b: number) => a + Math.abs(b), 0), 
             confidence: 'Historical Simulation (256-Day)',
             diversification,
             standaloneRiskSum: standaloneSum,
-            auditData: activeIndices.map(idx => ({
+            auditData: activeIndices.map((idx: string) => ({
                 index: idx,
                 usdDelta: netDeltaPerIndex[idx],
                 worstShock: Math.min(...(dailyShocks[idx] || [0])),
-                avgShock: (dailyShocks[idx] || [0]).reduce((a,b)=>a+b,0)/256
+                avgShock: (dailyShocks[idx] || [0]).reduce((a: number, b: number) => a + b, 0) / 256
             })),
-            worstDays: sortedOutcomes.slice(0, 10).map(v => Math.abs(v))
+            worstDays: sortedOutcomes.slice(0, 10).map((v: number) => Math.abs(v))
         };
     }, [profilePricingExposures, simDate, holidays]);
 
@@ -256,6 +228,7 @@ export const ExposureView: React.FC<ExposureViewProps> = ({ profiles, onCargoCli
                                 <button onClick={() => setShowInfo(false)} className="text-slate-500 hover:text-white"><svg className="w-4 h-4" fill="none" stroke="currentColor" viewBox="0 0 24 24"><path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M6 18L18 6M6 6l12 12" /></svg></button>
                             </div>
                             <div className="space-y-6 overflow-y-auto custom-scrollbar flex-1 pr-2">
+                                <ExpiryItem title="Net Floating Value" rule="The matrix now displays the remaining floating volume based on business days, rather than the total gross cargo volume." />
                                 <ExpiryItem title="Lookback" rule="Past 256 daily forward curve shifts applied to today's portfolio." />
                                 <ExpiryItem title="Confidence" rule="Uses 95% threshold (approx. the 13th worst day in current history)." />
                                 <ExpiryItem title="Non-Linearity" rule="Captures fat-tails and skewed volatility distributions better than parametric VaR." />
@@ -269,11 +242,15 @@ export const ExposureView: React.FC<ExposureViewProps> = ({ profiles, onCargoCli
                         <div className="p-5 border-b border-slate-100 flex justify-between items-center bg-slate-50/30">
                             <div className="flex items-center gap-3">
                                 <h2 className="text-lg font-bold text-slate-800 flex items-center gap-2">
-                                    Floating Exposure Matrix
+                                    Floating Open Exposure
                                     <button onClick={() => setShowInfo(!showInfo)} className={`p-1 rounded-full transition-colors ${showInfo ? 'bg-indigo-100 text-indigo-600' : 'bg-slate-200 text-slate-500 hover:bg-slate-300'}`} title="Show Guide">
                                         <svg className="w-4 h-4" fill="none" stroke="currentColor" viewBox="0 0 24 24"><path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2.5} d="M13 16h-1v-4h-1m1-4h.01M21 12a9 9 0 11-18 0 9 9 0 0118 0z" /></svg>
                                     </button>
                                 </h2>
+                                <div className="ml-4 flex items-center gap-2 bg-slate-100 p-1 rounded-lg border border-slate-200">
+                                    <button onClick={() => setShowGross(false)} className={`px-3 py-1 rounded text-[10px] font-black uppercase transition-all ${!showGross ? 'bg-white shadow-sm text-indigo-600' : 'text-slate-400'}`}>Net Open</button>
+                                    <button onClick={() => setShowGross(true)} className={`px-3 py-1 rounded text-[10px] font-black uppercase transition-all ${showGross ? 'bg-white shadow-sm text-indigo-600' : 'text-slate-400'}`}>Gross Vol</button>
+                                </div>
                             </div>
                             <div className="flex items-center gap-3">
                                 <button onClick={() => setShowHolidayManager(true)} className="px-4 py-2 flex items-center gap-2 text-xs font-bold rounded-lg transition-all border border-slate-200 hover:bg-white text-slate-600">
@@ -281,7 +258,7 @@ export const ExposureView: React.FC<ExposureViewProps> = ({ profiles, onCargoCli
                                     Trading Calendar
                                 </button>
                                 <div className="flex bg-slate-200/60 p-1 rounded-xl shadow-inner ml-2">
-                                    {[2025, 2026, 2027].map(year => (
+                                    {[2025, 2026, 2027].map((year: number) => (
                                         <button key={year} onClick={() => setTableYear(year)} className={`px-4 py-1.5 text-xs font-bold rounded-lg transition-all ${tableYear === year ? 'bg-white text-indigo-600 shadow-sm' : 'text-slate-500 hover:text-slate-700'}`}>{year}</button>
                                     ))}
                                 </div>
@@ -293,12 +270,12 @@ export const ExposureView: React.FC<ExposureViewProps> = ({ profiles, onCargoCli
                                 <thead>
                                     <tr className="bg-slate-50 text-slate-500 font-bold uppercase tracking-wider text-[10px] border-b border-slate-200">
                                         <th className="px-6 py-4 sticky left-0 bg-slate-50 z-10 w-[180px]">Pricing Month</th>
-                                        {INDICES.map(idx => (<th key={idx} className="px-4 py-4 text-center">{idx}</th>))}
-                                        <th className="px-6 py-4 text-right bg-slate-100/50 sticky right-0 z-10">Total Vol</th>
+                                        {INDICES.map((idx: string) => (<th key={idx} className="px-4 py-4 text-center">{idx}</th>))}
+                                        <th className="px-6 py-4 text-right bg-slate-100/50 sticky right-0 z-10">Row {showGross ? 'Gross' : 'Net'}</th>
                                     </tr>
                                 </thead>
                                 <tbody className="divide-y divide-slate-100">
-                                    {tableData.months.map(m => {
+                                    {tableData.months.map((m: string) => {
                                         const [y, mon] = m.split('-');
                                         const monthName = new Date(parseInt(y), parseInt(mon)-1, 1).toLocaleString('en-US', { month: 'short' });
                                         return (
@@ -306,21 +283,24 @@ export const ExposureView: React.FC<ExposureViewProps> = ({ profiles, onCargoCli
                                                 <td className="px-6 py-3 font-bold sticky left-0 group-hover:bg-indigo-50/30 bg-white text-slate-700 border-r border-slate-50">
                                                     <div className="flex items-center gap-2"><span className="text-[10px] font-mono opacity-50">{y}</span><span className="uppercase tracking-tight">{monthName}</span></div>
                                                 </td>
-                                                {INDICES.map(idx => {
+                                                {INDICES.map((idx: string) => {
                                                     const cell = tableData.grid[m][idx];
                                                     const hasValue = Math.abs(cell.base) > 0.1;
                                                     const isFixed = Math.abs(cell.floating) < 0.1;
+                                                    
                                                     let colorClass = 'text-slate-900';
                                                     if (isFixed) colorClass = cell.base < 0 ? 'text-rose-200' : 'text-slate-200';
                                                     else if (cell.floating < 0) colorClass = 'text-rose-600 font-bold';
                                                     else colorClass = 'text-indigo-600 font-bold';
 
+                                                    const displayVal = showGross ? cell.base : cell.floating;
+
                                                     return (
                                                         <td key={idx} onClick={() => hasValue && setDrillDownCell({ month: m, index: idx })} className={`px-4 py-3 text-center font-mono transition-all ${hasValue ? 'cursor-pointer hover:bg-white hover:shadow-inner' : 'text-slate-50'}`}>
                                                             {hasValue ? (
                                                                 <div className={`flex flex-col ${colorClass} relative`}>
-                                                                    <span>{(cell.base / 1000).toLocaleString(undefined, { maximumFractionDigits: 0 })}k</span>
-                                                                    {!isFixed && <div className="absolute -top-1 -right-1 w-1.5 h-1.5 rounded-full bg-indigo-400 animate-pulse"></div>}
+                                                                    <span>{(displayVal / 1000).toLocaleString(undefined, { maximumFractionDigits: 0 })}k</span>
+                                                                    {!isFixed && !showGross && <div className="absolute -top-1 -right-1 w-1.5 h-1.5 rounded-full bg-indigo-400 animate-pulse"></div>}
                                                                 </div>
                                                             ) : '—'}
                                                         </td>
@@ -328,8 +308,8 @@ export const ExposureView: React.FC<ExposureViewProps> = ({ profiles, onCargoCli
                                                 })}
                                                 <td className="px-6 py-3 text-right font-bold bg-slate-50/30 group-hover:bg-indigo-100/30 sticky right-0 z-10 text-slate-400">
                                                     {(() => {
-                                                        const rowBase = INDICES.reduce((acc, idx) => acc + tableData.grid[m][idx].base, 0);
-                                                        return Math.abs(rowBase) > 0.1 ? (rowBase / 1000).toLocaleString(undefined, { maximumFractionDigits: 0 }) + 'k' : '0k';
+                                                        const rowVal = INDICES.reduce((acc: number, idx: string) => acc + (showGross ? tableData.grid[m][idx].base : tableData.grid[m][idx].floating), 0);
+                                                        return Math.abs(rowVal) > 0.1 ? (rowVal / 1000).toLocaleString(undefined, { maximumFractionDigits: 0 }) + 'k' : '0k';
                                                     })()}
                                                 </td>
                                             </tr>
@@ -368,7 +348,7 @@ export const ExposureView: React.FC<ExposureViewProps> = ({ profiles, onCargoCli
     );
 };
 
-const RiskAuditModal = ({ onClose, metrics }: any) => {
+const RiskAuditModal = ({ onClose, metrics }: { onClose: () => void, metrics: any }) => {
     const formatUSD = (val: number) => new Intl.NumberFormat('en-US', { style: 'currency', currency: 'USD', maximumFractionDigits: 0 }).format(val);
     return (
         <div className="fixed inset-0 z-[250] flex items-center justify-center p-6 bg-slate-900/80 backdrop-blur-md">
@@ -441,7 +421,7 @@ const ExpiryItem = ({ title, rule }: { title: string, rule: string }) => (
     </div>
 );
 
-const HolidayManager = ({ onClose, holidays, onUpdateHolidays }: any) => {
+const HolidayManager = ({ onClose, holidays, onUpdateHolidays }: { onClose: () => void, holidays: Record<string, string>, onUpdateHolidays: (h: Record<string, string>) => void }) => {
     const [viewYear, setViewYear] = useState(2025);
     const [viewMonth, setViewMonth] = useState(new Date().getUTCMonth());
 
@@ -471,11 +451,11 @@ const HolidayManager = ({ onClose, holidays, onUpdateHolidays }: any) => {
             new Date(Date.UTC(viewYear, viewMonth + 1, 1))
         ];
 
-        pricingMonths.forEach(pDate => {
+        pricingMonths.forEach((pDate: Date) => {
             const mKey = `${pDate.getUTCFullYear()}-${String(pDate.getUTCMonth() + 1).padStart(2, '0')}`;
             const mName = pDate.toLocaleString('en-US', { month: 'short', timeZone: 'UTC' }).toUpperCase();
             
-            indices.forEach(idx => {
+            indices.forEach((idx: string) => {
                 const d = getFixationDate(idx, mKey, holidays);
                 if (d.getUTCFullYear() === viewYear && d.getUTCMonth() === viewMonth) {
                     const ds = d.toISOString().split('T')[0];
@@ -507,7 +487,7 @@ const HolidayManager = ({ onClose, holidays, onUpdateHolidays }: any) => {
                 </div>
                 <div className="flex-1 overflow-auto bg-slate-50 p-6">
                     <div className="grid grid-cols-7 gap-px bg-slate-200 rounded-2xl overflow-hidden border border-slate-200 shadow-inner">
-                        {['Sun', 'Mon', 'Tue', 'Wed', 'Thu', 'Fri', 'Sat'].map(d => (
+                        {['Sun', 'Mon', 'Tue', 'Wed', 'Thu', 'Fri', 'Sat'].map((d: string) => (
                             <div key={d} className="bg-slate-100 p-3 text-center text-[10px] font-black text-slate-500 uppercase tracking-widest border-b border-slate-200">{d}</div>
                         ))}
                         {Array.from({ length: days.firstDay }).map((_, i) => <div key={`empty-${i}`} className="bg-slate-50/50" />)}
@@ -521,7 +501,7 @@ const HolidayManager = ({ onClose, holidays, onUpdateHolidays }: any) => {
                                     <div className="flex justify-between items-start">
                                         <span className={`text-xs font-bold ${hName ? 'text-amber-600' : isWeekend ? 'text-slate-300' : 'text-slate-400'}`}>{i + 1}</span>
                                         <div className="flex flex-col items-end gap-0.5">
-                                            {dayExpiries.map((exp, idx) => (
+                                            {dayExpiries.map((exp: string, idx: number) => (
                                                 <span key={idx} className="text-[6.5px] font-black bg-indigo-600 text-white px-1 py-0.5 rounded leading-none whitespace-nowrap">{exp}</span>
                                             ))}
                                         </div>
@@ -539,11 +519,11 @@ const HolidayManager = ({ onClose, holidays, onUpdateHolidays }: any) => {
     );
 };
 
-const DrillDownModal = ({ cell, onClose, profiles, simDate, onCargoClick, holidays }: any) => {
+const DrillDownModal = ({ cell, onClose, profiles, simDate, onCargoClick, holidays }: { cell: any, onClose: () => void, profiles: CargoProfile[], simDate: number, onCargoClick?: (p: CargoProfile) => void, holidays: Record<string, string> }) => {
     const contributors = useMemo(() => {
         const { month, index } = cell;
         const results: any[] = [];
-        profiles.forEach(p => {
+        profiles.forEach((p: CargoProfile) => {
             if (p.pnlBucket === PnLBucket.Realized) return;
             const process = (formula: string, vol: number, type: string, isTier2: boolean) => {
                 if (!formula || vol <= 0) return;
@@ -555,9 +535,7 @@ const DrillDownModal = ({ cell, onClose, profiles, simDate, onCargoClick, holida
 
                 const pMonths = getPricingMonths(refD, mDef);
                 if (pMonths.includes(month)) {
-                    // USE PRECISE BUSINESS DAY MULTIPLIER
                     const mult = getExposureMultiplier(index, month, simDate, holidays);
-                    
                     const fixD = getFixationDate(index, month, holidays);
                     results.push({ id: p.id, name: p.strategyName, type, isTier2, vol: type === 'Buy' ? -(vol / pMonths.length) : (vol / pMonths.length), mult, isFixed: mult < 0.001, fixDate: fixD.toLocaleDateString('en-US', { month: 'short', day: 'numeric' }), profile: p });
                 }
@@ -583,7 +561,7 @@ const DrillDownModal = ({ cell, onClose, profiles, simDate, onCargoClick, holida
                     <button onClick={onClose} className="p-2 hover:bg-slate-200 rounded-full text-slate-400 transition-colors"><svg className="w-6 h-6" fill="none" stroke="currentColor" viewBox="0 0 24 24"><path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2.5} d="M6 18L18 6M6 6l12 12" /></svg></button>
                 </div>
                 <div className="flex-1 overflow-y-auto p-6 space-y-4 max-h-[70vh] custom-scrollbar">
-                    {contributors.map((c, i) => (
+                    {contributors.map((c: any, i: number) => (
                         <div key={`${c.id}-${c.type}-${c.isTier2}-${i}`} onClick={() => { onCargoClick?.(c.profile); onClose(); }} className="p-5 bg-slate-50 rounded-2xl border border-slate-100 hover:border-indigo-200 hover:bg-indigo-50/20 cursor-pointer transition-all space-y-3 group">
                             <div className="flex justify-between items-start">
                                 <div>

@@ -1,4 +1,3 @@
-
 import React, { useState } from 'react';
 import { CargoProfile, PnLBucket, EmptyCargoProfile } from '../types';
 import { recalculateProfile, generateStrategyName } from '../services/calculationService';
@@ -14,27 +13,21 @@ const COLUMN_MAPPING: Record<string, string[]> = {
   strategyName: ['strategy', 'name', 'deal', 'id', 'ref'],
   source: ['source', 'origin', 'load port', 'loading port'],
   buyer: ['buyer', 'customer', 'client', 'destination', 'disport'],
-  
-  // Date Fields with Windows
   deliveryDate: ['delivery date', 'arrival', 'end date', 'del date'],
   deliveryWindowStart: ['delivery start', 'del start'],
   deliveryWindowEnd: ['delivery end', 'del end'],
   loadingDate: ['loading date', 'load date', 'bl date'],
   loadingWindowStart: ['loading start', 'load start'],
   loadingWindowEnd: ['loading end', 'load end'],
-
   deliveredVolume: ['volume', 'vol', 'quantity', 'qty', 'mmbtu', 'bbl', 'delivered volume'],
   loadedVolume: ['loaded volume', 'load vol'],
-  
   sellFormula: ['sell formula', 'sales formula'],
   absoluteSellPrice: ['sell price', 'sales price', 'unit price', 'final price'],
   buyFormula: ['buy formula', 'purchase formula'],
   absoluteBuyPrice: ['buy price', 'purchase price', 'cost price'],
-  
   salesRevenue: ['sales revenue', 'revenue', 'invoice value'],
   reconciledPurchaseCost: ['purchase cost', 'cost', 'total cost'],
   finalTotalPnL: ['total pnl', 'final pnl', 'profit', 'p&l', 'net pnl'],
-  
   incoterms: ['incoterms', 'terms'],
   pnlBucket: ['status', 'bucket', 'state']
 };
@@ -149,7 +142,7 @@ export const BulkImportModal: React.FC<BulkImportModalProps> = ({ existingProfil
         const headers = rows[0].split(/\t|,/).map(h => h.trim().toLowerCase().replace(/['"]+/g, ''));
         const mapIndices: Record<string, number> = {};
         
-        headers.forEach((h, index) => {
+        headers.forEach((h: string, index: number) => {
             for (const [key, aliases] of Object.entries(COLUMN_MAPPING)) {
                 if (aliases.some(alias => h.includes(alias))) {
                     if (mapIndices[key] === undefined) mapIndices[key] = index;
@@ -197,11 +190,9 @@ export const BulkImportModal: React.FC<BulkImportModalProps> = ({ existingProfil
                 }
             });
 
-            // Date Logic
             if (parsedFields.deliveryDate && !parsedFields.deliveryMonth) parsedFields.deliveryMonth = formatMonthStr(parsedFields.deliveryDate);
             if (parsedFields.loadingDate && !parsedFields.loadingMonth) parsedFields.loadingMonth = formatMonthStr(parsedFields.loadingDate);
             
-            // Default Windows if missing
             if (parsedFields.deliveryDate) {
                 if (!parsedFields.deliveryWindowStart) parsedFields.deliveryWindowStart = parsedFields.deliveryDate;
                 if (!parsedFields.deliveryWindowEnd) parsedFields.deliveryWindowEnd = parsedFields.deliveryDate;
@@ -272,7 +263,7 @@ export const BulkImportModal: React.FC<BulkImportModalProps> = ({ existingProfil
 
   const handleFinish = () => {
       const finalImports: CargoProfile[] = [];
-      parsedRows.forEach((row, idx) => {
+      parsedRows.forEach((row: any, idx: number) => {
           if (!selectedIndices.has(idx)) return;
           if (row._status === 'New' || row._status === 'No Change') {
               const { _status, _changes, ...rest } = row;
@@ -286,7 +277,7 @@ export const BulkImportModal: React.FC<BulkImportModalProps> = ({ existingProfil
                   const original = existingProfiles.find(p => p.id === row.id);
                   if (!original) return;
                   const mixed: any = { ...row };
-                  ignoredFields.forEach(field => mixed[field] = (original as any)[field]);
+                  ignoredFields.forEach((field: string) => mixed[field] = (original as any)[field]);
                   const { _status, _changes, ...cleanMixed } = mixed;
                   finalImports.push(recalculateProfile(cleanMixed, true) as CargoProfile);
               }
@@ -350,7 +341,7 @@ export const BulkImportModal: React.FC<BulkImportModalProps> = ({ existingProfil
                             </tr>
                         </thead>
                         <tbody className="divide-y divide-slate-100">
-                            {parsedRows.map((row, i) => (
+                            {parsedRows.map((row: any, i: number) => (
                                 <tr key={i} className={`hover:bg-slate-50 transition-colors ${row._status === 'Update' ? 'bg-blue-50/10' : row._status === 'New' ? 'bg-emerald-50/10' : ''} ${!selectedIndices.has(i) ? 'opacity-50 grayscale' : ''}`}>
                                     <td className="px-4 py-2 text-center align-middle border-r border-slate-100">
                                         <input type="checkbox" checked={selectedIndices.has(i)} onChange={() => toggleRow(i)} className="rounded border-slate-300 text-blue-600 focus:ring-blue-500 cursor-pointer" />
@@ -363,8 +354,8 @@ export const BulkImportModal: React.FC<BulkImportModalProps> = ({ existingProfil
                                     <td className="px-4 py-2 align-middle"><DiffCell row={row} rowIndex={i} field="loadingWindowEnd" isIgnored={ignoredChanges[i]?.has("loadingWindowEnd")} onToggle={toggleFieldChange} /></td>
                                     <td className="px-4 py-2 align-middle"><DiffCell row={row} rowIndex={i} field="deliveryWindowStart" isIgnored={ignoredChanges[i]?.has("deliveryWindowStart")} onToggle={toggleFieldChange} /></td>
                                     <td className="px-4 py-2 align-middle"><DiffCell row={row} rowIndex={i} field="deliveryWindowEnd" isIgnored={ignoredChanges[i]?.has("deliveryWindowEnd")} onToggle={toggleFieldChange} /></td>
-                                    <td className="px-4 py-2 text-right align-middle"><DiffCell row={row} rowIndex={i} field="deliveredVolume" format={(v) => v?.toLocaleString()} isIgnored={ignoredChanges[i]?.has("deliveredVolume")} onToggle={toggleFieldChange} /></td>
-                                    <td className={`px-4 py-2 font-bold text-right align-middle ${row.finalTotalPnL >= 0 ? 'text-emerald-600' : 'text-rose-600'}`}><DiffCell row={row} rowIndex={i} field="finalTotalPnL" format={(v) => v?.toLocaleString()} isIgnored={ignoredChanges[i]?.has("finalTotalPnL")} onToggle={toggleFieldChange} /></td>
+                                    <td className="px-4 py-2 text-right align-middle"><DiffCell row={row} rowIndex={i} field="deliveredVolume" format={(v: any) => v?.toLocaleString()} isIgnored={ignoredChanges[i]?.has("deliveredVolume")} onToggle={toggleFieldChange} /></td>
+                                    <td className={`px-4 py-2 font-bold text-right align-middle ${row.finalTotalPnL >= 0 ? 'text-emerald-600' : 'text-rose-600'}`}><DiffCell row={row} rowIndex={i} field="finalTotalPnL" format={(v: any) => v?.toLocaleString()} isIgnored={ignoredChanges[i]?.has("finalTotalPnL")} onToggle={toggleFieldChange} /></td>
                                 </tr>
                             ))}
                         </tbody>

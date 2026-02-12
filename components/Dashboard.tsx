@@ -1,4 +1,3 @@
-
 import React, { useMemo, useState, useEffect } from 'react';
 import { CargoProfile, PnLBucket } from '../types';
 import { ForwardCurveRow, detectUnit, getExposureChartData, getPortfolioYear, recalculateProfile, getAvailableCurveDates, getPricesSnapshot, getForwardCurve, explainPricing, analyzeFormulaStructure, evaluateFormula, findDataGaps, DataGap, getGroupName, GROUPS } from '../services/calculationService';
@@ -100,10 +99,10 @@ export const Dashboard: React.FC<DashboardProps> = ({ profiles, marketData, forw
   const viewProfiles = useMemo(() => {
       let filtered = profiles;
       if (groupFilter !== 'All') {
-          filtered = profiles.filter(p => getGroupName(p.strategyName) === groupFilter);
+          filtered = profiles.filter((p: CargoProfile) => getGroupName(p.strategyName) === groupFilter);
       }
 
-      return filtered.map(p => {
+      return filtered.map((p: CargoProfile) => {
           if (p.pnlBucket === PnLBucket.Realized) return p;
           return recalculateProfile(p, true, targetDate) as CargoProfile;
       });
@@ -116,7 +115,7 @@ export const Dashboard: React.FC<DashboardProps> = ({ profiles, marketData, forw
       const warnings: any[] = [];
       const success: any[] = [];
 
-      viewProfiles.forEach(p => {
+      viewProfiles.forEach((p: CargoProfile) => {
           if (p.pnlBucket === PnLBucket.Realized) {
               success.push({ ...p, _status: 'Realized', _source: 'Reconciled', _msg: 'Price locked' });
               return;
@@ -151,12 +150,12 @@ export const Dashboard: React.FC<DashboardProps> = ({ profiles, marketData, forw
 
   const strategyMovements = useMemo(() => {
       if (!baselineDate || !targetDate) return [];
-      return viewProfiles.map(p => {
+      return viewProfiles.map((p: CargoProfile) => {
           const pBase = (p.pnlBucket === PnLBucket.Realized) ? p : recalculateProfile(p, true, baselineDate) as CargoProfile;
           const pCurr = (p.pnlBucket === PnLBucket.Realized) ? p : recalculateProfile(p, true, targetDate) as CargoProfile;
           const delta = (pCurr.finalTotalPnL || 0) - (pBase.finalTotalPnL || 0);
           return { name: p.strategyName, delta };
-      }).filter(m => Math.abs(m.delta) > 0.01).sort((a,b) => Math.abs(b.delta) - Math.abs(a.delta));
+      }).filter((m: { name: string, delta: number }) => Math.abs(m.delta) > 0.01).sort((a: any, b: any) => Math.abs(b.delta) - Math.abs(a.delta));
   }, [viewProfiles, baselineDate, targetDate]);
 
   const targetStats = useMemo(() => {
@@ -167,7 +166,7 @@ export const Dashboard: React.FC<DashboardProps> = ({ profiles, marketData, forw
           unrealized: initStats()
       };
 
-      viewProfiles.forEach(p => {
+      viewProfiles.forEach((p: CargoProfile) => {
           const pnl = p.finalTotalPnL || 0;
           const revenue = p.finalSalesRevenue || 0;
           const vol = p.deliveredVolume || 0;
@@ -216,10 +215,10 @@ export const Dashboard: React.FC<DashboardProps> = ({ profiles, marketData, forw
 
     let filtered = profiles;
     if (groupFilter !== 'All') {
-        filtered = profiles.filter(p => getGroupName(p.strategyName) === groupFilter);
+        filtered = profiles.filter((p: CargoProfile) => getGroupName(p.strategyName) === groupFilter);
     }
 
-    filtered.forEach(p => {
+    filtered.forEach((p: CargoProfile) => {
         let cp = p;
         if (p.pnlBucket !== PnLBucket.Realized && dateStr) {
             cp = recalculateProfile(p, true, dateStr) as CargoProfile;
@@ -267,7 +266,7 @@ export const Dashboard: React.FC<DashboardProps> = ({ profiles, marketData, forw
       const today = new Date();
       today.setHours(0,0,0,0);
       const events: any[] = [];
-      viewProfiles.forEach(p => {
+      viewProfiles.forEach((p: CargoProfile) => {
           const isRealized = p.pnlBucket === PnLBucket.Realized;
           const processDate = (dateString: string, type: 'Loading' | 'Delivery') => {
               if (!dateString) return;
@@ -291,7 +290,7 @@ export const Dashboard: React.FC<DashboardProps> = ({ profiles, marketData, forw
           if (p.loadingDate) processDate(p.loadingDate, 'Loading');
           if (p.deliveryDate) processDate(p.deliveryDate, 'Delivery');
       });
-      return events.sort((a, b) => a.date.getTime() - b.date.getTime()).slice(0, 10);
+      return events.sort((a: any, b: any) => a.date.getTime() - b.date.getTime()).slice(0, 10);
   }, [viewProfiles]);
 
   const formatCurrency = (val: number) => new Intl.NumberFormat('en-US', { style: 'currency', currency: 'USD', maximumFractionDigits: 0 }).format(val);
@@ -302,10 +301,10 @@ export const Dashboard: React.FC<DashboardProps> = ({ profiles, marketData, forw
   return (
     <motion.div className="space-y-4 lg:space-y-6 relative" variants={containerVariants} initial="hidden" animate="visible">
       <div className="flex flex-col xl:flex-row justify-between items-stretch xl:items-center bg-white p-3 rounded-xl border border-slate-200 shadow-sm gap-4">
-          <div className="flex flex-col sm:flex-row items-stretch sm:items-center gap-3">
+          <div className="flex flex-col sm:flex-row items-stretch sm:items-center gap-3 w-full lg:w-auto">
               <span className="text-[10px] sm:text-xs font-bold text-slate-500 uppercase tracking-wide px-1">Derived Group:</span>
               <select value={groupFilter} onChange={(e) => setGroupFilter(e.target.value)} className="bg-slate-50 border border-slate-200 text-slate-700 text-xs sm:text-sm rounded-lg p-2 font-medium">
-                  {availableGroups.map(g => <option key={g} value={g}>{g === 'All' ? 'All (Auto-mapped)' : g}</option>)}
+                  {availableGroups.map((g: string) => <option key={g} value={g}>{g === 'All' ? 'All (Auto-mapped)' : g}</option>)}
               </select>
               {dataGaps.length > 0 && (
                   <button onClick={() => setDebugMode('gaps')} className="flex items-center justify-center gap-2 px-3 py-2 bg-rose-50 text-rose-600 border border-rose-200 rounded-lg text-xs font-bold animate-pulse">
@@ -319,11 +318,11 @@ export const Dashboard: React.FC<DashboardProps> = ({ profiles, marketData, forw
               <div className="flex flex-1 items-center justify-center gap-1.5 bg-slate-50 p-1.5 rounded-lg border border-slate-100 overflow-x-auto">
                   <span className="hidden sm:inline text-[9px] font-black text-slate-400 uppercase px-2">Basis:</span>
                   <select value={baselineDate} onChange={(e) => setBaselineDate(e.target.value)} className="bg-white border border-slate-200 text-[10px] font-medium text-slate-600 rounded-md px-2 py-1">
-                      {availableDates.map(d => <option key={d} value={d}>{d}</option>)}
+                      {availableDates.map((d: string) => <option key={d} value={d}>{d}</option>)}
                   </select>
                   <span className="text-slate-400">→</span>
                   <select value={targetDate} onChange={(e) => setTargetDate(e.target.value)} className="bg-white border border-slate-200 text-[10px] font-bold text-blue-700 rounded-md px-2 py-1">
-                      {availableDates.map(d => <option key={d} value={d}>{d}</option>)}
+                      {availableDates.map((d: string) => <option key={d} value={d}>{d}</option>)}
                   </select>
               </div>
               <button 
@@ -404,7 +403,7 @@ export const Dashboard: React.FC<DashboardProps> = ({ profiles, marketData, forw
                             <YAxis tick={{fontSize: 9}} />
                             <Tooltip wrapperStyle={{fontSize: '10px'}} />
                             <Legend wrapperStyle={{fontSize: '10px', paddingTop: '10px'}} />
-                            {(curveView === 'gas' ? GAS_INDICES : OIL_INDICES).map(idx => (
+                            {(curveView === 'gas' ? GAS_INDICES : OIL_INDICES).map((idx: string) => (
                                 <Line key={idx} type="monotone" dataKey={`prices.${idx}`} name={idx} stroke={LINE_COLORS[idx]} strokeWidth={2} dot={false} />
                             ))}
                         </LineChart>
@@ -418,7 +417,7 @@ export const Dashboard: React.FC<DashboardProps> = ({ profiles, marketData, forw
                  <h3 className="text-lg font-bold text-slate-800">Cargo Timeline</h3>
              </div>
              <div className="flex-1 overflow-y-auto custom-scrollbar p-4 space-y-3 sm:space-y-4">
-                {timelineEvents.length > 0 ? timelineEvents.map((evt) => (
+                {timelineEvents.length > 0 ? timelineEvents.map((evt: any) => (
                     <div key={evt.id} className="flex items-center gap-3 sm:gap-4 p-3 bg-white border border-slate-100 rounded-xl hover:shadow-md cursor-pointer" onClick={() => onCargoClick && onCargoClick(evt.profile)}>
                         <div className={`w-8 h-8 sm:w-10 sm:h-10 rounded-full flex items-center justify-center border-2 shrink-0 ${evt.status === 'Overdue' ? 'border-rose-400 text-rose-500' : 'border-blue-400 text-blue-500'}`}>
                             <ShipIcon className="w-5 h-5 sm:w-6 sm:h-6" flip={evt.type !== 'Loading'} />
@@ -470,7 +469,7 @@ export const Dashboard: React.FC<DashboardProps> = ({ profiles, marketData, forw
                     { id: 'health', label: 'Health' },
                     { id: 'gaps', label: 'Gaps' },
                     { id: 'tester', label: 'Lab' }
-                  ].map(tab => (
+                  ].map((tab: any) => (
                       <button key={tab.id} onClick={() => setDebugMode(tab.id as any)} className={`flex-1 sm:flex-none px-3 py-1.5 text-[10px] font-bold rounded-md transition-all ${debugMode === tab.id ? 'bg-white text-indigo-600 shadow-sm' : 'text-slate-500'}`}>{tab.label}</button>
                   ))}
               </div>
@@ -504,7 +503,7 @@ export const Dashboard: React.FC<DashboardProps> = ({ profiles, marketData, forw
                                 {dataGaps.length === 0 ? (
                                     <tr><td colSpan={3} className="p-8 text-center text-slate-400">No missing data.</td></tr>
                                 ) : (
-                                    dataGaps.map((gap, i) => (
+                                    dataGaps.map((gap: DataGap, i: number) => (
                                         <tr key={i} className="hover:bg-slate-50">
                                             <td className="px-4 py-3 font-bold text-slate-700">{gap.index}</td>
                                             <td className="px-4 py-3 font-mono text-rose-500">{gap.month}</td>
@@ -546,7 +545,7 @@ export const Dashboard: React.FC<DashboardProps> = ({ profiles, marketData, forw
                   profiles={viewProfiles} 
                   config={activeDrillDown} 
                   onClose={() => setActiveDrillDown(null)} 
-                  onCargoClick={(p) => {
+                  onCargoClick={(p: CargoProfile) => {
                       onCargoClick?.(p);
                   }}
                   targetDate={targetDate} 
@@ -561,16 +560,13 @@ export const Dashboard: React.FC<DashboardProps> = ({ profiles, marketData, forw
   );
 };
 
-/**
- * Scrolling Movement Ticker
- */
 const StrategyTicker = ({ movements, baselineDate }: { movements: { name: string, delta: number }[], baselineDate: string }) => {
     if (movements.length === 0) return null;
 
     return (
         <div className="bg-slate-900 py-2.5 overflow-hidden whitespace-nowrap border-y border-slate-800 relative shadow-inner">
             <div className="flex animate-marquee-slower items-center">
-                {[...movements, ...movements, ...movements].map((m, i) => (
+                {[...movements, ...movements, ...movements].map((m: { name: string, delta: number }, i: number) => (
                     <div key={i} className="flex items-center gap-2 mx-6 sm:mx-10 text-[10px] sm:text-[11px] font-black">
                         <span className="text-slate-500 uppercase tracking-widest">{m.name}</span>
                         <div className={`flex items-center gap-1.5 px-2 py-0.5 rounded ${m.delta >= 0 ? 'bg-emerald-500/10 text-emerald-400' : 'bg-rose-500/10 text-rose-400'}`}>
@@ -601,9 +597,6 @@ const StrategyTicker = ({ movements, baselineDate }: { movements: { name: string
     );
 };
 
-/**
- * Hero Card with sub-breakdown for Revenue, Purchase, and Other
- */
 const FinancialHeroCard = ({ title, stats, baseline, compareDate, isHero, colorClass, onDrillDown }: any) => {
     const format = (val: number) => new Intl.NumberFormat('en-US', { style: 'currency', currency: 'USD', maximumFractionDigits: 0 }).format(val);
     const delta = stats.pnl - baseline.pnl;
@@ -646,7 +639,7 @@ const SubMetric = ({ label, fullLabel, value, baseline, format, color, invert, o
     const isImproved = invert ? delta <= 0 : delta >= 0;
     
     return (
-        <div className="cursor-pointer group/sub" onClick={(e) => { e.stopPropagation(); onClick(); }}>
+        <div className="cursor-pointer group/sub" onClick={(e: React.MouseEvent) => { e.stopPropagation(); onClick(); }}>
             <p className="text-[8px] sm:text-[9px] font-black text-slate-400 uppercase tracking-tighter mb-0.5 group-hover/sub:text-indigo-600 transition-colors">
                 <span className="sm:hidden">{label}</span>
                 <span className="hidden sm:inline">{fullLabel}</span>
@@ -716,7 +709,7 @@ const HealthColumn = ({ title, items, color }: any) => {
 const DrillDownTable = ({ profiles, config, onClose, onCargoClick, targetDate, format, baselineDate, editingProfileId }: { profiles: CargoProfile[], config: DrillDownConfig, onClose: () => void, onCargoClick: (p: CargoProfile) => void, targetDate: string, format: (v: number) => string, baselineDate: string, editingProfileId?: string }) => {
     const filtered = useMemo(() => {
         if (config.bucket === 'Total') return profiles;
-        return profiles.filter(p => p.pnlBucket === (config.bucket as any));
+        return profiles.filter((p: CargoProfile) => p.pnlBucket === (config.bucket as any));
     }, [profiles, config]);
 
     const getMovementData = (p: CargoProfile) => {
@@ -733,7 +726,6 @@ const DrillDownTable = ({ profiles, config, onClose, onCargoClick, targetDate, f
                 val = prof.finalTotalPnL || 0;
             } else if (config.metric === 'Revenue') {
                 val = prof.finalSalesRevenue || 0;
-                // Focus on Sell Leg
                 const volT1 = prof.deliveredVolume || 0;
                 const volT2 = prof.isTieredPricing ? (prof.tier2DeliveredVolume || 0) : 0;
                 volume = volT1 + volT2;
@@ -742,7 +734,6 @@ const DrillDownTable = ({ profiles, config, onClose, onCargoClick, targetDate, f
                 const t1 = (prof.loadedVolume || 0) * (prof.absoluteBuyPrice || 0);
                 const t2 = prof.isTieredPricing ? (prof.tier2LoadedVolume || 0) * (prof.absoluteTier2BuyPrice || 0) : 0;
                 val = (prof.reconciledPurchaseCost > 0) ? prof.reconciledPurchaseCost : (t1 + t2);
-                // Focus on Buy Leg
                 volume = (prof.loadedVolume || 0) + (prof.isTieredPricing ? (prof.tier2LoadedVolume || 0) : 0);
                 price = volume > 0 ? val / volume : 0;
             } else if (config.metric === 'Other') {
@@ -782,7 +773,7 @@ const DrillDownTable = ({ profiles, config, onClose, onCargoClick, targetDate, f
             </div>
             <div className="flex-1 overflow-y-auto p-2 sm:p-4 custom-scrollbar bg-slate-50/30">
                 <div className="sm:hidden space-y-3">
-                  {filtered.map(p => {
+                  {filtered.map((p: CargoProfile) => {
                     const { curr, base, delta } = getMovementData(p);
                     const isPositive = delta >= 0;
                     return (
@@ -827,7 +818,7 @@ const DrillDownTable = ({ profiles, config, onClose, onCargoClick, targetDate, f
                     <tbody>
                         {filtered.length === 0 ? (
                             <tr><td colSpan={6} className="py-20 text-center text-slate-400 italic">No records found.</td></tr>
-                        ) : filtered.map((p) => {
+                        ) : filtered.map((p: CargoProfile) => {
                             const { curr, base, delta } = getMovementData(p);
                             const isPositive = delta >= 0;
                             const isEditing = p.id === editingProfileId;

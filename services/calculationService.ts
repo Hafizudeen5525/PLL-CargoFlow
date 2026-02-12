@@ -38,7 +38,7 @@ export const MARKET_INTELLIGENCE = {
 export function generateHistoricalShocks(days: number = 256): Record<string, number[]> {
     const indices = ['Dated Brent', 'JKM', 'TTF', 'HH'];
     const results: Record<string, number[]> = {};
-    indices.forEach(idx => results[idx] = []);
+    indices.forEach((idx: string) => results[idx] = []);
 
     let seed = 0.12345;
     const rnd = () => {
@@ -48,7 +48,7 @@ export function generateHistoricalShocks(days: number = 256): Record<string, num
 
     for (let d = 0; d < days; d++) {
         const commonShock = rnd();
-        indices.forEach(idx => {
+        indices.forEach((idx: string) => {
             const vol = MARKET_INTELLIGENCE.volatilities[idx] || 0.03;
             const idiosyncratic = rnd();
             const correlationFactor = idx === 'HH' ? 0.3 : 0.85;
@@ -58,13 +58,13 @@ export function generateHistoricalShocks(days: number = 256): Record<string, num
     }
 
     results['HH Last Day'] = results['HH'];
-    results['NBP'] = results['TTF'].map(v => v * 0.95);
-    results['JCC'] = results['Dated Brent'].map(v => v * 1.02);
+    results['NBP'] = results['TTF'].map((v: number) => v * 0.95);
+    results['JCC'] = results['Dated Brent'].map((v: number) => v * 1.02);
     results['BRIPE'] = results['Dated Brent'];
-    results['AECO'] = results['HH'].map(v => v * 1.2);
-    results['STN 2'] = results['HH'].map(v => v * 1.3);
+    results['AECO'] = results['HH'].map((v: number) => v * 1.2);
+    results['STN 2'] = results['HH'].map((v: number) => v * 1.3);
     results['Station 2'] = results['STN 2'];
-    results['Other'] = results['HH'].map(v => v * 0.5);
+    results['Other'] = results['HH'].map((v: number) => v * 0.5);
 
     return results;
 }
@@ -200,6 +200,31 @@ export const getFixationDate = (index: string, pricingMonthStr: string, holidayM
     return new Date(Date.UTC(y, pricingMonthIndex, 1));
 };
 
+export const getPricingMonths = (refDateStr: string | undefined, monthDef: string = 'n'): string[] => {
+    if (!refDateStr) return [];
+    const base = new Date(refDateStr);
+    const d = new Date(base.getFullYear(), base.getMonth(), 15);
+    const results: string[] = [];
+    const cleanDef = (monthDef || 'n').toLowerCase().replace(/\s/g, '');
+    
+    const avgMatch = cleanDef.match(/\(?(\d+),(\d+),(\d+)\)?/);
+    if (avgMatch) {
+        const count = parseInt(avgMatch[1]);
+        const lag = parseInt(avgMatch[2]);
+        for (let i = 0; i < count; i++) {
+            const t = new Date(d.getFullYear(), d.getMonth() - lag - i, 15);
+            results.push(`${t.getFullYear()}-${String(t.getMonth() + 1).padStart(2, '0')}`);
+        }
+    } else {
+        let offset = 0;
+        if (cleanDef.includes('n-')) offset = -parseInt(cleanDef.split('n-')[1] || '0');
+        else if (cleanDef.includes('n+')) offset = parseInt(cleanDef.split('n+')[1] || '0');
+        const t = new Date(d.getFullYear(), d.getMonth() + offset, 15);
+        results.push(`${t.getFullYear()}-${String(t.getMonth() + 1).padStart(2, '0')}`);
+    }
+    return results;
+};
+
 /**
  * NEW: Calculate Exposure Decay based on actual Business Days in the month.
  * Handles 28, 30, and 31 day months precisely.
@@ -303,10 +328,10 @@ export function getIndexPrice(index: string, refDateStr: string, monthDef: strin
     const priceDetails: string[] = [];
     const canonicalIndex = INDEX_ALIASES[index.toUpperCase()] || index;
 
-    targetMonths.forEach(m => {
+    targetMonths.forEach((m: string) => {
         let p = 0;
-        const curveRow = curve.find(r => r.month === m);
-        const histRow = historical.find(r => r.month === m);
+        const curveRow = curve.find((r: ForwardCurveRow) => r.month === m);
+        const histRow = historical.find((r: ForwardCurveRow) => r.month === m);
         
         if (histRow?.prices[canonicalIndex]) {
             p = histRow.prices[canonicalIndex];
@@ -379,7 +404,7 @@ export function evaluateFormula(formula: string, dateStr?: string, curveDate?: s
         .replace(/\$/g, '')
         .replace(/(\d+(?:\.\d+)?)\s*%/g, (_, num) => (parseFloat(num) / 100).toString());
 
-    const sortedAliases = Object.keys(INDEX_ALIASES).sort((a, b) => b.length - a.length);
+    const sortedAliases = Object.keys(INDEX_ALIASES).sort((a: string, b: string) => b.length - a.length);
     for (const alias of sortedAliases) {
         const canonical = INDEX_ALIASES[alias];
         const regex = new RegExp(`\\b${alias.replace(/\s+/g, '\\s+')}\\b(?:\\s*\\(([^)]+)\\))?`, 'gi');
@@ -482,7 +507,7 @@ export function generateStrategyName(p: Partial<CargoProfile>): string {
 
 export function findDataGaps(profiles: CargoProfile[], curveDate?: string): DataGap[] {
     const gaps: Record<string, DataGap> = {};
-    profiles.forEach(p => {
+    profiles.forEach((p: CargoProfile) => {
         if (p.pnlBucket === PnLBucket.Realized) return;
         const checkComponent = (type: 'buy' | 'sell' | 'tier2Sell' | 'tier2Buy', i: number) => {
             const idx = (p as any)[`${type}PriceIndex${i}`];
@@ -492,7 +517,7 @@ export function findDataGaps(profiles: CargoProfile[], curveDate?: string): Data
                 const { price, monthUsed } = getIndexPrice(idx, date, mDef, curveDate);
                 if (price <= 0) {
                     const months = monthUsed.split(',');
-                    months.forEach(m => {
+                    months.forEach((m: string) => {
                         const gapKey = `${idx}_${m}`;
                         if (!gaps[gapKey]) gaps[gapKey] = { index: idx, month: m, affectedStrategies: [] };
                         if (!gaps[gapKey].affectedStrategies.includes(p.strategyName)) gaps[gapKey].affectedStrategies.push(p.strategyName);
@@ -509,7 +534,7 @@ export function findDataGaps(profiles: CargoProfile[], curveDate?: string): Data
             }
         }
     });
-    return Object.values(gaps).sort((a, b) => a.month.localeCompare(b.month));
+    return Object.values(gaps).sort((a: DataGap, b: DataGap) => a.month.localeCompare(b.month));
 }
 
 export function getForwardCurve(dateStr?: string): ForwardCurveRow[] {
@@ -582,14 +607,41 @@ export function analyzeFormulaStructure(f: string, d?: string, curveDate?: strin
 
 export function getExposureChartData(profiles: CargoProfile[]) {
     const map: Record<string, any> = {};
-    profiles.forEach(p => {
+    const simDate = new Date().getTime();
+    
+    const holidaysRaw = localStorage.getItem('exposure_holidays_named');
+    const holidays = holidaysRaw ? JSON.parse(holidaysRaw) : {};
+
+    profiles.forEach((p: CargoProfile) => {
         if (p.pnlBucket === PnLBucket.Realized) return;
-        const month = (p.deliveryDate || p.loadingDate || '').slice(0, 7);
-        if (!month) return;
-        if (!map[month]) map[month] = { date: month };
-        map[month]['Exposure'] = (map[month]['Exposure'] || 0) + (p.deliveredVolume || 0) + (p.tier2DeliveredVolume || 0);
+
+        const processLegExposures = (formula: string | undefined, volume: number, dateStr: string | undefined, isBuy: boolean) => {
+            if (!formula || volume <= 0 || !dateStr) return;
+            const index = getIndexType(formula);
+            const mDef = isBuy ? (p.buyPrice1MonthDef || 'n') : (p.sellPrice1MonthDef || 'n');
+            
+            // Correctly identify all months where this volume is priced
+            const pricingMonths = getPricingMonths(dateStr, mDef);
+            const volPerMonth = volume / pricingMonths.length;
+
+            pricingMonths.forEach((mKey: string) => {
+                if (!map[mKey]) map[mKey] = { date: mKey, Exposure: 0 };
+                const mult = getExposureMultiplier(index, mKey, simDate, holidays);
+                // We add/subtract based on sell/buy, but chart usually wants net or gross open.
+                // For this chart, we show 'Open Open Risk' (Floating volume)
+                map[mKey].Exposure += (volPerMonth * mult);
+            });
+        };
+
+        // Standard Leg
+        processLegExposures(p.sellFormula, p.deliveredVolume || 0, p.deliveryDate, false);
+        // Tier 2 Leg
+        if (p.isTieredPricing) {
+            processLegExposures(p.tier2SellFormula, p.tier2DeliveredVolume || 0, p.deliveryDate, false);
+        }
     });
-    return Object.values(map).sort((a, b) => a.date.localeCompare(b.date));
+
+    return Object.values(map).sort((a: any, b: any) => a.date.localeCompare(b.date));
 }
 
 export function estimatePricingDate(formula: string, baseDate?: string): string {

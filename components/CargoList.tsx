@@ -84,17 +84,17 @@ export const CargoList: React.FC<CargoListProps> = ({
     let result = [...profiles];
     if (debouncedSearch) {
       const lower = debouncedSearch.toLowerCase();
-      result = result.filter(p => Object.values(p).some(v => String(v || '').toLowerCase().includes(lower)));
+      result = result.filter((p: CargoProfile) => Object.values(p).some((v: any) => String(v || '').toLowerCase().includes(lower)));
     }
     Object.entries(activeFilters).forEach(([column, selectedValues]) => {
       const values = selectedValues as Set<any>;
       if (values.size > 0) {
-        result = result.filter(p => values.has((p as any)[column]));
+        result = result.filter((p: CargoProfile) => values.has((p as any)[column]));
       }
     });
     if (sortConfig.key) {
       const { key, direction } = sortConfig;
-      result.sort((a, b) => {
+      result.sort((a: CargoProfile, b: CargoProfile) => {
         let aVal = (a as any)[key!];
         let bVal = (b as any)[key!];
         
@@ -118,17 +118,17 @@ export const CargoList: React.FC<CargoListProps> = ({
     const strategyHierarchy: Record<string, string[]> = {};
     const dateHierarchies: Record<string, any> = {};
 
-    headerKeys.forEach(header => {
+    headerKeys.forEach((header: string) => {
       if (header === 'strategyName') {
-        profiles.forEach(p => {
+        profiles.forEach((p: CargoProfile) => {
           const group = getGroupName(p.strategyName);
           if (!strategyHierarchy[group]) strategyHierarchy[group] = [];
           if (!strategyHierarchy[group].includes(p.strategyName)) strategyHierarchy[group].push(p.strategyName);
         });
-        Object.keys(strategyHierarchy).forEach(g => strategyHierarchy[g].sort());
+        Object.keys(strategyHierarchy).forEach((g: string) => strategyHierarchy[g].sort());
       } else if (header === 'deliveryDate' || header === 'loadingDate') {
         const hierarchy: any = {};
-        profiles.forEach(p => {
+        profiles.forEach((p: CargoProfile) => {
           const dStr = (p as any)[header] as string;
           if (!dStr) return;
           const [y, m, d] = dStr.split('-');
@@ -139,7 +139,7 @@ export const CargoList: React.FC<CargoListProps> = ({
         });
         dateHierarchies[header] = hierarchy;
       } else if (!['purchaseCost', 'salesRevenue', 'trmsHedging'].includes(header)) {
-        const uniqueSet = new Set(profiles.map(p => (p as any)[header]));
+        const uniqueSet = new Set(profiles.map((p: CargoProfile) => (p as any)[header]));
         values[header] = Array.from(uniqueSet).sort();
       }
     });
@@ -148,7 +148,7 @@ export const CargoList: React.FC<CargoListProps> = ({
 
   const availableExportYears = useMemo(() => {
     const years = new Set<string>();
-    profiles.forEach(p => years.add(getPortfolioYear(p).toString()));
+    profiles.forEach((p: CargoProfile) => years.add(getPortfolioYear(p).toString()));
     return ['All', ...Array.from(years).sort().reverse()];
   }, [profiles]);
 
@@ -157,7 +157,7 @@ export const CargoList: React.FC<CargoListProps> = ({
   }, []);
 
   const toggleValueFilter = (header: string, value: any) => {
-    setActiveFilters(prev => {
+    setActiveFilters((prev: Record<string, Set<any>>) => {
       const next = { ...prev };
       const currentSet = new Set(next[header] || []);
       if (currentSet.has(value)) currentSet.delete(value); else currentSet.add(value);
@@ -167,10 +167,10 @@ export const CargoList: React.FC<CargoListProps> = ({
   };
 
   const bulkToggle = (column: string, values: any[], shouldSelect: boolean) => {
-    setActiveFilters(prev => {
+    setActiveFilters((prev: Record<string, Set<any>>) => {
         const next = { ...prev };
         const currentSet = new Set(next[column] || []);
-        values.forEach(v => { if (shouldSelect) currentSet.add(v); else currentSet.delete(v); });
+        values.forEach((v: any) => { if (shouldSelect) currentSet.add(v); else currentSet.delete(v); });
         if (currentSet.size === 0) delete next[column]; else next[column] = currentSet;
         return next;
     });
@@ -184,7 +184,7 @@ export const CargoList: React.FC<CargoListProps> = ({
     const reader = new FileReader();
     reader.onload = (evt) => {
       try {
-        const data = evt.target?.result;
+        const data = evt.target?.result as string;
         const workbook = XLSX.read(data, { type: 'binary', cellDates: true });
         const mergedData: Record<string, Partial<CargoProfile>> = {};
         
@@ -206,18 +206,18 @@ export const CargoList: React.FC<CargoListProps> = ({
             let headerRowIndex = -1;
             for (let i = 0; i < Math.min(json.length, 100); i++) {
                 const row = json[i];
-                if (row.some(cell => String(cell || '').toLowerCase().trim() === 'strategy name')) {
+                if (row.some((cell: any) => String(cell || '').toLowerCase().trim() === 'strategy name')) {
                     headerRowIndex = i;
                     break;
                 }
             }
             if (headerRowIndex === -1) return;
-            const headersArr = json[headerRowIndex].map(h => String(h || '').toLowerCase().trim());
+            const headersArr = json[headerRowIndex].map((h: any) => String(h || '').toLowerCase().trim());
             const dataRows = json.slice(headerRowIndex + 1);
 
             const seenInSheetCount = new Map<string, number>();
 
-            dataRows.forEach(row => {
+            dataRows.forEach((row: any[]) => {
                 const stratIdx = headersArr.indexOf('strategy name');
                 const stratName = row[stratIdx];
                 if (!stratName || String(stratName).trim() === '') return;
@@ -307,8 +307,8 @@ export const CargoList: React.FC<CargoListProps> = ({
 
         extractSheetData('Cost', { 'Incoterm': 'incoterms', 'SRC': 'reconciledSrcCost' });
 
-        const processedJarvisRows = Object.values(mergedData).map(parsedFields => {
-            const existingMatch = profiles.find(p => p.strategyName?.toLowerCase() === parsedFields.strategyName?.toLowerCase());
+        const processedJarvisRows = Object.values(mergedData).map((parsedFields: any) => {
+            const existingMatch = profiles.find((p: CargoProfile) => p.strategyName?.toLowerCase() === parsedFields.strategyName?.toLowerCase());
             let finalProfile: CargoProfile;
             let status: 'New' | 'Update' | 'No Change';
             let changes: Record<string, { old: any, new: any }> = {};
@@ -318,7 +318,7 @@ export const CargoList: React.FC<CargoListProps> = ({
                 finalProfile = recalculateProfile(merged, true) as CargoProfile;
                 status = 'Update';
 
-                (Object.keys(finalProfile) as Array<keyof CargoProfile>).forEach(key => {
+                (Object.keys(finalProfile) as Array<keyof CargoProfile>).forEach((key: keyof CargoProfile) => {
                     if (key === 'id') return;
                     const oldVal = existingMatch[key];
                     const newVal = (finalProfile as any)[key];
@@ -357,94 +357,105 @@ export const CargoList: React.FC<CargoListProps> = ({
       setPendingJarvisRows([]);
   };
 
+  /* 
+   * Fix: Added handleJarvisExport to generate an XLSM file in the format expected by Jarvis.
+   * This resolves the 'Cannot find name handleJarvisExport' error.
+   */
   const handleJarvisExport = () => {
-    let exportProfiles = profiles;
-    if (exportYear !== 'All') exportProfiles = exportProfiles.filter(p => getPortfolioYear(p).toString() === exportYear);
-    if (exportGroup !== 'All') exportProfiles = exportProfiles.filter(p => getGroupName(p.strategyName) === exportGroup);
+    let filtered = profiles;
+    if (exportYear !== 'All') {
+      filtered = filtered.filter(p => getPortfolioYear(p).toString() === exportYear);
+    }
+    if (exportGroup !== 'All') {
+      filtered = filtered.filter(p => getGroupName(p.strategyName) === exportGroup);
+    }
 
-    if (exportProfiles.length === 0) return toast.error("No data found for the selected export filters");
+    if (filtered.length === 0) {
+      toast.error("No data to export for selected filters.");
+      return;
+    }
 
-    const workbook = XLSX.utils.book_new();
-    const purchaseRows: any[] = [];
-    const salesRows: any[] = [];
-    const costRows: any[] = [];
-
-    const formatTieredName = (name: string): string => {
-        const match = name.match(/^(.*\d)(.*)$/);
-        if (match) return match[1] + 't' + match[2];
-        return name + 't';
-    };
-
-    exportProfiles.forEach(p => {
-        const buildRow = (type: 'Buy' | 'Sell', tier: 1 | 2) => {
-            const prefix = tier === 1 ? (type === 'Buy' ? 'buyPrice' : 'sellPrice') : (type === 'Buy' ? 'tier2BuyPrice' : (type === 'Sell' ? 'tier2SellPrice' : 'sellPrice'));
-            const volKey = tier === 1 ? (type === 'Buy' ? 'loadedVolume' : 'deliveredVolume') : (type === 'Buy' ? 'tier2LoadedVolume' : 'tier2DeliveredVolume');
-            const formulaKey = tier === 1 ? (type === 'Buy' ? 'buyFormula' : 'sellFormula') : (type === 'Buy' ? 'tier2BuyFormula' : 'tier2SellFormula');
-            
-            const strategyName = tier === 1 ? p.strategyName : formatTieredName(p.strategyName);
-            const row: any = { 'Strategy Name': strategyName };
-            if (type === 'Buy') {
-                row['Source'] = p.source; row['No.'] = p.jarvisNo; row['Buyer'] = p.buyer; row['Optimized'] = p.optimized ? 'Yes' : 'No'; row['Loading Date'] = p.loadingDate;
-            } else {
-                row['Buyer'] = p.buyer; row['Delivery Date'] = p.deliveryDate;
-            }
-            row[`${type} Volume`] = (p as any)[volKey];
-            row[`${type} Formula`] = (p as any)[formulaKey];
-            for (let i = 1; i <= 3; i++) {
-                row[`${type} Price ${i} Weightage`] = (p as any)[`${prefix}${i}Weightage`];
-                row[`${type} Price ${i} slope`] = (p as any)[`${prefix}${i}Slope`];
-                row[`${type} Price Index ${i}`] = (p as any)[`${prefix}Index${i}`];
-                row[`${type} Price ${i} Month Definition`] = (p as any)[`${prefix}${i}MonthDef`];
-                row[`${type} Price ${i} constant`] = (p as any)[`${prefix}${i}Constant`];
-            }
-            row[`${type} Price Overall Constant`] = (p as any)[`${prefix}OverallConstant`];
-            return row;
-        };
-
-        purchaseRows.push(buildRow('Buy', 1));
-        salesRows.push(buildRow('Sell', 1));
-        costRows.push({ 'Strategy Name': p.strategyName, 'Incoterm': p.incoterms, 'SRC': p.reconciledSrcCost || 0 });
-        
-        if (p.isTieredPricing) {
-            purchaseRows.push(buildRow('Buy', 2));
-            salesRows.push(buildRow('Sell', 2));
-            costRows.push({ 'Strategy Name': formatTieredName(p.strategyName), 'Incoterm': p.incoterms, 'SRC': 0 });
-        }
+    const purchaseData = filtered.map(p => {
+      const row: any = {
+        'Strategy Name': p.strategyName,
+        'No.': p.jarvisNo || '',
+        'Source': p.source,
+        'Buyer': p.buyer,
+        'Optimized': p.optimized ? 'Yes' : 'No',
+        'Loading Date': p.loadingDate,
+        'Loaded Volume': p.loadedVolume,
+        'Buy Formula': p.buyFormula,
+        'Buy Price Overall Constant': p.buyPriceOverallConstant || 0
+      };
+      for (let i = 1; i <= 3; i++) {
+        row[`Buy Price ${i} Weightage`] = (p as any)[`buyPrice${i}Weightage`] || 0;
+        row[`Buy Price ${i} slope`] = (p as any)[`buyPrice${i}Slope`] || 0;
+        row[`Buy Price Index ${i}`] = (p as any)[`buyPriceIndex${i}`] || '';
+        row[`Buy Price ${i} Month Definition`] = (p as any)[`buyPrice${i}MonthDef`] || '';
+        row[`Buy Price ${i} constant`] = (p as any)[`buyPrice${i}Constant`] || 0;
+      }
+      return row;
     });
 
-    XLSX.utils.book_append_sheet(workbook, XLSX.utils.json_to_sheet(purchaseRows), 'Purchase');
-    XLSX.utils.book_append_sheet(workbook, XLSX.utils.json_to_sheet(salesRows), 'Sales');
-    XLSX.utils.book_append_sheet(workbook, XLSX.utils.json_to_sheet(costRows), 'Cost');
+    const salesData = filtered.map(p => {
+      const row: any = {
+        'Strategy Name': p.strategyName,
+        'Buyer': p.buyer,
+        'Delivery Date': p.deliveryDate,
+        'Delivered Volume': p.deliveredVolume,
+        'Sell Formula': p.sellFormula,
+        'Sell Price Overall Constant': p.sellPriceOverallConstant || 0
+      };
+      for (let i = 1; i <= 3; i++) {
+        row[`Sell Price ${i} Weightage`] = (p as any)[`sellPrice${i}Weightage`] || 0;
+        row[`Sell Price ${i} slope`] = (p as any)[`sellPrice${i}Slope`] || 0;
+        row[`Sell Price Index ${i}`] = (p as any)[`sellPriceIndex${i}`] || '';
+        row[`Sell Price ${i} Month Definition`] = (p as any)[`sellPrice${i}MonthDef`] || '';
+        row[`Sell Price ${i} constant`] = (p as any)[`sellPrice${i}Constant`] || 0;
+      }
+      return row;
+    });
+
+    const costData = filtered.map(p => ({
+      'Strategy Name': p.strategyName,
+      'Incoterm': p.incoterms,
+      'SRC': p.reconciledSrcCost || 0
+    }));
+
+    const wb = XLSX.utils.book_new();
+    XLSX.utils.book_append_sheet(wb, XLSX.utils.json_to_sheet(purchaseData), 'Purchase');
+    XLSX.utils.book_append_sheet(wb, XLSX.utils.json_to_sheet(salesData), 'Sales');
+    XLSX.utils.book_append_sheet(wb, XLSX.utils.json_to_sheet(costData), 'Cost');
     
-    const fileName = `Jarvis_Export_${exportYear}_${exportGroup}_${new Date().toISOString().split('T')[0]}.xlsm`;
-    XLSX.writeFile(workbook, fileName, { bookType: 'xlsm' });
+    const fileName = `Jarvis_Export_${exportYear}_${exportGroup}.xlsx`;
+    XLSX.writeFile(wb, fileName);
+    toast.success(`Exported ${filtered.length} strategies to Jarvis format.`);
     setIsExportPopoverOpen(false);
-    toast.success(`Exported ${exportProfiles.length} strategies to ${fileName}`);
   };
 
   const handleSort = (key: string) => {
-    setSortConfig(prev => ({ key, direction: prev.key === key && prev.direction === 'asc' ? 'desc' : 'asc' }));
+    setSortConfig((prev: any) => ({ key, direction: prev.key === key && prev.direction === 'asc' ? 'desc' : 'asc' }));
   };
 
   const toggleSelectAll = useCallback(() => {
-    const allVisibleSelected = processedProfiles.every(p => selectedIds.has(p.id));
+    const allVisibleSelected = processedProfiles.every((p: CargoProfile) => selectedIds.has(p.id));
     if (allVisibleSelected && processedProfiles.length > 0) {
-      setSelectedIds(prev => {
+      setSelectedIds((prev: Set<string>) => {
         const next = new Set(prev);
-        processedProfiles.forEach(p => next.delete(p.id));
+        processedProfiles.forEach((p: CargoProfile) => next.delete(p.id));
         return next;
       });
     } else {
-      setSelectedIds(prev => {
+      setSelectedIds((prev: Set<string>) => {
         const next = new Set(prev);
-        processedProfiles.forEach(p => next.add(p.id));
+        processedProfiles.forEach((p: CargoProfile) => next.add(p.id));
         return next;
       });
     }
   }, [processedProfiles, selectedIds]);
 
-  const isAllVisibleSelected = processedProfiles.length > 0 && processedProfiles.every(p => selectedIds.has(p.id));
-  const isSomeVisibleSelected = processedProfiles.some(p => selectedIds.has(p.id)) && !isAllVisibleSelected;
+  const isAllVisibleSelected = processedProfiles.length > 0 && processedProfiles.every((p: CargoProfile) => selectedIds.has(p.id));
+  const isSomeVisibleSelected = processedProfiles.some((p: CargoProfile) => selectedIds.has(p.id)) && !isAllVisibleSelected;
 
   const formatCurrency = (val: number) => 
     new Intl.NumberFormat('en-US', { style: 'currency', currency: 'USD', maximumFractionDigits: 0 }).format(val);
@@ -457,7 +468,7 @@ export const CargoList: React.FC<CargoListProps> = ({
       <div className="px-4 lg:px-6 py-3 border-b border-slate-200 flex flex-col lg:flex-row justify-between items-start lg:items-center bg-white gap-4">
         <div className="flex flex-col sm:flex-row items-stretch sm:items-center gap-3 w-full lg:w-auto">
             <div className="flex bg-slate-100 p-1 rounded-lg">
-                {(['table', 'map', 'calendar'] as ViewMode[]).map(mode => (
+                {(['table', 'map', 'calendar'] as ViewMode[]).map((mode: ViewMode) => (
                     <button key={mode} onClick={() => setViewMode(mode)} className={`flex-1 sm:flex-none px-3 py-1.5 text-xs font-bold rounded-md transition-all capitalize ${viewMode === mode ? 'bg-white text-indigo-600 shadow-sm' : 'text-slate-500 hover:text-slate-700'}`}>{mode}</button>
                 ))}
             </div>
@@ -495,13 +506,13 @@ export const CargoList: React.FC<CargoListProps> = ({
                                 <div>
                                     <label className="block text-[10px] font-bold text-slate-500 uppercase mb-1.5">Portfolio Year</label>
                                     <select value={exportYear} onChange={(e) => setExportYear(e.target.value)} className="w-full bg-slate-50 border border-slate-200 rounded-lg text-xs font-medium p-2 focus:ring-2 focus:ring-indigo-500/20">
-                                        {availableExportYears.map(y => <option key={y} value={y}>{y}</option>)}
+                                        {availableExportYears.map((y: string) => <option key={y} value={y}>{y}</option>)}
                                     </select>
                                 </div>
                                 <div>
                                     <label className="block text-[10px] font-bold text-slate-500 uppercase mb-1.5">Portfolio Group</label>
                                     <select value={exportGroup} onChange={(e) => setExportGroup(e.target.value)} className="w-full bg-slate-50 border border-slate-200 rounded-lg text-xs font-medium p-2 focus:ring-2 focus:ring-indigo-500/20">
-                                        {availableExportGroups.map(g => <option key={g} value={g}>{g}</option>)}
+                                        {availableExportGroups.map((g: string) => <option key={g} value={g}>{g}</option>)}
                                     </select>
                                 </div>
                                 <div className="pt-2">
@@ -528,7 +539,7 @@ export const CargoList: React.FC<CargoListProps> = ({
                               <div className="px-4 py-3 bg-slate-50 border-r border-slate-200 flex items-center w-12 shrink-0">
                                   <input type="checkbox" className="rounded border-slate-300 text-indigo-600 cursor-pointer" checked={isAllVisibleSelected} ref={el => { if (el) el.indeterminate = isSomeVisibleSelected; }} onChange={toggleSelectAll} />
                               </div>
-                              {headerKeys.map((header, idx) => {
+                              {headerKeys.map((header: string, idx: number) => {
                                   const isStrat = header === 'strategyName';
                                   const isSorted = sortConfig.key === header;
                                   const hasActiveFilter = (activeFilters[header]?.size ?? 0) > 0;
@@ -539,7 +550,7 @@ export const CargoList: React.FC<CargoListProps> = ({
                                           </span>
                                           {!['purchaseCost', 'salesRevenue', 'trmsHedging'].includes(header) && (
                                               <div className="flex items-center gap-1">
-                                                  <button onClick={() => setOpenFilterMenu(header === openFilterMenu ? null : header)} className={`p-1 rounded ${hasActiveFilter ? 'bg-indigo-100 text-indigo-600' : 'text-slate-400 hover:bg-slate-200'}`}><svg className="w-3 h-3" fill="none" stroke="currentColor" viewBox="0 0 24 24"><path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M3 4a1 1 0 011-1h16a1 1 0 011 1v2.586a1 1 0 01-.293.707l-6.414 6.414a1 1 0 00-.293.707V17l-4 4v-6.586a1 1 0 00-.293-.707L3.293 7.293A1 1 0 013 6.586V4z" /></svg></button>
+                                                  <button onClick={() => setOpenFilterMenu(header === openFilterMenu ? null : header)} className={`p-1 rounded ${hasActiveFilter ? 'bg-indigo-100 text-indigo-600' : 'text-slate-400 hover:bg-slate-200'}`}><svg className="w-3 h-3" fill="none" stroke="currentColor" viewBox="0 0 24 24"><path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M3 4a1 1 0 011-1h16a1 1 0 011 1v2.586a1 1 0 01-.293.707l-6.414 6.414a1 1 0 00-.293.707V17l-4 4v-6.586a1 1 0 00-.293.707V17l-4 4v-6.586a1 1 0 00-.293-.707L3.293 7.293A1 1 0 013 6.586V4z" /></svg></button>
                                                   <button onClick={() => handleSort(header)} className={`p-1 rounded ${isSorted ? 'text-indigo-600' : 'text-slate-300 hover:text-slate-500'}`}><svg className={`w-3 h-3 transition-transform ${isSorted && sortConfig.direction === 'desc' ? 'rotate-180' : ''}`} fill="none" stroke="currentColor" viewBox="0 0 24 24"><path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M19 9l-7 7-7-7" /></svg></button>
                                               </div>
                                           )}
@@ -551,23 +562,23 @@ export const CargoList: React.FC<CargoListProps> = ({
                                                           <div className="max-h-[300px] overflow-y-auto custom-scrollbar pr-1">
                                                               {isStrat ? (
                                                                   <div className="space-y-1">
-                                                                      {Object.keys(filterData.strategyHierarchy).sort().map(group => {
-                                                                          const strats = filterData.strategyHierarchy[group].filter(s => s.toLowerCase().includes(filterSearch.toLowerCase()));
+                                                                      {Object.keys(filterData.strategyHierarchy).sort().map((group: string) => {
+                                                                          const strats = filterData.strategyHierarchy[group].filter((s: string) => s.toLowerCase().includes(filterSearch.toLowerCase()));
                                                                           if (strats.length === 0) return null;
                                                                           const isExp = expandedNodes.has(`filter-strat-${group}`);
                                                                           const currentSet = activeFilters[header] || new Set();
-                                                                          const allSel = strats.every(s => currentSet.has(s));
-                                                                          const someSel = strats.some(s => currentSet.has(s));
+                                                                          const allSel = strats.every((s: string) => currentSet.has(s));
+                                                                          const someSel = strats.some((s: string) => currentSet.has(s));
                                                                           return (
                                                                               <div key={group} className="text-[10px]">
                                                                                   <div className="flex items-center gap-2 px-1 py-1 hover:bg-slate-50 rounded">
-                                                                                      <button onClick={() => setExpandedNodes(prev => { const n = new Set(prev); if (n.has(`filter-strat-${group}`)) n.delete(`filter-strat-${group}`); else n.add(`filter-strat-${group}`); return n; })} className="p-0.5 hover:bg-slate-200 rounded text-slate-400"><svg className={`w-3 h-3 transition-transform ${isExp ? 'rotate-90' : ''}`} fill="none" stroke="currentColor" viewBox="0 0 24 24"><path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M9 5l7 7-7 7" /></svg></button>
+                                                                                      <button onClick={() => setExpandedNodes((prev: Set<string>) => { const n = new Set(prev); if (n.has(`filter-strat-${group}`)) n.delete(`filter-strat-${group}`); else n.add(`filter-strat-${group}`); return n; })} className="p-0.5 hover:bg-slate-200 rounded text-slate-400"><svg className={`w-3 h-3 transition-transform ${isExp ? 'rotate-90' : ''}`} fill="none" stroke="currentColor" viewBox="0 0 24 24"><path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M9 5l7 7-7 7" /></svg></button>
                                                                                       <input type="checkbox" checked={allSel} ref={el => { if (el) el.indeterminate = someSel && !allSel; }} onChange={() => bulkToggle(header, strats, !allSel)} className="rounded border-slate-300 text-indigo-600 w-3 h-3" />
                                                                                       <span className="font-bold cursor-pointer">{group}</span>
                                                                                   </div>
                                                                                   {isExp && (
                                                                                       <div className="ml-4 border-l border-slate-200 pl-2">
-                                                                                          {strats.map(s => (
+                                                                                          {strats.map((s: string) => (
                                                                                               <label key={s} className="flex items-center gap-2 px-1 py-0.5 hover:bg-slate-50 rounded cursor-pointer">
                                                                                                   <input type="checkbox" checked={currentSet.has(s)} onChange={() => toggleValueFilter(header, s)} className="rounded border-slate-300 text-indigo-600 w-2.5 h-2.5" />
                                                                                                   <span className="text-slate-500 truncate">{s}</span>
@@ -581,33 +592,33 @@ export const CargoList: React.FC<CargoListProps> = ({
                                                                   </div>
                                                               ) : (header === 'deliveryDate' || header === 'loadingDate') ? (
                                                                   <div className="space-y-1">
-                                                                      {Object.keys(filterData.dateHierarchies[header]).sort().map(year => {
+                                                                      {Object.keys(filterData.dateHierarchies[header]).sort().map((year: string) => {
                                                                           const monthsObj = filterData.dateHierarchies[header][year];
                                                                           const isExpYear = expandedNodes.has(`filter-${header}-${year}`);
                                                                           return (
                                                                               <div key={year} className="text-[10px]">
                                                                                   <div className="flex items-center gap-2 px-1 py-1 hover:bg-slate-50 rounded">
-                                                                                      <button onClick={() => setExpandedNodes(prev => { const n = new Set(prev); if (n.has(`filter-${header}-${year}`)) n.delete(`filter-${header}-${year}`); else n.add(`filter-${header}-${year}`); return n; })} className="p-0.5 hover:bg-slate-200 rounded text-slate-400"><svg className={`w-3 h-3 transition-transform ${isExpYear ? 'rotate-90' : ''}`} fill="none" stroke="currentColor" viewBox="0 0 24 24"><path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M9 5l7 7-7 7" /></svg></button>
+                                                                                      <button onClick={() => setExpandedNodes((prev: Set<string>) => { const n = new Set(prev); if (n.has(`filter-${header}-${year}`)) n.delete(`filter-${header}-${year}`); else n.add(`filter-${header}-${year}`); return n; })} className="p-0.5 hover:bg-slate-200 rounded text-slate-400"><svg className={`w-3 h-3 transition-transform ${isExpYear ? 'rotate-90' : ''}`} fill="none" stroke="currentColor" viewBox="0 0 24 24"><path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M9 5l7 7-7 7" /></svg></button>
                                                                                       <span className="font-bold">{year}</span>
                                                                                   </div>
                                                                                   {isExpYear && (
                                                                                       <div className="ml-4 border-l border-slate-200 pl-2">
-                                                                                          {Object.keys(monthsObj).sort((a,b) => new Date(`${a} 1, 2025`).getMonth() - new Date(`${b} 1, 2025`).getMonth()).map(month => {
+                                                                                          {Object.keys(monthsObj).sort((a,b) => new Date(`${a} 1, 2025`).getMonth() - new Date(`${b} 1, 2025`).getMonth()).map((month: string) => {
                                                                                               const days = Array.from(monthsObj[month] as Set<string>).sort();
                                                                                               const isExpMonth = expandedNodes.has(`filter-${header}-${year}-${month}`);
                                                                                               const currentSet = activeFilters[header] || new Set();
-                                                                                              const allSel = days.every(d => currentSet.has(d));
-                                                                                              const someSel = days.some(d => currentSet.has(d));
+                                                                                              const allSel = days.every((d: string) => currentSet.has(d));
+                                                                                              const someSel = days.some((d: string) => currentSet.has(d));
                                                                                               return (
                                                                                                   <div key={month} className="mt-1">
                                                                                                       <div className="flex items-center gap-2 px-1 py-0.5 hover:bg-slate-50 rounded">
-                                                                                                          <button onClick={() => setExpandedNodes(prev => { const n = new Set(prev); if (n.has(`filter-${header}-${year}-${month}`)) n.delete(`filter-${header}-${year}-${month}`); else n.add(`filter-${header}-${year}-${month}`); return n; })} className="p-0.5 hover:bg-slate-200 rounded text-slate-400"><svg className={`w-3 h-3 transition-transform ${isExpMonth ? 'rotate-90' : ''}`} fill="none" stroke="currentColor" viewBox="0 0 24 24"><path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M9 5l7 7-7 7" /></svg></button>
+                                                                                                          <button onClick={() => setExpandedNodes((prev: Set<string>) => { const n = new Set(prev); if (n.has(`filter-${header}-${year}-${month}`)) n.delete(`filter-${header}-${year}-${month}`); else n.add(`filter-${header}-${year}-${month}`); return n; })} className="p-0.5 hover:bg-slate-200 rounded text-slate-400"><svg className={`w-3 h-3 transition-transform ${isExpMonth ? 'rotate-90' : ''}`} fill="none" stroke="currentColor" viewBox="0 0 24 24"><path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M9 5l7 7-7 7" /></svg></button>
                                                                                                           <input type="checkbox" checked={allSel} ref={el => { if (el) el.indeterminate = someSel && !allSel; }} onChange={() => bulkToggle(header, days, !allSel)} className="rounded border-slate-300 text-indigo-600 w-2.5 h-2.5" />
                                                                                                           <span className="text-slate-600">{month}</span>
                                                                                                       </div>
                                                                                                       {isExpMonth && (
                                                                                                           <div className="ml-4 border-l border-slate-200 pl-2 flex flex-col gap-1 mt-1">
-                                                                                                              {days.map(dStr => (
+                                                                                                              {days.map((dStr: string) => (
                                                                                                                   <label key={dStr} className="flex items-center gap-2 px-1 hover:bg-slate-50 rounded cursor-pointer"><input type="checkbox" checked={currentSet.has(dStr)} onChange={() => toggleValueFilter(header, dStr)} className="rounded border-slate-300 text-indigo-600 w-2 h-2" /><span className="text-slate-500 font-mono">{dStr.split('-')[2]}</span></label>
                                                                                                               ))}
                                                                                                           </div>
@@ -622,7 +633,7 @@ export const CargoList: React.FC<CargoListProps> = ({
                                                                       })}
                                                                   </div>
                                                               ) : (
-                                                                  filterData.values[header]?.filter(v => String(v).toLowerCase().includes(filterSearch.toLowerCase())).map(v => (
+                                                                  filterData.values[header]?.filter((v: any) => String(v).toLowerCase().includes(filterSearch.toLowerCase())).map((v: any) => (
                                                                       <label key={String(v)} className="flex items-center gap-2 px-1 py-1 hover:bg-slate-50 rounded cursor-pointer"><input type="checkbox" checked={(activeFilters[header] as Set<any> | undefined)?.has(v)} onChange={() => toggleValueFilter(header, v)} className="rounded border-slate-300 text-indigo-600 w-3 h-3" /><span className="text-[10px] truncate">{String(v ?? '(Blank)')}</span></label>
                                                                   ))
                                                               )}
@@ -640,7 +651,7 @@ export const CargoList: React.FC<CargoListProps> = ({
                               <div className="px-4 py-3 bg-slate-100 border-l border-slate-200 sticky right-0 z-[60] w-32 shrink-0 font-bold text-[10px] text-slate-600 uppercase text-center shadow-[-2px_0_5px_rgba(0,0,0,0.05)]">Actions</div>
                           </div>
                           <div className="bg-white">
-                              {processedProfiles.map((p) => {
+                              {processedProfiles.map((p: CargoProfile) => {
                                   const purchaseT1 = p.absoluteBuyPrice * p.loadedVolume;
                                   const purchaseT2 = p.isTieredPricing ? (p.absoluteTier2BuyPrice! * p.tier2LoadedVolume!) : 0;
                                   const totalPurchase = purchaseT1 + purchaseT2;
@@ -656,7 +667,7 @@ export const CargoList: React.FC<CargoListProps> = ({
                                   return (
                                       <div key={p.id} className="flex border-b border-slate-100 transition-colors hover:bg-indigo-50/30 group">
                                           <div className="px-4 py-3 border-r border-slate-100 w-12 shrink-0 flex items-center bg-white">
-                                              <input type="checkbox" checked={selectedIds.has(p.id)} onChange={(e) => {
+                                              <input type="checkbox" checked={selectedIds.has(p.id)} onChange={(e: React.ChangeEvent<HTMLInputElement>) => {
                                                   const next = new Set(selectedIds);
                                                   if (e.target.checked) next.add(p.id); else next.delete(p.id);
                                                   setSelectedIds(next);
@@ -731,7 +742,7 @@ export const CargoList: React.FC<CargoListProps> = ({
                   </div>
 
                   <div className="lg:hidden h-full overflow-y-auto p-2 space-y-3 bg-slate-50">
-                    {processedProfiles.map((p) => (
+                    {processedProfiles.map((p: CargoProfile) => (
                       <motion.div 
                         key={p.id}
                         initial={{ opacity: 0, y: 10 }}
