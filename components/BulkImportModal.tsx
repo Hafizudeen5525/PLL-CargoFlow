@@ -2,6 +2,7 @@ import React, { useState } from 'react';
 import { CargoProfile, PnLBucket, EmptyCargoProfile } from '../types';
 import { recalculateProfile, generateStrategyName } from '../services/calculationService';
 import { toast } from 'react-hot-toast';
+import { motion, AnimatePresence } from 'framer-motion';
 
 interface BulkImportModalProps {
   existingProfiles: CargoProfile[];
@@ -67,7 +68,7 @@ const DiffCell = ({ row, field, rowIndex, format, className = "", isIgnored, onT
 
     if (change) {
         if (isEmpty(change.old) && isEmpty(change.new)) {
-             return <div className={`text-slate-600 ${className}`}>{format ? format(val) : val}</div>;
+             return <div className={`text-slate-600 ${className}`}>{format ? format(val) : (val || '-')}</div>;
         }
         return (
             <div 
@@ -92,7 +93,7 @@ const DiffCell = ({ row, field, rowIndex, format, className = "", isIgnored, onT
             </div>
         );
     }
-    return <div className={`text-slate-600 ${className}`}>{format ? format(val) : val}</div>;
+    return <div className={`text-slate-600 ${className}`}>{format ? format(val) : (val || '-')}</div>;
 };
 
 export const BulkImportModal: React.FC<BulkImportModalProps> = ({ existingProfiles, onClose, onImport }) => {
@@ -139,7 +140,8 @@ export const BulkImportModal: React.FC<BulkImportModalProps> = ({ existingProfil
     }
     try {
         const rows = inputText.trim().split('\n');
-        const headers = rows[0].split(/\t|,/).map(h => h.trim().toLowerCase().replace(/['"]+/g, ''));
+        const firstRow = rows[0].split(/\t|,/);
+        const headers = firstRow.map(h => h.trim().toLowerCase().replace(/['"]+/g, ''));
         const mapIndices: Record<string, number> = {};
         
         headers.forEach((h: string, index: number) => {
@@ -192,15 +194,6 @@ export const BulkImportModal: React.FC<BulkImportModalProps> = ({ existingProfil
 
             if (parsedFields.deliveryDate && !parsedFields.deliveryMonth) parsedFields.deliveryMonth = formatMonthStr(parsedFields.deliveryDate);
             if (parsedFields.loadingDate && !parsedFields.loadingMonth) parsedFields.loadingMonth = formatMonthStr(parsedFields.loadingDate);
-            
-            if (parsedFields.deliveryDate) {
-                if (!parsedFields.deliveryWindowStart) parsedFields.deliveryWindowStart = parsedFields.deliveryDate;
-                if (!parsedFields.deliveryWindowEnd) parsedFields.deliveryWindowEnd = parsedFields.deliveryDate;
-            }
-            if (parsedFields.loadingDate) {
-                if (!parsedFields.loadingWindowStart) parsedFields.loadingWindowStart = parsedFields.loadingDate;
-                if (!parsedFields.loadingWindowEnd) parsedFields.loadingWindowEnd = parsedFields.loadingDate;
-            }
 
             let finalProfile: CargoProfile;
             let status: 'New' | 'Update' | 'No Change';
@@ -210,19 +203,52 @@ export const BulkImportModal: React.FC<BulkImportModalProps> = ({ existingProfil
             const existingMatch = strategyName ? existingProfiles.find(p => p.strategyName?.toLowerCase() === strategyName.toLowerCase()) : undefined;
 
             if (existingMatch) {
+                // Tiered Volume Logic: If the deal is tiered, split the incoming total volume
                 const merged = { ...existingMatch, ...parsedFields };
+                
+                if (existingMatch.isTieredPricing) {
+                    // Logic for Sales Volume
+                    if (parsedFields.deliveredVolume !== undefined) {
+                        const incomingTotal = parsedFields.deliveredVolume;
+                        const t1Threshold = existingMatch.deliveredVolume || 0; // Existing T1 volume acts as threshold
+                        
+                        if (t1Threshold > 0 && incomingTotal > t1Threshold) {
+                            merged.deliveredVolume = t1Threshold;
+                            merged.tier2DeliveredVolume = incomingTotal - t1Threshold;
+                        } else {
+                            // If smaller or threshold not set, just keep as Tier 1
+                            merged.deliveredVolume = incomingTotal;
+                            merged.tier2DeliveredVolume = 0;
+                        }
+                    }
+
+                    // Logic for Purchase Volume
+                    if (parsedFields.loadedVolume !== undefined) {
+                        const incomingTotal = parsedFields.loadedVolume;
+                        const t1Threshold = existingMatch.loadedVolume || 0;
+                        
+                        if (t1Threshold > 0 && incomingTotal > t1Threshold) {
+                            merged.loadedVolume = t1Threshold;
+                            merged.tier2LoadedVolume = incomingTotal - t1Threshold;
+                        } else {
+                            merged.loadedVolume = incomingTotal;
+                            merged.tier2LoadedVolume = 0;
+                        }
+                    }
+                }
+
                 const isRealized = merged.pnlBucket === PnLBucket.Realized;
                 finalProfile = recalculateProfile(merged, !isRealized) as CargoProfile;
                 status = 'Update';
 
                 (Object.keys(finalProfile) as Array<keyof CargoProfile>).forEach(key => {
                     if (key === 'id') return;
-                    const oldVal = existingMatch[key];
-                    const newVal = finalProfile[key];
+                    const oldVal = (existingMatch as any)[key];
+                    const newVal = (finalProfile as any)[key];
                     if (oldVal !== newVal) {
                          if (typeof oldVal === 'number' && typeof newVal === 'number' && Math.abs(oldVal - newVal) < 0.001) return;
                          if (!oldVal && !newVal) return;
-                         changes[key] = { old: oldVal, new: newVal };
+                         changes[key as string] = { old: oldVal, new: newVal };
                     }
                 });
                 if (Object.keys(changes).length === 0) status = 'No Change';
@@ -306,13 +332,18 @@ export const BulkImportModal: React.FC<BulkImportModalProps> = ({ existingProfil
 
   return (
     <div className="fixed inset-0 bg-slate-900/60 backdrop-blur-sm flex items-center justify-center p-4 z-50">
-      <div className="bg-white rounded-xl shadow-2xl w-full max-w-7xl max-h-[90vh] flex flex-col overflow-hidden">
+      <motion.div initial={{ opacity: 0, scale: 0.95 }} animate={{ opacity: 1, scale: 1 }} className="bg-white rounded-xl shadow-2xl w-full max-w-7xl max-h-[90vh] flex flex-col overflow-hidden">
         <div className="p-6 border-b border-slate-100 flex justify-between items-center bg-white">
-            <h2 className="text-xl font-bold text-slate-800">Bulk Import & Update</h2>
+            <div>
+                <h2 className="text-xl font-bold text-slate-800">Bulk Import: {step === 'paste' ? 'Paste Data' : 'Verify Differences'}</h2>
+                <p className="text-xs text-slate-400 font-medium">
+                    {step === 'paste' ? 'Paste your Excel/CSV table data below.' : 'Inspect changes and toggle individual field updates.'}
+                </p>
+            </div>
             <button onClick={onClose} className="text-slate-400 hover:text-slate-600"><svg className="w-6 h-6" fill="none" stroke="currentColor" viewBox="0 0 24 24"><path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M6 18L18 6M6 6l12 12" /></svg></button>
         </div>
 
-        <div className="flex-1 overflow-y-auto p-6 bg-slate-50">
+        <div className="flex-1 overflow-y-auto p-6 bg-slate-50/50">
             {step === 'paste' ? (
                 <div className="space-y-4 h-full flex flex-col">
                     <textarea 
@@ -323,39 +354,73 @@ export const BulkImportModal: React.FC<BulkImportModalProps> = ({ existingProfil
                     />
                 </div>
             ) : (
-                <div className="overflow-x-auto border border-slate-200 rounded-lg shadow-sm">
-                    <table className="w-full text-xs text-left bg-white whitespace-nowrap">
-                        <thead className="text-xs text-slate-500 uppercase bg-slate-100 border-b border-slate-200">
+                <div className="border border-slate-200 rounded-xl overflow-hidden bg-white shadow-sm min-w-max">
+                    <table className="w-full text-xs text-left border-collapse">
+                        <thead className="bg-slate-100 text-slate-500 uppercase font-black text-[10px] tracking-widest border-b border-slate-200 sticky top-0 z-10">
                             <tr>
-                                <th className="px-4 py-3 text-center w-10 bg-slate-100 border-r border-slate-200">
-                                    <input type="checkbox" checked={isAllSelected} onChange={toggleAll} className="rounded border-slate-300 text-blue-600 focus:ring-blue-500 cursor-pointer" />
+                                <th className="px-4 py-4 text-center w-12 sticky left-0 bg-slate-100 z-20">
+                                    <input type="checkbox" checked={isAllSelected} onChange={toggleAll} className="rounded border-slate-300 text-indigo-600 focus:ring-indigo-500 cursor-pointer" />
                                 </th>
-                                <th className="px-4 py-3 font-bold text-center">Status</th>
-                                <th className="px-4 py-3 font-bold">Strategy</th>
-                                <th className="px-4 py-3 font-bold">Load Win Start</th>
-                                <th className="px-4 py-3 font-bold">Load Win End</th>
-                                <th className="px-4 py-3 font-bold">Del Win Start</th>
-                                <th className="px-4 py-3 font-bold">Del Win End</th>
-                                <th className="px-4 py-3 font-bold text-right">Vol</th>
-                                <th className="px-4 py-3 font-bold text-right">P&L</th>
+                                <th className="px-4 py-4 text-center w-24">Status</th>
+                                <th className="px-6 py-4 w-48 sticky left-12 bg-slate-100 z-20 border-r border-slate-200">Strategy Name</th>
+                                <th className="px-4 py-4">Buyer/Source</th>
+                                <th className="px-4 py-4">Loading Date</th>
+                                <th className="px-4 py-4">Delivery Date</th>
+                                <th className="px-4 py-4 text-right">Vol (MT/U)</th>
+                                <th className="px-4 py-4">Formula</th>
+                                <th className="px-4 py-4 text-right">Price</th>
+                                <th className="px-4 py-4 text-right">P&L</th>
                             </tr>
                         </thead>
                         <tbody className="divide-y divide-slate-100">
                             {parsedRows.map((row: any, i: number) => (
-                                <tr key={i} className={`hover:bg-slate-50 transition-colors ${row._status === 'Update' ? 'bg-blue-50/10' : row._status === 'New' ? 'bg-emerald-50/10' : ''} ${!selectedIndices.has(i) ? 'opacity-50 grayscale' : ''}`}>
-                                    <td className="px-4 py-2 text-center align-middle border-r border-slate-100">
-                                        <input type="checkbox" checked={selectedIndices.has(i)} onChange={() => toggleRow(i)} className="rounded border-slate-300 text-blue-600 focus:ring-blue-500 cursor-pointer" />
+                                <tr key={i} className={`hover:bg-indigo-50/20 transition-colors group ${!selectedIndices.has(i) ? 'opacity-40 grayscale' : ''}`}>
+                                    <td className="px-4 py-3 text-center sticky left-0 bg-white group-hover:bg-indigo-50/20 z-10">
+                                        <input type="checkbox" checked={selectedIndices.has(i)} onChange={() => toggleRow(i)} className="rounded border-slate-300 text-indigo-600 focus:ring-indigo-500 cursor-pointer" />
                                     </td>
-                                    <td className="px-4 py-2 text-center align-middle">
-                                        <span className={`px-2 py-0.5 rounded text-[10px] font-bold uppercase tracking-wider block w-max mx-auto ${row._status === 'Update' ? 'bg-blue-100 text-blue-700' : 'bg-emerald-100 text-emerald-700'}`}>{row._status}</span>
+                                    <td className="px-4 py-3 text-center">
+                                        <span className={`px-2 py-0.5 rounded text-[9px] font-black uppercase border ${
+                                            row._status === 'Update' ? 'bg-blue-50 text-blue-700 border-blue-100' : 
+                                            row._status === 'New' ? 'bg-emerald-50 text-emerald-700 border-emerald-100' : 
+                                            'bg-slate-50 text-slate-400 border-slate-100'
+                                        }`}>
+                                            {row._status}
+                                        </span>
                                     </td>
-                                    <td className="px-4 py-2 font-medium text-slate-700 align-middle">{row.strategyName}</td>
-                                    <td className="px-4 py-2 align-middle"><DiffCell row={row} rowIndex={i} field="loadingWindowStart" isIgnored={ignoredChanges[i]?.has("loadingWindowStart")} onToggle={toggleFieldChange} /></td>
-                                    <td className="px-4 py-2 align-middle"><DiffCell row={row} rowIndex={i} field="loadingWindowEnd" isIgnored={ignoredChanges[i]?.has("loadingWindowEnd")} onToggle={toggleFieldChange} /></td>
-                                    <td className="px-4 py-2 align-middle"><DiffCell row={row} rowIndex={i} field="deliveryWindowStart" isIgnored={ignoredChanges[i]?.has("deliveryWindowStart")} onToggle={toggleFieldChange} /></td>
-                                    <td className="px-4 py-2 align-middle"><DiffCell row={row} rowIndex={i} field="deliveryWindowEnd" isIgnored={ignoredChanges[i]?.has("deliveryWindowEnd")} onToggle={toggleFieldChange} /></td>
-                                    <td className="px-4 py-2 text-right align-middle"><DiffCell row={row} rowIndex={i} field="deliveredVolume" format={(v: any) => v?.toLocaleString()} isIgnored={ignoredChanges[i]?.has("deliveredVolume")} onToggle={toggleFieldChange} /></td>
-                                    <td className={`px-4 py-2 font-bold text-right align-middle ${row.finalTotalPnL >= 0 ? 'text-emerald-600' : 'text-rose-600'}`}><DiffCell row={row} rowIndex={i} field="finalTotalPnL" format={(v: any) => v?.toLocaleString()} isIgnored={ignoredChanges[i]?.has("finalTotalPnL")} onToggle={toggleFieldChange} /></td>
+                                    <td className="px-6 py-3 font-bold text-slate-700 sticky left-12 bg-white group-hover:bg-indigo-50/20 z-10 border-r border-slate-200">{row.strategyName}</td>
+                                    <td className="px-4 py-3">
+                                        <div className="flex flex-col gap-1">
+                                            <DiffCell row={row} rowIndex={i} field="source" isIgnored={ignoredChanges[i]?.has("source")} onToggle={toggleFieldChange} />
+                                            <div className="h-px bg-slate-100 my-0.5" />
+                                            <DiffCell row={row} rowIndex={i} field="buyer" isIgnored={ignoredChanges[i]?.has("buyer")} onToggle={toggleFieldChange} />
+                                        </div>
+                                    </td>
+                                    <td className="px-4 py-3"><DiffCell row={row} rowIndex={i} field="loadingDate" isIgnored={ignoredChanges[i]?.has("loadingDate")} onToggle={toggleFieldChange} className="font-mono" /></td>
+                                    <td className="px-4 py-3"><DiffCell row={row} rowIndex={i} field="deliveryDate" isIgnored={ignoredChanges[i]?.has("deliveryDate")} onToggle={toggleFieldChange} className="font-mono" /></td>
+                                    <td className="px-4 py-3 text-right">
+                                        <div className="flex flex-col gap-1">
+                                            <DiffCell row={row} rowIndex={i} field="loadedVolume" format={(v: any) => v?.toLocaleString()} isIgnored={ignoredChanges[i]?.has("loadedVolume")} onToggle={toggleFieldChange} className="font-mono" />
+                                            <div className="h-px bg-slate-100 my-0.5" />
+                                            <DiffCell row={row} rowIndex={i} field="deliveredVolume" format={(v: any) => v?.toLocaleString()} isIgnored={ignoredChanges[i]?.has("deliveredVolume")} onToggle={toggleFieldChange} className="font-mono" />
+                                        </div>
+                                    </td>
+                                    <td className="px-4 py-3">
+                                         <div className="flex flex-col gap-1">
+                                            <DiffCell row={row} rowIndex={i} field="buyFormula" isIgnored={ignoredChanges[i]?.has("buyFormula")} onToggle={toggleFieldChange} className="text-[10px]" />
+                                            <div className="h-px bg-slate-100 my-0.5" />
+                                            <DiffCell row={row} rowIndex={i} field="sellFormula" isIgnored={ignoredChanges[i]?.has("sellFormula")} onToggle={toggleFieldChange} className="text-[10px]" />
+                                        </div>
+                                    </td>
+                                    <td className="px-4 py-3 text-right">
+                                        <div className="flex flex-col gap-1">
+                                            <DiffCell row={row} rowIndex={i} field="absoluteBuyPrice" format={(v: any) => Number(v || 0).toFixed(3)} isIgnored={ignoredChanges[i]?.has("absoluteBuyPrice")} onToggle={toggleFieldChange} className="font-mono" />
+                                            <div className="h-px bg-slate-100 my-0.5" />
+                                            <DiffCell row={row} rowIndex={i} field="absoluteSellPrice" format={(v: any) => Number(v || 0).toFixed(3)} isIgnored={ignoredChanges[i]?.has("absoluteSellPrice")} onToggle={toggleFieldChange} className="font-mono" />
+                                        </div>
+                                    </td>
+                                    <td className="px-4 py-3 text-right">
+                                        <DiffCell row={row} rowIndex={i} field="finalTotalPnL" format={(v: any) => v?.toLocaleString(undefined, { maximumFractionDigits: 0 })} isIgnored={ignoredChanges[i]?.has("finalTotalPnL")} onToggle={toggleFieldChange} className={`font-mono font-bold ${row.finalTotalPnL >= 0 ? 'text-emerald-600' : 'text-rose-600'}`} />
+                                    </td>
                                 </tr>
                             ))}
                         </tbody>
@@ -363,14 +428,27 @@ export const BulkImportModal: React.FC<BulkImportModalProps> = ({ existingProfil
                 </div>
             )}
         </div>
-        <div className="p-6 border-t border-slate-100 bg-white flex justify-end gap-3">
-             {step === 'paste' ? (
-                <button onClick={handleParse} className="px-6 py-2 bg-blue-600 hover:bg-blue-700 text-white font-medium rounded-lg shadow-lg">Review Changes</button>
-             ) : (
-                <button onClick={handleFinish} className="px-6 py-2 bg-emerald-600 hover:bg-emerald-700 text-white font-medium rounded-lg shadow-lg disabled:opacity-50" disabled={selectedIndices.size === 0}>Confirm {selectedIndices.size} Updates</button>
-             )}
+        <div className="p-6 border-t border-slate-100 bg-white flex justify-between items-center">
+             <div className="flex items-center gap-4 text-xs font-bold text-slate-400">
+                {step === 'preview' && (
+                    <>
+                        <div className="flex items-center gap-1.5"><span className="w-2.5 h-2.5 rounded bg-emerald-400"></span> New</div>
+                        <div className="flex items-center gap-1.5"><span className="w-2.5 h-2.5 rounded bg-blue-400"></span> Updated</div>
+                    </>
+                )}
+            </div>
+             <div className="flex gap-3">
+                <button onClick={onClose} className="px-6 py-2.5 text-slate-600 font-bold hover:bg-slate-50 rounded-xl border border-slate-200 transition-all">Cancel</button>
+                {step === 'paste' ? (
+                    <button onClick={handleParse} className="px-8 py-2.5 bg-indigo-600 text-white font-black rounded-xl shadow-lg shadow-indigo-100 hover:bg-indigo-700 transition-all">Review Changes</button>
+                ) : (
+                    <button onClick={handleFinish} className="px-8 py-2.5 bg-emerald-600 text-white font-black rounded-xl shadow-lg shadow-emerald-100 hover:bg-emerald-700 disabled:opacity-50 transition-all" disabled={selectedIndices.size === 0}>
+                        Import {selectedIndices.size} Updates
+                    </button>
+                )}
+             </div>
         </div>
-      </div>
+      </motion.div>
     </div>
   );
 };
