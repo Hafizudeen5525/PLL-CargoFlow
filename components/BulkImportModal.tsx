@@ -147,7 +147,7 @@ export const BulkImportModal: React.FC<BulkImportModalProps> = ({ existingProfil
                 
                 // --- Robust Tiered Volume Splitting Logic ---
                 if (existingMatch.isTieredPricing) {
-                    // Logic: Fill Tier 1 up to the current existing Tier 1 volume first
+                    // Purchase Volume Split
                     if (parsedFields.loadedVolume !== undefined) {
                         const incomingTotal = parsedFields.loadedVolume;
                         const t1Threshold = existingMatch.loadedVolume || 0;
@@ -159,6 +159,7 @@ export const BulkImportModal: React.FC<BulkImportModalProps> = ({ existingProfil
                             merged.tier2LoadedVolume = 0;
                         }
                     }
+                    // Sales Volume Split
                     if (parsedFields.deliveredVolume !== undefined) {
                         const incomingTotal = parsedFields.deliveredVolume;
                         const t1Threshold = existingMatch.deliveredVolume || 0;
@@ -188,7 +189,7 @@ export const BulkImportModal: React.FC<BulkImportModalProps> = ({ existingProfil
                     }
                 });
 
-                // Add virtual "Total Volume" tracking for the preview table
+                // Add virtual "Total Volume" tracking for visual feedback in the preview table
                 const oldTotalDel = (existingMatch.deliveredVolume || 0) + (existingMatch.tier2DeliveredVolume || 0);
                 const newTotalDel = (finalProfile.deliveredVolume || 0) + (finalProfile.tier2DeliveredVolume || 0);
                 if (Math.abs(oldTotalDel - newTotalDel) > 0.1) {
@@ -265,7 +266,7 @@ export const BulkImportModal: React.FC<BulkImportModalProps> = ({ existingProfil
     <div className="fixed inset-0 bg-slate-900/60 backdrop-blur-sm flex items-center justify-center p-4 z-50">
       <motion.div initial={{ opacity: 0, scale: 0.95 }} animate={{ opacity: 1, scale: 1 }} className="bg-white rounded-xl shadow-2xl w-full max-w-7xl max-h-[90vh] flex flex-col overflow-hidden">
         <div className="p-6 border-b border-slate-100 flex justify-between items-center bg-white">
-            <h2 className="text-xl font-bold text-slate-800">Bulk Import: {step === 'paste' ? 'Paste Data' : 'Review Changes & Splits'}</h2>
+            <h2 className="text-xl font-bold text-slate-800">Bulk Import: {step === 'paste' ? 'Paste Data' : 'Review Splits & P&L'}</h2>
             <button onClick={onClose} className="text-slate-400 hover:text-slate-600"><svg className="w-6 h-6" fill="none" stroke="currentColor" viewBox="0 0 24 24"><path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M6 18L18 6M6 6l12 12" /></svg></button>
         </div>
 
