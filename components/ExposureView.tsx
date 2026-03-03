@@ -172,7 +172,7 @@ export const ExposureView: React.FC<ExposureViewProps> = ({ profiles, onCargoCli
     const formatUSD = (val: number) => new Intl.NumberFormat('en-US', { style: 'currency', currency: 'USD', maximumFractionDigits: 0 }).format(val);
 
     return (
-        <div className="flex flex-col gap-6 p-2 h-full">
+        <div className="flex-1 flex flex-col min-h-0 gap-6 p-2">
             <div className="grid grid-cols-1 md:grid-cols-4 gap-4 shrink-0">
                 <motion.div whileHover={{ scale: 1.02 }} onClick={() => setAuditOpen(true)} className="bg-slate-900 p-6 rounded-2xl border border-slate-800 shadow-xl flex flex-col justify-between overflow-hidden relative group cursor-pointer">
                     <div className="absolute top-0 right-0 p-4 opacity-10 group-hover:opacity-30 transition-opacity">
@@ -219,7 +219,7 @@ export const ExposureView: React.FC<ExposureViewProps> = ({ profiles, onCargoCli
                 </div>
             </div>
 
-            <div className="grid grid-cols-1 xl:grid-cols-4 gap-6 h-full">
+            <div className="grid grid-cols-1 xl:grid-cols-4 gap-6 flex-1 min-h-0">
                 <AnimatePresence>
                     {showInfo && (
                         <motion.aside initial={{ opacity: 0, width: 0 }} animate={{ opacity: 1, width: 'auto' }} exit={{ opacity: 0, width: 0 }} className="xl:col-span-1 bg-slate-900 text-slate-300 p-6 rounded-2xl border border-slate-800 shadow-xl overflow-hidden hidden xl:flex flex-col">
@@ -237,8 +237,8 @@ export const ExposureView: React.FC<ExposureViewProps> = ({ profiles, onCargoCli
                     )}
                 </AnimatePresence>
 
-                <div className={`${showInfo ? 'xl:col-span-3' : 'xl:col-span-4'} flex flex-col gap-6`}>
-                    <section className="bg-white rounded-2xl border border-slate-200 shadow-sm overflow-hidden flex flex-col shrink-0">
+                <div className={`${showInfo ? 'xl:col-span-3' : 'xl:col-span-4'} flex flex-col gap-6 min-h-0`}>
+                    <section className="bg-white rounded-2xl border border-slate-200 shadow-sm overflow-hidden flex flex-col flex-1 min-h-0">
                         <div className="p-5 border-b border-slate-100 flex justify-between items-center bg-slate-50/30">
                             <div className="flex items-center gap-3">
                                 <h2 className="text-lg font-bold text-slate-800 flex items-center gap-2">
@@ -265,7 +265,7 @@ export const ExposureView: React.FC<ExposureViewProps> = ({ profiles, onCargoCli
                             </div>
                         </div>
                         
-                        <div className="overflow-x-auto custom-scrollbar">
+                        <div className="flex-1 overflow-auto custom-scrollbar">
                             <table className="w-full text-xs text-left border-collapse min-w-[1200px]">
                                 <thead>
                                     <tr className="bg-slate-50 text-slate-500 font-bold uppercase tracking-wider text-[10px] border-b border-slate-200">

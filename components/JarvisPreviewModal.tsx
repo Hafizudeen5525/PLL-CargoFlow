@@ -141,6 +141,8 @@ export const JarvisPreviewModal: React.FC<JarvisPreviewModalProps> = ({ existing
                             <th className="px-4 py-4 text-right">Vol (MT/U)</th>
                             <th className="px-4 py-4">Formula</th>
                             <th className="px-4 py-4 text-right">Price</th>
+                            <th className="px-4 py-4">P&L Bucket</th>
+                            <th className="px-4 py-4 text-right">Reconciled Cost/Rev</th>
                             <th className="px-4 py-4 text-right">SRC</th>
                         </tr>
                     </thead>
@@ -188,6 +190,27 @@ export const JarvisPreviewModal: React.FC<JarvisPreviewModalProps> = ({ existing
                                         <DiffCell row={row} rowIndex={i} field="absoluteBuyPrice" format={(v) => Number(v || 0).toFixed(3)} isIgnored={ignoredChanges[i]?.has("absoluteBuyPrice")} onToggle={toggleFieldChange} className="font-mono" />
                                         <div className="h-px bg-slate-100 my-0.5" />
                                         <DiffCell row={row} rowIndex={i} field="absoluteSellPrice" format={(v) => Number(v || 0).toFixed(3)} isIgnored={ignoredChanges[i]?.has("absoluteSellPrice")} onToggle={toggleFieldChange} className="font-mono" />
+                                    </div>
+                                </td>
+                                <td className="px-4 py-3">
+                                    <DiffCell 
+                                        row={row} 
+                                        rowIndex={i} 
+                                        field="pnlBucket" 
+                                        isIgnored={ignoredChanges[i]?.has("pnlBucket")} 
+                                        onToggle={toggleFieldChange} 
+                                        format={(v) => (
+                                            <span className={`px-2 py-0.5 rounded-full font-bold text-[8px] uppercase ${v === PnLBucket.Realized ? 'bg-blue-100 text-blue-700' : 'bg-amber-100 text-amber-700'}`}>
+                                                {v}
+                                            </span>
+                                        )}
+                                    />
+                                </td>
+                                <td className="px-4 py-3 text-right">
+                                    <div className="flex flex-col gap-1">
+                                        <DiffCell row={row} rowIndex={i} field="reconciledPurchaseCost" format={(v) => v > 0 ? v.toLocaleString() : '-'} isIgnored={ignoredChanges[i]?.has("reconciledPurchaseCost")} onToggle={toggleFieldChange} className="font-mono" />
+                                        <div className="h-px bg-slate-100 my-0.5" />
+                                        <DiffCell row={row} rowIndex={i} field="reconciledSalesRevenue" format={(v) => v > 0 ? v.toLocaleString() : '-'} isIgnored={ignoredChanges[i]?.has("reconciledSalesRevenue")} onToggle={toggleFieldChange} className="font-mono" />
                                     </div>
                                 </td>
                                 <td className="px-4 py-3 text-right">

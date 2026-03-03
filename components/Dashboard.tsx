@@ -6,6 +6,7 @@ import { motion, AnimatePresence } from 'framer-motion';
 import { PnLBreakdown } from './PnLBreakdown';
 import { PnLVarianceExplainer } from './PnLVarianceExplainer';
 import { IndexWeightedPrices } from './IndexWeightedPrices';
+import { AutoScalingText } from './AutoScalingText';
 import { toast } from 'react-hot-toast';
 
 interface DashboardProps {
@@ -299,7 +300,7 @@ export const Dashboard: React.FC<DashboardProps> = ({ profiles, marketData, forw
   const itemVariants = { hidden: { opacity: 0, y: 20 }, visible: { opacity: 1, y: 0 } };
 
   return (
-    <motion.div className="space-y-4 lg:space-y-6 relative" variants={containerVariants} initial="hidden" animate="visible">
+    <motion.div className="flex-1 flex flex-col min-h-0 space-y-4 lg:space-y-6 relative" variants={containerVariants} initial="hidden" animate="visible">
       <div className="flex flex-col xl:flex-row justify-between items-stretch xl:items-center bg-white p-3 rounded-xl border border-slate-200 shadow-sm gap-4">
           <div className="flex flex-col sm:flex-row items-stretch sm:items-center gap-3 w-full lg:w-auto">
               <span className="text-[10px] sm:text-xs font-bold text-slate-500 uppercase tracking-wide px-1">Derived Group:</span>
@@ -619,9 +620,11 @@ const FinancialHeroCard = ({ title, stats, baseline, compareDate, isHero, colorC
                         </div>
                     </div>
                 </div>
-                <p className={`text-2xl sm:text-3xl font-black ${stats.pnl >= 0 ? 'text-emerald-600' : 'text-rose-600'} ${colorClass || ''}`}>
-                    {format(stats.pnl)}
-                </p>
+                <div className={`font-black ${stats.pnl >= 0 ? 'text-emerald-600' : 'text-rose-600'} ${colorClass || ''}`}>
+                    <AutoScalingText maxFontSize={30} minFontSize={14}>
+                        {format(stats.pnl)}
+                    </AutoScalingText>
+                </div>
                 <p className="text-[8px] sm:text-[10px] text-slate-400 mt-1 font-bold uppercase tracking-tight">Market: {compareDate}</p>
             </div>
 
@@ -671,7 +674,11 @@ const StatCard = ({ title, value, prevValue, compareDate, format, suffix, colorC
             <p className={`text-[10px] sm:text-xs font-black uppercase tracking-widest ${isHero ? 'text-indigo-500' : 'text-slate-400'}`}>{title}</p>
             {hint && <span className="text-[8px] sm:text-[9px] font-bold text-slate-300 uppercase bg-slate-100 px-2 py-0.5 rounded-full">{hint}</span>}
           </div>
-          <p className={`text-2xl sm:text-3xl font-black ${colorClass}`}>{displayVal}{suffix}</p>
+          <div className={`font-black ${colorClass}`}>
+            <AutoScalingText maxFontSize={30} minFontSize={14}>
+                {displayVal}{suffix}
+            </AutoScalingText>
+          </div>
           {delta !== null && (
               <div className="flex items-center gap-1.5 mt-2 text-[8px] sm:text-[10px] font-bold">
                   <span className={isPositive ? 'text-emerald-500' : 'text-rose-500'}>{isPositive ? '▲' : '▼'} {format ? format(Math.abs(delta)) : Math.abs(delta).toLocaleString()}</span>

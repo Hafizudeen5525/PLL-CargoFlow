@@ -176,136 +176,176 @@ export const CargoList: React.FC<CargoListProps> = ({
     });
   };
 
-  const handleJarvisImport = (e: React.ChangeEvent<HTMLInputElement>) => {
-    const file = e.target.files?.[0];
-    if (!file) return;
+  const handleJarvisImport = async (e: React.ChangeEvent<HTMLInputElement>) => {
+    const files = e.target.files;
+    if (!files || files.length === 0) return;
+    
     setIsImportingJarvis(true);
-    const loadingToast = toast.loading('Extracting Jarvis Workbook (.xlsm)...');
-    const reader = new FileReader();
-    reader.onload = (evt) => {
-      try {
-        const data = evt.target?.result as string;
-        const workbook = XLSX.read(data, { type: 'binary', cellDates: true });
-        const mergedData: Record<string, Partial<CargoProfile>> = {};
-        
-        const cleanNumeric = (val: any): number => {
-            if (val === undefined || val === null || val === '' || val === '-' || String(val).trim() === '-') return 0;
-            if (typeof val === 'number') return val;
-            const str = String(val).replace(/,/g, '').trim();
-            if (str.endsWith('%')) return parseFloat(str.slice(0, -1)) / 100;
-            const num = parseFloat(str);
-            return isNaN(num) ? 0 : num;
-        };
+    const loadingToast = toast.loading(`Extracting ${files.length} Jarvis Workbook(s)...`);
+    
+    const mergedData: Record<string, Partial<CargoProfile>> = {};
 
-        const extractSheetData = (sheetName: string, mapping: Record<string, string>) => {
-            const sheet = workbook.Sheets[sheetName];
-            if (!sheet) return;
-            const json: any[][] = XLSX.utils.sheet_to_json(sheet, { header: 1, defval: '' });
-            if (json.length === 0) return;
-            
-            let headerRowIndex = -1;
-            for (let i = 0; i < Math.min(json.length, 100); i++) {
-                const row = json[i];
-                if (row.some((cell: any) => String(cell || '').toLowerCase().trim() === 'strategy name')) {
-                    headerRowIndex = i;
-                    break;
-                }
-            }
-            if (headerRowIndex === -1) return;
-            const headersArr = json[headerRowIndex].map((h: any) => String(h || '').toLowerCase().trim());
-            const dataRows = json.slice(headerRowIndex + 1);
+    const cleanNumeric = (val: any): number => {
+        if (val === undefined || val === null || val === '' || val === '-' || String(val).trim() === '-') return 0;
+        if (typeof val === 'number') return val;
+        const str = String(val).replace(/,/g, '').trim();
+        if (str.endsWith('%')) return parseFloat(str.slice(0, -1)) / 100;
+        const num = parseFloat(str);
+        return isNaN(num) ? 0 : num;
+    };
 
-            const seenInSheetCount = new Map<string, number>();
-
-            dataRows.forEach((row: any[]) => {
-                const stratIdx = headersArr.indexOf('strategy name');
-                const stratName = row[stratIdx];
-                if (!stratName || String(stratName).trim() === '') return;
-                
-                let cleanStratName = String(stratName).trim();
-                const count = (seenInSheetCount.get(cleanStratName) || 0) + 1;
-                seenInSheetCount.set(cleanStratName, count);
-
-                let isTier2Leg = count > 1 || cleanStratName.includes('t(') || cleanStratName.endsWith('t');
-                const lookupName = cleanStratName.replace('t(', '(').replace(/t$/, '');
-
-                if (!mergedData[lookupName]) mergedData[lookupName] = { ...EmptyCargoProfile, strategyName: lookupName };
-                
-                if (isTier2Leg) {
-                    mergedData[lookupName].isTieredPricing = true;
-                }
-
-                Object.entries(mapping).forEach(([excelHeader, profileKey]) => {
-                    const idx = headersArr.indexOf(excelHeader.toLowerCase().trim());
-                    if (idx !== -1 && row[idx] !== undefined && row[idx] !== '') {
-                        const rawVal = row[idx];
+    const processFile = (file: File): Promise<void> => {
+        return new Promise((resolve, reject) => {
+            const reader = new FileReader();
+            reader.onload = (evt) => {
+                try {
+                    const data = evt.target?.result as string;
+                    const workbook = XLSX.read(data, { type: 'binary', cellDates: true });
+                    
+                    const extractSheetData = (sheetName: string, mapping: Record<string, string>) => {
+                        const sheet = workbook.Sheets[sheetName];
+                        if (!sheet) return;
+                        const json: any[][] = XLSX.utils.sheet_to_json(sheet, { header: 1, defval: '' });
+                        if (json.length === 0) return;
                         
-                        const isStringData = 
-                            profileKey.toLowerCase().includes('index') || 
-                            profileKey.toLowerCase().includes('monthdef') ||
-                            profileKey.toLowerCase().includes('formula') ||
-                            ['source', 'buyer', 'strategyName', 'manualGroup', 'deliveryDate', 'loadingDate', 'incoterms'].includes(profileKey);
-
-                        const val = isStringData ? String(rawVal).trim() : cleanNumeric(rawVal);
-
-                        if (isTier2Leg && (sheetName === 'Purchase' || sheetName === 'Sales')) {
-                             if (profileKey === 'deliveredVolume') {
-                                 mergedData[lookupName].tier2DeliveredVolume = val as number;
-                             } else if (profileKey === 'loadedVolume') {
-                                 mergedData[lookupName].tier2LoadedVolume = val as number;
-                             } else if (profileKey === 'sellFormula') {
-                                 mergedData[lookupName].tier2SellFormula = val as string;
-                             } else if (profileKey === 'buyFormula') {
-                                 mergedData[lookupName].tier2BuyFormula = val as string;
-                             } else if (profileKey.startsWith('sellPrice') || profileKey.startsWith('buyPrice')) {
-                                 const tier2Key = profileKey.replace('sellPrice', 'tier2SellPrice').replace('buyPrice', 'tier2BuyPrice');
-                                 (mergedData[lookupName] as any)[tier2Key] = val;
-                             }
-                        } else {
-                             if (sheetName === 'Cost' && profileKey === 'reconciledSrcCost') {
-                                (mergedData[lookupName] as any)[profileKey] = ((mergedData[lookupName] as any)[profileKey] || 0) + (val as number);
-                             } else if (rawVal instanceof Date) {
-                                 const adjustedDate = new Date(rawVal.getTime() + (12 * 60 * 60 * 1000));
-                                 const y = adjustedDate.getUTCFullYear();
-                                 const m = String(adjustedDate.getUTCMonth() + 1).padStart(2, '0');
-                                 const d = String(adjustedDate.getUTCDate()).padStart(2, '0');
-                                 (mergedData[lookupName] as any)[profileKey] = `${y}-${m}-${d}`;
-                             } else if (profileKey === 'optimized') {
-                                 mergedData[lookupName].optimized = String(rawVal).toLowerCase().includes('yes') || rawVal === true;
-                             } else {
-                                 (mergedData[lookupName] as any)[profileKey] = val;
-                             }
+                        let headerRowIndex = -1;
+                        for (let i = 0; i < Math.min(json.length, 100); i++) {
+                            const row = json[i];
+                            if (row.some((cell: any) => String(cell || '').toLowerCase().trim() === 'strategy name')) {
+                                headerRowIndex = i;
+                                break;
+                            }
                         }
+                        if (headerRowIndex === -1) return;
+                        const headersArr = json[headerRowIndex].map((h: any) => String(h || '').toLowerCase().trim());
+                        const dataRows = json.slice(headerRowIndex + 1);
+
+                        const seenInSheetCount = new Map<string, number>();
+
+                        dataRows.forEach((row: any[]) => {
+                            const stratIdx = headersArr.indexOf('strategy name');
+                            const stratName = row[stratIdx];
+                            if (!stratName || String(stratName).trim() === '') return;
+                            
+                            let cleanStratName = String(stratName).trim();
+                            const count = (seenInSheetCount.get(cleanStratName) || 0) + 1;
+                            seenInSheetCount.set(cleanStratName, count);
+
+                            let isTier2Leg = count > 1 || cleanStratName.includes('t(') || cleanStratName.endsWith('t');
+                            const lookupName = cleanStratName.replace('t(', '(').replace(/t$/, '');
+
+                            if (!mergedData[lookupName]) mergedData[lookupName] = { ...EmptyCargoProfile, strategyName: lookupName };
+                            
+                            if (isTier2Leg) {
+                                mergedData[lookupName].isTieredPricing = true;
+                            }
+
+                            Object.entries(mapping).forEach(([excelHeader, profileKey]) => {
+                                const idx = headersArr.indexOf(excelHeader.toLowerCase().trim());
+                                if (idx !== -1 && row[idx] !== undefined && row[idx] !== '') {
+                                    const rawVal = row[idx];
+                                    
+                                    const isStringData = 
+                                        profileKey.toLowerCase().includes('index') || 
+                                        profileKey.toLowerCase().includes('monthdef') ||
+                                        profileKey.toLowerCase().includes('formula') ||
+                                        ['source', 'buyer', 'strategyName', 'manualGroup', 'deliveryDate', 'loadingDate', 'incoterms', 'pnlBucket'].includes(profileKey);
+
+                                    let val = isStringData ? String(rawVal).trim() : cleanNumeric(rawVal);
+
+                                    // Special handling for P&L Bucket
+                                    if (profileKey === 'pnlBucket') {
+                                        const bucketStr = String(val).toLowerCase();
+                                        if (bucketStr.includes('realized') && !bucketStr.includes('unrealized')) {
+                                            val = PnLBucket.Realized;
+                                        } else if (bucketStr.includes('unrealized')) {
+                                            val = PnLBucket.Unrealized;
+                                        }
+                                    }
+
+                                    if (isTier2Leg && (sheetName === 'Purchase' || sheetName === 'Sales')) {
+                                         if (profileKey === 'deliveredVolume') {
+                                             mergedData[lookupName].tier2DeliveredVolume = val as number;
+                                         } else if (profileKey === 'loadedVolume') {
+                                             mergedData[lookupName].tier2LoadedVolume = val as number;
+                                         } else if (profileKey === 'sellFormula') {
+                                             mergedData[lookupName].tier2SellFormula = val as string;
+                                         } else if (profileKey === 'buyFormula') {
+                                             mergedData[lookupName].tier2BuyFormula = val as string;
+                                         } else if (profileKey.startsWith('sellPrice') || profileKey.startsWith('buyPrice')) {
+                                             const tier2Key = profileKey.replace('sellPrice', 'tier2SellPrice').replace('buyPrice', 'tier2BuyPrice');
+                                             (mergedData[lookupName] as any)[tier2Key] = val;
+                                         }
+                                    } else {
+                                         // Aggregate reconciled values if multiple lines exist (two-tier pricing in Master Sheet)
+                                         if (['reconciledSrcCost', 'reconciledPurchaseCost', 'reconciledSalesRevenue'].includes(profileKey)) {
+                                            (mergedData[lookupName] as any)[profileKey] = ((mergedData[lookupName] as any)[profileKey] || 0) + (val as number);
+                                         } else if (rawVal instanceof Date) {
+                                             const adjustedDate = new Date(rawVal.getTime() + (12 * 60 * 60 * 1000));
+                                             const y = adjustedDate.getUTCFullYear();
+                                             const m = String(adjustedDate.getUTCMonth() + 1).padStart(2, '0');
+                                             const d = String(adjustedDate.getUTCDate()).padStart(2, '0');
+                                             (mergedData[lookupName] as any)[profileKey] = `${y}-${m}-${d}`;
+                                         } else if (profileKey === 'optimized') {
+                                             mergedData[lookupName].optimized = String(rawVal).toLowerCase().includes('yes') || rawVal === true;
+                                         } else {
+                                             (mergedData[lookupName] as any)[profileKey] = val;
+                                         }
+                                    }
+                                }
+                            });
+                        });
+                    };
+
+                    const purchaseMap: Record<string, string> = {
+                        'Source': 'source', 'No.': 'jarvisNo', 'Buyer': 'buyer', 'Optimized': 'optimized', 'Loading Date': 'loadingDate', 'Loaded Volume': 'loadedVolume', 'Buy Formula': 'buyFormula', 'Buy Price Overall Constant': 'buyPriceOverallConstant'
+                    };
+                    for (let i = 1; i <= 3; i++) {
+                        purchaseMap[`Buy Price ${i} Weightage`] = `buyPrice${i}Weightage`;
+                        purchaseMap[`Buy Price ${i} slope`] = `buyPrice${i}Slope`;
+                        purchaseMap[`Buy Price Index ${i}`] = `buyPriceIndex${i}`;
+                        purchaseMap[`Buy Price ${i} Month Definition`] = `buyPrice${i}MonthDef`;
+                        purchaseMap[`Buy Price ${i} constant`] = `buyPrice${i}Constant`;
                     }
-                });
-            });
-        };
+                    extractSheetData('Purchase', purchaseMap);
 
-        const purchaseMap: Record<string, string> = {
-            'Source': 'source', 'No.': 'jarvisNo', 'Buyer': 'buyer', 'Optimized': 'optimized', 'Loading Date': 'loadingDate', 'Loaded Volume': 'loadedVolume', 'Buy Formula': 'buyFormula', 'Buy Price Overall Constant': 'buyPriceOverallConstant'
-        };
-        for (let i = 1; i <= 3; i++) {
-            purchaseMap[`Buy Price ${i} Weightage`] = `buyPrice${i}Weightage`;
-            purchaseMap[`Buy Price ${i} slope`] = `buyPrice${i}Slope`;
-            purchaseMap[`Buy Price Index ${i}`] = `buyPriceIndex${i}`;
-            purchaseMap[`Buy Price ${i} Month Definition`] = `buyPrice${i}MonthDef`;
-            purchaseMap[`Buy Price ${i} constant`] = `buyPrice${i}Constant`;
+                    const salesMap: Record<string, string> = {
+                        'Buyer': 'buyer', 'Delivery Date': 'deliveryDate', 'Delivered Volume': 'deliveredVolume', 'Sell Formula': 'sellFormula', 'Sell Price Overall Constant': 'sellPriceOverallConstant'
+                    };
+                    for (let i = 1; i <= 3; i++) {
+                        salesMap[`Sell Price ${i} Weightage`] = `sellPrice${i}Weightage`;
+                        salesMap[`Sell Price ${i} slope`] = `sellPrice${i}Slope`;
+                        salesMap[`Sell Price Index ${i}`] = `sellPriceIndex${i}`;
+                        salesMap[`Sell Price ${i} Month Definition`] = `sellPrice${i}MonthDef`;
+                        salesMap[`Sell Price ${i} constant`] = `sellPrice${i}Constant`;
+                    }
+                    extractSheetData('Sales', salesMap);
+
+                    extractSheetData('Cost', { 'Incoterm': 'incoterms', 'SRC': 'reconciledSrcCost' });
+
+                    const masterMap: Record<string, string> = {
+                        'Strategy Name': 'strategyName',
+                        'P&L Bucket': 'pnlBucket',
+                        'Reconciled Purchase Cost': 'reconciledPurchaseCost',
+                        'Reconciled Sales Revenue': 'reconciledSalesRevenue'
+                    };
+                    extractSheetData('Master Sheet', masterMap);
+                    
+                    resolve();
+                } catch (err) {
+                    reject(err);
+                }
+            };
+            reader.onerror = () => reject(new Error(`Failed to read file: ${file.name}`));
+            reader.readAsBinaryString(file);
+        });
+    };
+
+    try {
+        // Process all files sequentially to avoid memory issues with large workbooks
+        for (let i = 0; i < files.length; i++) {
+            await processFile(files[i]);
         }
-        extractSheetData('Purchase', purchaseMap);
-
-        const salesMap: Record<string, string> = {
-            'Buyer': 'buyer', 'Delivery Date': 'deliveryDate', 'Delivered Volume': 'deliveredVolume', 'Sell Formula': 'sellFormula', 'Sell Price Overall Constant': 'sellPriceOverallConstant'
-        };
-        for (let i = 1; i <= 3; i++) {
-            salesMap[`Sell Price ${i} Weightage`] = `sellPrice${i}Weightage`;
-            salesMap[`Sell Price ${i} slope`] = `sellPrice${i}Slope`;
-            salesMap[`Sell Price Index ${i}`] = `sellPriceIndex${i}`;
-            salesMap[`Sell Price ${i} Month Definition`] = `sellPrice${i}MonthDef`;
-            salesMap[`Sell Price ${i} constant`] = `sellPrice${i}Constant`;
-        }
-        extractSheetData('Sales', salesMap);
-
-        extractSheetData('Cost', { 'Incoterm': 'incoterms', 'SRC': 'reconciledSrcCost' });
 
         const processedJarvisRows = Object.values(mergedData).map((parsedFields: any) => {
             const existingMatch = profiles.find((p: CargoProfile) => p.strategyName?.toLowerCase() === parsedFields.strategyName?.toLowerCase());
@@ -340,15 +380,14 @@ export const CargoList: React.FC<CargoListProps> = ({
         setPendingJarvisRows(processedJarvisRows);
         setIsJarvisPreviewOpen(true);
         toast.dismiss(loadingToast);
-      } catch (err) {
+    } catch (err) {
         console.error(err);
-        toast.error('Failed to parse Jarvis Macro workbook');
-      } finally {
+        toast.error('Failed to parse Jarvis Macro workbook(s)');
+        toast.dismiss(loadingToast);
+    } finally {
         setIsImportingJarvis(false);
         if (fileInputRef.current) fileInputRef.current.value = '';
-      }
-    };
-    reader.readAsBinaryString(file);
+    }
   };
 
   const handleFinishJarvisImport = (finalImports: CargoProfile[]) => {
@@ -464,7 +503,7 @@ export const CargoList: React.FC<CargoListProps> = ({
     new Intl.NumberFormat('en-US', { style: 'currency', currency: 'USD', minimumFractionDigits: 3, maximumFractionDigits: 3 }).format(val);
 
   return (
-    <div className="bg-white rounded-xl shadow-sm border border-slate-200 overflow-hidden flex flex-col h-full">
+    <div className="flex-1 flex flex-col min-h-0 bg-white rounded-xl shadow-sm border border-slate-200 overflow-hidden">
       <div className="px-4 lg:px-6 py-3 border-b border-slate-200 flex flex-col lg:flex-row justify-between items-start lg:items-center bg-white gap-4">
         <div className="flex flex-col sm:flex-row items-stretch sm:items-center gap-3 w-full lg:w-auto">
             <div className="flex bg-slate-100 p-1 rounded-lg">
@@ -478,7 +517,7 @@ export const CargoList: React.FC<CargoListProps> = ({
             </div>
         </div>
         <div className="flex items-center gap-2 overflow-x-auto pb-1 sm:pb-0 w-full lg:w-auto custom-scrollbar">
-            <input type="file" accept=".xlsm, .xlsx" onChange={handleJarvisImport} className="hidden" ref={fileInputRef} />
+            <input type="file" accept=".xlsm, .xlsx" multiple onChange={handleJarvisImport} className="hidden" ref={fileInputRef} />
             <button onClick={() => fileInputRef.current?.click()} className="whitespace-nowrap text-[10px] sm:text-xs font-bold text-indigo-600 bg-indigo-50 px-3 py-1.5 rounded-lg border border-indigo-100 hover:bg-indigo-100 transition-colors flex items-center gap-2 shadow-sm">
                 <svg className="w-4 h-4" fill="none" stroke="currentColor" viewBox="0 0 24 24"><path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M4 16v1a3 3 0 003 3h10a3 3 0 003 3h10a3 3 0 003-3v-1m-4-8l-4-4m0 0L8 8m4-4v12" /></svg>
                 Import Jarvis
