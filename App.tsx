@@ -54,9 +54,30 @@ const App: React.FC = () => {
 
   // Load initial data
   useEffect(() => {
-    const saved = localStorage.getItem('cargo_profiles');
-    if (saved) {
-      setProfiles(JSON.parse(saved));
+    const savedProfiles = localStorage.getItem('cargo_profiles');
+    if (savedProfiles) {
+      setProfiles(JSON.parse(savedProfiles));
+    }
+
+    const savedTrms = localStorage.getItem('trms_data');
+    if (savedTrms) {
+      try {
+        const parsed = JSON.parse(savedTrms);
+        // Restore Sets from Arrays in trmsAgg
+        if (parsed.trmsAgg) {
+          Object.keys(parsed.trmsAgg).forEach(key => {
+            if (Array.isArray(parsed.trmsAgg[key].hedgingIndices)) {
+              parsed.trmsAgg[key].hedgingIndices = new Set(parsed.trmsAgg[key].hedgingIndices);
+            }
+          });
+        }
+        setTrmsData(parsed);
+        if (localStorage.getItem('trms_data_is_lite') === 'true') {
+          toast('TRMS raw lines were not saved due to size limits. Aggregated data is available.', { icon: 'ℹ️', duration: 4000 });
+        }
+      } catch (e) {
+        console.error("Failed to load TRMS data from storage", e);
+      }
     }
   }, []);
 
@@ -64,6 +85,47 @@ const App: React.FC = () => {
   useEffect(() => {
     localStorage.setItem('cargo_profiles', JSON.stringify(profiles));
   }, [profiles]);
+
+  // Save TRMS data on change
+  useEffect(() => {
+    if (trmsData.summary.total > 0) {
+      const serializeTrms = (data: ReconciliationData, includeRaw: boolean) => {
+        const toSave = { ...data };
+        if (!includeRaw) {
+          toSave.src = [];
+          toSave.hedging = [];
+          toSave.paper = [];
+        }
+        
+        const trmsAggClone = { ...toSave.trmsAgg };
+        Object.keys(trmsAggClone).forEach(key => {
+          trmsAggClone[key] = { 
+            ...trmsAggClone[key],
+            hedgingIndices: Array.from(trmsAggClone[key].hedgingIndices) as any
+          };
+        });
+        toSave.trmsAgg = trmsAggClone;
+        return JSON.stringify(toSave);
+      };
+
+      try {
+        // Attempt 1: Full Save
+        localStorage.setItem('trms_data', serializeTrms(trmsData, true));
+        localStorage.removeItem('trms_data_is_lite');
+      } catch (e) {
+        console.warn("Full TRMS data too large for localStorage, attempting lite save...", e);
+        try {
+          // Attempt 2: Lite Save (Summary & Aggregated only)
+          localStorage.setItem('trms_data', serializeTrms(trmsData, false));
+          localStorage.setItem('trms_data_is_lite', 'true');
+          toast.success('TRMS data saved (Summary only due to size)', { icon: '⚠️', duration: 3000 });
+        } catch (e2) {
+          console.error("TRMS data even in lite mode exceeds localStorage quota", e2);
+          toast.error('TRMS data too large to persist. It will be lost on refresh.', { duration: 5000 });
+        }
+      }
+    }
+  }, [trmsData]);
 
   // History Helper
   const updateProfiles = useCallback((newProfiles: CargoProfile[] | ((prev: CargoProfile[]) => CargoProfile[])) => {
@@ -334,10 +396,10 @@ const App: React.FC = () => {
             </div>
         </header>
 
-        <div className="flex-1 overflow-y-auto custom-scrollbar p-3 lg:p-6 bg-slate-100">
+        <div className="flex-1 flex flex-col min-h-0 p-3 lg:p-6 bg-slate-100 overflow-y-auto custom-scrollbar">
             <AnimatePresence mode="wait">
                 {view === 'dashboard' ? (
-                    <motion.div key="dashboard" initial={{opacity:0, x:-20}} animate={{opacity:1, x:0}} exit={{opacity:0, x:20}} transition={{duration:0.2}}>
+                    <motion.div key="dashboard" initial={{opacity:0, x:-20}} animate={{opacity:1, x:0}} exit={{opacity:0, x:20}} transition={{duration:0.2}} className="flex-1 flex flex-col min-h-0">
                         <Dashboard 
                             profiles={filteredProfiles} 
                             marketData={marketData}
@@ -349,7 +411,7 @@ const App: React.FC = () => {
                         />
                     </motion.div>
                 ) : view === 'cargos' ? (
-                    <motion.div key="cargos" initial={{opacity:0, x:-20}} animate={{opacity:1, x:0}} exit={{opacity:0, x:20}} className="h-full">
+                    <motion.div key="cargos" initial={{opacity:0, x:-20}} animate={{opacity:1, x:0}} exit={{opacity:0, x:20}} className="flex-1 flex flex-col min-h-0">
                         <CargoList 
                             profiles={filteredProfiles} 
                             onEdit={(p: CargoProfile) => handleEdit(p, 'list')} 
@@ -362,7 +424,7 @@ const App: React.FC = () => {
                         />
                     </motion.div>
                 ) : view === 'exposure' ? (
-                    <motion.div key="exposure" initial={{opacity:0, x:-20}} animate={{opacity:1, x:0}} exit={{opacity:0, x:20}} className="h-full">
+                    <motion.div key="exposure" initial={{opacity:0, x:-20}} animate={{opacity:1, x:0}} exit={{opacity:0, x:20}} className="flex-1 flex flex-col min-h-0">
                          <ExposureView 
                             profiles={filteredProfiles} 
                             onCargoClick={(p: CargoProfile) => handleEdit(p, 'list')}
@@ -371,7 +433,7 @@ const App: React.FC = () => {
                         />
                     </motion.div>
                 ) : view === 'discrepancy' ? (
-                    <motion.div key="discrepancy" initial={{opacity:0, x:-20}} animate={{opacity:1, x:0}} exit={{opacity:0, x:20}} className="h-full">
+                    <motion.div key="discrepancy" initial={{opacity:0, x:-20}} animate={{opacity:1, x:0}} exit={{opacity:0, x:20}} className="w-full">
                          <DiscrepancyCheck 
                             profiles={profiles} 
                             trmsData={trmsData}
