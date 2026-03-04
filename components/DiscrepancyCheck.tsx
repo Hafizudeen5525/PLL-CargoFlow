@@ -3,7 +3,7 @@ import { motion, AnimatePresence } from 'framer-motion';
 import { AutoScalingText } from './AutoScalingText';
 import { toast } from 'react-hot-toast';
 import * as XLSX from 'xlsx';
-import { CargoProfile, PnLBucket, ForwardCurveData } from '../types';
+import { CargoProfile, PnLBucket, ForwardCurveData, ForwardCurve, ForwardCurvePoint } from '../types';
 import { getGroupName, GROUPS } from '../services/calculationService';
 
 export interface TRMSCommodityLeg {
@@ -486,7 +486,7 @@ export const DiscrepancyCheck: React.FC<DiscrepancyCheckProps> = ({ profiles, tr
     if (activeTab === 'curves') {
         const baseHeaders = ['File Name', 'As Of Date', 'Month'];
         const curveIndexes = new Set<string>();
-        trmsData.forwardCurves?.forEach(fc => fc.curves?.forEach(c => curveIndexes.add(c.index)));
+        trmsData.forwardCurves?.forEach((fc: ForwardCurveData) => fc.curves?.forEach((c: ForwardCurve) => curveIndexes.add(c.index)));
         return [...baseHeaders, ...Array.from(curveIndexes)];
     }
     if (!currentRawData || currentRawData.length === 0) return [];
@@ -577,10 +577,10 @@ export const DiscrepancyCheck: React.FC<DiscrepancyCheckProps> = ({ profiles, tr
   const processedData = useMemo(() => {
     if (activeTab === 'curves') {
         const rows: any[] = [];
-        trmsData.forwardCurves?.forEach(fc => {
+        trmsData.forwardCurves?.forEach((fc: ForwardCurveData) => {
             // Get all unique months across all curves in this file
             const months = new Set<string>();
-            fc.curves?.forEach(c => c.points?.forEach(p => months.add(p.month)));
+            fc.curves?.forEach((c: ForwardCurve) => c.points?.forEach((p: ForwardCurvePoint) => months.add(p.month)));
             const sortedMonths = Array.from(months).sort();
 
             sortedMonths.forEach(month => {
@@ -589,8 +589,8 @@ export const DiscrepancyCheck: React.FC<DiscrepancyCheckProps> = ({ profiles, tr
                     'As Of Date': fc.asOfDate,
                     'Month': month
                 };
-                fc.curves?.forEach(c => {
-                    const point = c.points?.find(p => p.month === month);
+                fc.curves?.forEach((c: ForwardCurve) => {
+                    const point = c.points?.find((p: ForwardCurvePoint) => p.month === month);
                     row[c.index] = point ? point.value : null;
                 });
                 rows.push(row);
