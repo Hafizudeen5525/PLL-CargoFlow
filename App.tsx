@@ -10,14 +10,14 @@ import { BulkImportModal } from './components/BulkImportModal';
 import { ExposureView } from './components/ExposureView';
 import { DiscrepancyCheck, ReconciliationData } from './components/DiscrepancyCheck';
 import { CargoProfile, PnLBucket } from './types';
-import { getMarketData, getForwardCurve, recalculateProfile, getPortfolioYear } from './services/calculationService';
+import { getMarketData, getForwardCurve, recalculateProfile, getPortfolioYear, saveForwardCurve } from './services/calculationService';
 
 // Navigation Items
 const NAV_ITEMS = [
   { id: 'dashboard', label: 'Dashboard', icon: 'M4 6a2 2 0 012-2h2a2 2 0 012 2v2a2 2 0 01-2 2H6a2 2 0 01-2-2V6zM14 6a2 2 0 012-2h2a2 2 0 012 2v2a2 2 0 01-2 2h-2a2 2 0 01-2-2V6zM4 16a2 2 0 012-2h2a2 2 0 01-1 2H6a2 2 0 01-2-2v-2zM14 16a2 2 0 012-2h2a2 2 0 01-1 2h-2a2 2 0 01-2-2v-2z' },
   { id: 'cargos', label: 'Cargo List', icon: 'M9 5H7a2 2 0 00-2 2v12a2 2 0 002 2h10a2 2 0 002-2V7a2 2 0 00-2-2h-2M9 5a2 2 0 002 2h2a2 2 0 002-2M9 5a2 2 0 012-2h2a2 2 0 002-2M9 5a2 2 0 012 2h2a2 2 0 012 2' },
   { id: 'exposure', label: 'Exposure View', icon: 'M9 19v-6a2 2 0 00-2-2H5a2 2 0 00-2 2v6a2 2 0 002 2h2a2 2 0 002-2zm0 0V9a2 2 0 012-2h2a2 2 0 012 2v10m-6 0a2 2 0 002 2h2a2 2 0 002-2m0 0V5a2 2 0 012-2h2a2 2 0 012 2v14a2 2 0 002 2h2a2 2 0 002-2v-6a2 2 0 01-2-2h-2a2 2 0 01-2 v6' },
-  { id: 'discrepancy', label: 'TRMS Reconcile', icon: 'M9 5H7a2 2 0 00-2 2v12a2 2 0 002 2h10a2 2 0 002-2V7a2 2 0 00-2-2h-2M9 5a2 2 0 002 2h2a2 2 0 002-2M9 5a2 2 0 012-2h2a2 2 0 002-2M9 5a2 2 0 012 2h2a2 2 0 012 2m-3 7h3m-3 4h3m-6-4h.01M9 16h.01' },
+  { id: 'discrepancy', label: 'Reconciliation', icon: 'M9 5H7a2 2 0 00-2 2v12a2 2 0 002 2h10a2 2 0 002-2V7a2 2 0 00-2-2h-2M9 5a2 2 0 002 2h2a2 2 0 002-2M9 5a2 2 0 012-2h2a2 2 0 002-2M9 5a2 2 0 012 2h2a2 2 0 012 2m-3 7h3m-3 4h3m-6-4h.01M9 16h.01' },
 ];
 
 const MAX_HISTORY = 50;
@@ -41,6 +41,7 @@ const App: React.FC = () => {
     hedging: [],
     paper: [],
     trmsAgg: {}, 
+    forwardCurves: [],
     uniqueValues: { src: {}, hedging: {}, paper: {} },
     summary: { total: 0, src: 0, hedging: 0, paper: 0 }
   });
@@ -63,15 +64,26 @@ const App: React.FC = () => {
     if (savedTrms) {
       try {
         const parsed = JSON.parse(savedTrms);
+        // Ensure all required fields exist for backward compatibility
+        const merged = {
+          src: [],
+          hedging: [],
+          paper: [],
+          trmsAgg: {},
+          forwardCurves: [],
+          uniqueValues: { src: {}, hedging: {}, paper: {} },
+          summary: { total: 0, src: 0, hedging: 0, paper: 0 },
+          ...parsed
+        };
         // Restore Sets from Arrays in trmsAgg
-        if (parsed.trmsAgg) {
-          Object.keys(parsed.trmsAgg).forEach(key => {
-            if (Array.isArray(parsed.trmsAgg[key].hedgingIndices)) {
-              parsed.trmsAgg[key].hedgingIndices = new Set(parsed.trmsAgg[key].hedgingIndices);
+        if (merged.trmsAgg) {
+          Object.keys(merged.trmsAgg).forEach(key => {
+            if (merged.trmsAgg[key] && Array.isArray(merged.trmsAgg[key].hedgingIndices)) {
+              merged.trmsAgg[key].hedgingIndices = new Set(merged.trmsAgg[key].hedgingIndices);
             }
           });
         }
-        setTrmsData(parsed);
+        setTrmsData(merged as ReconciliationData);
         if (localStorage.getItem('trms_data_is_lite') === 'true') {
           toast('TRMS raw lines were not saved due to size limits. Aggregated data is available.', { icon: 'ℹ️', duration: 4000 });
         }
@@ -126,6 +138,36 @@ const App: React.FC = () => {
       }
     }
   }, [trmsData]);
+
+  // Populate Forward Curves from Jarvis data
+  useEffect(() => {
+    if (trmsData.forwardCurves && trmsData.forwardCurves.length > 0) {
+      let updated = false;
+      trmsData.forwardCurves.forEach(fcData => {
+        const monthMap: Record<string, Record<string, number>> = {};
+        fcData.curves.forEach(curve => {
+          curve.points.forEach(point => {
+            if (!monthMap[point.month]) monthMap[point.month] = {};
+            monthMap[point.month][curve.index] = point.value;
+          });
+        });
+        const rows = Object.entries(monthMap).map(([month, prices]) => ({
+          month,
+          prices
+        })).sort((a, b) => a.month.localeCompare(b.month));
+
+        if (rows.length > 0) {
+          saveForwardCurve(fcData.asOfDate, rows);
+          updated = true;
+        }
+      });
+      
+      if (updated) {
+        handleMarketRefresh();
+        toast.success('Forward Curves populated from Jarvis data', { icon: '📈' });
+      }
+    }
+  }, [trmsData.forwardCurves]);
 
   // History Helper
   const updateProfiles = useCallback((newProfiles: CargoProfile[] | ((prev: CargoProfile[]) => CargoProfile[])) => {
@@ -208,7 +250,7 @@ const App: React.FC = () => {
   const handleBulkUpdate = (ids: Set<string>, updates: Partial<CargoProfile>) => {
     updateProfiles((prev: CargoProfile[]) => prev.map((p: CargoProfile) => {
       if (ids.has(p.id)) {
-        return recalculateProfile({ ...p, ...updates }, p.pnlBucket !== PnLBucket.Realized) as CargoProfile;
+        return recalculateProfile({ ...p, ...updates }, true) as CargoProfile;
       }
       return p;
     }));
@@ -233,7 +275,7 @@ const App: React.FC = () => {
     setMarketData(getMarketData());
     setForwardCurve(getForwardCurve());
     updateProfiles((prev: CargoProfile[]) => prev.map((p: CargoProfile) => 
-      p.pnlBucket === PnLBucket.Realized ? p : (recalculateProfile(p, true) as CargoProfile)
+      recalculateProfile(p, true) as CargoProfile
     ));
   };
 
