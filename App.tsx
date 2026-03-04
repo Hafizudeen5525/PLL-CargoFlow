@@ -9,7 +9,7 @@ import { ForwardCurveModal } from './components/ForwardCurveModal';
 import { BulkImportModal } from './components/BulkImportModal';
 import { ExposureView } from './components/ExposureView';
 import { DiscrepancyCheck, ReconciliationData } from './components/DiscrepancyCheck';
-import { CargoProfile, PnLBucket } from './types';
+import { CargoProfile, PnLBucket, ForwardCurveData, ForwardCurve, ForwardCurvePoint } from './types';
 import { getMarketData, getForwardCurve, recalculateProfile, getPortfolioYear, saveForwardCurve } from './services/calculationService';
 
 // Navigation Items
@@ -143,10 +143,10 @@ const App: React.FC = () => {
   useEffect(() => {
     if (trmsData.forwardCurves && trmsData.forwardCurves.length > 0) {
       let updated = false;
-      trmsData.forwardCurves.forEach(fcData => {
+      trmsData.forwardCurves.forEach((fcData: ForwardCurveData) => {
         const monthMap: Record<string, Record<string, number>> = {};
-        fcData.curves.forEach(curve => {
-          curve.points.forEach(point => {
+        fcData.curves.forEach((curve: ForwardCurve) => {
+          curve.points.forEach((point: ForwardCurvePoint) => {
             if (!monthMap[point.month]) monthMap[point.month] = {};
             monthMap[point.month][curve.index] = point.value;
           });
