@@ -441,7 +441,7 @@ function formatMonthStr(dateStr: string): string {
 export function recalculateProfile(p: Partial<CargoProfile>, useMarket: boolean = true, curveDate?: string): Partial<CargoProfile> {
     const up: CargoProfile = { ...EmptyCargoProfile, ...(p as any), id: (p as any).id || '' };
     
-    if (up.pnlBucket !== PnLBucket.Realized && useMarket) {
+    if (useMarket) {
         if (!up.isBuyPriceManual) {
             const rawBuyPrice = calculateLegPrice(up, 'buy', curveDate);
             up.absoluteBuyPrice = applyRounding(rawBuyPrice, up.buyPriceRounding);
