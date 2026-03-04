@@ -173,8 +173,7 @@ export const BulkImportModal: React.FC<BulkImportModalProps> = ({ existingProfil
                     }
                 }
 
-                const isRealized = merged.pnlBucket === PnLBucket.Realized;
-                finalProfile = recalculateProfile(merged, !isRealized) as CargoProfile;
+                finalProfile = recalculateProfile(merged, true) as CargoProfile;
                 status = 'Update';
 
                 // Detect changes

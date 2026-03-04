@@ -615,7 +615,7 @@ export const CargoForm: React.FC<CargoFormProps> = ({ initialData, source = 'lis
                 >
                     <div className="p-4 border-b border-slate-100 flex justify-between items-center bg-slate-50/50">
                         <div>
-                            <h3 className="text-lg font-bold text-slate-800">TRMS Raw Data Extraction</h3>
+                            <h3 className="text-lg font-bold text-slate-800">TRMS & Jarvis Data Extraction</h3>
                             <p className="text-xs text-slate-500 font-medium uppercase tracking-wider">Strategy: {formData.strategyName}</p>
                         </div>
                         <button onClick={() => setShowTrmsModal(false)} className="p-2 hover:bg-slate-200 rounded-full transition-colors">

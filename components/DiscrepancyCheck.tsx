@@ -1,9 +1,9 @@
-import React, { useState, useMemo, useRef, useEffect, useCallback } from 'react';
+import React, { useState, useMemo, useRef, useEffect, useCallback, memo } from 'react';
 import { motion, AnimatePresence } from 'framer-motion';
 import { AutoScalingText } from './AutoScalingText';
 import { toast } from 'react-hot-toast';
 import * as XLSX from 'xlsx';
-import { CargoProfile, PnLBucket } from '../types';
+import { CargoProfile, PnLBucket, ForwardCurveData } from '../types';
 import { getGroupName, GROUPS } from '../services/calculationService';
 
 export interface TRMSCommodityLeg {
@@ -13,6 +13,8 @@ export interface TRMSCommodityLeg {
     startDate: string;
     endDate: string;
     priceStatus: string;
+    settlementType: string;
+    valueUSD: number;
 }
 
 export interface TRMSSrcLeg {
@@ -32,6 +34,8 @@ export interface ReconciliationRow {
         src: number;
         loadingDate: string;
         deliveryDate: string;
+        volumeType: string;
+        priceStatus: string;
     };
     trms: {
         buyLegs: TRMSCommodityLeg[];
@@ -55,7 +59,7 @@ export interface TRMSAggregation {
         srcLegs: TRMSSrcLeg[];
         hedgingPnL: number;
         hedgingTrades: number;
-        hedgingIndices: Set<string>;
+        hedgingIndices: string[];
         loadingDate: string;
         deliveryDate: string;
         volumeType: string;
@@ -69,6 +73,7 @@ export interface ReconciliationData {
     hedging: any[];
     paper: any[];
     trmsAgg: TRMSAggregation;
+    forwardCurves: ForwardCurveData[];
     uniqueValues: Record<string, Record<string, any[]>>;
     summary: {
         total: number;
@@ -90,7 +95,7 @@ type SortConfig = {
   direction: 'asc' | 'desc';
 };
 
-type TRMSTab = 'reconcile' | 'src' | 'hedging' | 'paper';
+type TRMSTab = 'reconcile' | 'src' | 'hedging' | 'paper' | 'curves';
 
 const ROW_HEIGHT = 140; 
 const VISIBLE_ROWS = 40; 
@@ -222,6 +227,13 @@ export const DiscrepancyCheck: React.FC<DiscrepancyCheckProps> = ({ profiles, tr
     };
   }, []);
 
+  const [scrollTop, setScrollTop] = useState(0);
+
+  const handleScroll = (e: React.UIEvent<HTMLDivElement>) => {
+    setScrollTop(e.currentTarget.scrollTop);
+    handleSyncScroll('bottom');
+  };
+
   const handleSyncScroll = (source: 'top' | 'bottom') => {
     const top = topScrollRef.current;
     const bottom = tableContainerRef.current;
@@ -291,138 +303,124 @@ export const DiscrepancyCheck: React.FC<DiscrepancyCheckProps> = ({ profiles, tr
   }, [activeTab]);
 
   const handleFileUpload = (e: React.ChangeEvent<HTMLInputElement>) => {
-    const file = e.target.files?.[0];
-    if (!file) return;
+    const files = e.target.files;
+    if (!files || files.length === 0) return;
+    
     setIsParsing(true);
-    const loadingToast = toast.loading('Extracting TRMS Data...');
-    const reader = new FileReader();
-    reader.onload = (evt) => {
-      try {
-        const bstr = evt.target?.result;
-        const wb = XLSX.read(bstr, { type: 'binary', cellDates: true });
-        const ws = wb.Sheets[wb.SheetNames[0]];
-        const rawData = XLSX.utils.sheet_to_json(ws);
-        const srcRows: any[] = [], hedgingRows: any[] = [], paperRows: any[] = [], trmsAgg: TRMSAggregation = {};
-        
-        rawData.forEach((row: any) => {
-          const rawY = row['Plsb Year Bucket'];
-          let y = typeof rawY === 'number' ? rawY : parseInt(String(rawY || '').replace(/[^0-9]/g, ''));
-          if (isNaN(y) || y < 2025) return;
-          
-          const sName = String(row['Strategy Name'] || '').trim();
-          if (!sName || sName.includes("GLNG") || sName.includes("CSPA")) return;
-          
-          if (!trmsAgg[sName]) {
-              trmsAgg[sName] = { 
-                  commodityLegs: [], 
-                  srcValue: 0, 
-                  srcLegs: [],
-                  hedgingPnL: 0,
-                  hedgingTrades: 0,
-                  hedgingIndices: new Set(),
-                  loadingDate: '',
-                  deliveryDate: '',
-                  volumeType: 'Estimate',
-                  priceStatus: 'Estimate',
-                  commodityValue: 0
-              };
-          }
-
-          const rowVolType = String(row['Volume Type'] || 'Estimate');
-          if (rowVolType === 'Actual') {
-              trmsAgg[sName].volumeType = 'Actual';
-          }
-
-          const rowPriceStatus = String(row['Price Status'] || 'Estimate');
-          if (rowPriceStatus === 'Fixed') {
-              trmsAgg[sName].priceStatus = 'Fixed';
-          }
-          
-          const getRowValue = (keys: string[]) => {
-              for (const k of keys) {
-                  if (row[k] !== undefined) {
-                      const v = row[k];
-                      if (typeof v === 'number') return v;
-                      if (typeof v === 'string') return parseFloat(v.replace(/[^0-9.-]/g, '')) || 0;
-                      return Number(v) || 0;
-                  }
-              }
-              return 0;
-          };
-
-          const cType = String(row['Cflow Type'] || '').trim();
-          const cTypeLower = cType.toLowerCase();
-          const iPort = String(row['Internal Portfolio'] || '').trim();
-          const valUSD = getRowValue(['Base_Total_Value_USD', 'Base Total Value USD', 'Total_Value_USD', 'Total Value USD', 'Base_Total_Value', 'Total_Value']);
-          
-          if (cTypeLower === "commodity" || cTypeLower === "physical" || cTypeLower === "base value" || cTypeLower === "cargo value") {
-              trmsAgg[sName].commodityValue += valUSD;
-          }
-          const pnlChange = Number(row['Change_in_Total_PnL'] || 0);
-          const ref = String(row['Reference'] || '');
-
-          const formatDate = (val: any) => {
-              if (val instanceof Date) return val.toISOString().split('T')[0];
-              return String(val || '');
-          };
-
-          const sDate = formatDate(row['Start Date'] || row['Comm Window Start Date']);
-          const eDate = formatDate(row['End Date'] || row['Comm Window End Date']);
-          
-          if (cTypeLower.includes("src") || cTypeLower.includes("shipping")) {
-              const absVal = Math.abs(valUSD);
-              trmsAgg[sName].srcValue += absVal;
-              trmsAgg[sName].srcLegs.push({ 
-                  value: absVal, 
-                  description: String(row['Cflow Type'] || 'SRC') 
-              });
-          } else if (cTypeLower === "commodity" || cTypeLower === "physical") {
-              const buySell = String(row['Buy_Sell'] || '').trim();
-              const priceStatus = String(row['Price Status'] || 'Unknown');
-              trmsAgg[sName].commodityLegs.push({ 
-                  price: Number(row['Price'] || 0), 
-                  vol: Math.abs(Number(row['Volume'] || 0)), 
-                  buySell,
-                  startDate: sDate,
-                  endDate: eDate,
-                  priceStatus
-              });
-              if (buySell === 'Buy' && sDate) trmsAgg[sName].loadingDate = sDate;
-              if (buySell === 'Sell' && eDate) trmsAgg[sName].deliveryDate = eDate;
-          }
-
-          if (iPort === "Hedging LNG") {
-              trmsAgg[sName].hedgingPnL += pnlChange;
-              trmsAgg[sName].hedgingTrades += 1;
-              trmsAgg[sName].hedgingIndices.add(extractIndexFromRef(ref));
-          }
-          
-          const cleanRow: any = {};
-          WHITELIST_COLUMNS.forEach(col => {
-            if (row[col] !== undefined) {
-              if (row[col] instanceof Date) { 
-                  const d = row[col]; 
-                  cleanRow[col] = `${d.getUTCFullYear()}-${String(d.getUTCMonth()+1).padStart(2,'0')}-${String(d.getUTCDate()).padStart(2,'0')}`; 
-              } else cleanRow[col] = row[col];
-            }
-          });
-          
-          if (cType === "SRC- Shipping Related Cost") srcRows.push(cleanRow);
-          if (iPort === "Hedging LNG") hedgingRows.push(cleanRow);
-          if (iPort === "DH LNG" || iPort === "DFT LNG") paperRows.push(cleanRow);
-        });
-        
-        onTrmsUpload({ src: srcRows, hedging: hedgingRows, paper: paperRows, trmsAgg, uniqueValues: {}, summary: { total: rawData.length, src: srcRows.length, hedging: hedgingRows.length, paper: paperRows.length } });
-        toast.success(`TRMS Data Filtered.`, { id: loadingToast });
-      } catch { toast.error('Excel Parsing Failed', { id: loadingToast }); }
-      finally { setIsParsing(false); }
+    const loadingToast = toast.loading(`Extracting TRMS & Jarvis Data from ${files.length} file(s)...`);
+    
+    let processedFiles = 0;
+    const aggregatedData: ReconciliationData = {
+      src: [],
+      hedging: [],
+      paper: [],
+      trmsAgg: {},
+      forwardCurves: [],
+      uniqueValues: {},
+      summary: { total: 0, src: 0, hedging: 0, paper: 0 }
     };
-    reader.readAsBinaryString(file);
+
+    const processFile = (file: File) => {
+      const reader = new FileReader();
+      reader.onload = (evt) => {
+        const bstr = evt.target?.result;
+        const worker = new Worker(new URL('../services/excelWorker.ts', import.meta.url), { type: 'module' });
+        
+        worker.onmessage = (e) => {
+          const result = e.data;
+          if (result.success) {
+            // Aggregate data
+            aggregatedData.src.push(...result.src);
+            aggregatedData.hedging.push(...result.hedging);
+            aggregatedData.paper.push(...result.paper);
+            
+            // Merge trmsAgg
+            Object.entries(result.trmsAgg).forEach(([key, value]) => {
+              const incoming = value as any;
+              if (!aggregatedData.trmsAgg[key]) {
+                aggregatedData.trmsAgg[key] = incoming;
+              } else {
+                const existing = aggregatedData.trmsAgg[key];
+                existing.commodityLegs.push(...incoming.commodityLegs);
+                existing.srcLegs.push(...incoming.srcLegs);
+                existing.srcValue += incoming.srcValue;
+                existing.hedgingPnL += incoming.hedgingPnL;
+                existing.hedgingTrades += incoming.hedgingTrades;
+                incoming.hedgingIndices.forEach((idx: string) => {
+                  if (!existing.hedgingIndices.includes(idx)) {
+                    existing.hedgingIndices.push(idx);
+                  }
+                });
+                existing.commodityValue += incoming.commodityValue;
+                if (incoming.volumeType === 'Actual') existing.volumeType = 'Actual';
+                if (incoming.priceStatus === 'Fixed') existing.priceStatus = 'Fixed';
+              }
+            });
+
+            if (result.forwardCurve) {
+              aggregatedData.forwardCurves.push({
+                ...result.forwardCurve,
+                fileName: file.name
+              });
+            }
+
+            aggregatedData.summary.total += result.summary.total;
+            aggregatedData.summary.src += result.summary.src;
+            aggregatedData.summary.hedging += result.summary.hedging;
+            aggregatedData.summary.paper += result.summary.paper;
+          }
+
+          processedFiles++;
+          worker.terminate();
+
+          if (processedFiles === files.length) {
+            onTrmsUpload(aggregatedData);
+            toast.success(`Data from ${files.length} file(s) aggregated.`, { id: loadingToast });
+            setIsParsing(false);
+          }
+        };
+
+        worker.onerror = (err) => {
+          console.error('Worker error:', err);
+          processedFiles++;
+          if (processedFiles === files.length) {
+            onTrmsUpload(aggregatedData);
+            setIsParsing(false);
+          }
+          worker.terminate();
+        };
+
+        worker.postMessage({ 
+          data: bstr, 
+          whitelistColumns: WHITELIST_COLUMNS,
+          priorityColumns: PRIORITY_COLUMNS
+        });
+      };
+      reader.readAsBinaryString(file);
+    };
+
+    Array.from(files).forEach(processFile);
   };
 
   const reconciliationData = useMemo(() => {
     return profiles.map(p => {
         const trms = trmsData.trmsAgg[p.strategyName];
+        let buyLegs = trms?.commodityLegs?.filter(l => l.buySell === 'Buy') || [];
+        let sellLegs = trms?.commodityLegs?.filter(l => l.buySell === 'Sell') || [];
+
+        // If SN has both Buy and Sell legs, drop Physical Settlement rows
+        if (buyLegs.length > 0 && sellLegs.length > 0) {
+            buyLegs = buyLegs.filter(l => l.settlementType !== 'Physical Settlement');
+            sellLegs = sellLegs.filter(l => l.settlementType !== 'Physical Settlement');
+        }
+
+        const isAppRealized = p.pnlBucket === PnLBucket.Realized;
+        const trmsVolType = trms?.volumeType || 'N/A';
+        const trmsPriceStatus = trms?.priceStatus || 'N/A';
+        
+        // Recalculate commodity value if filtered
+        const trmsCommodityValue = trms ? [...buyLegs, ...sellLegs].reduce((acc, l) => acc + l.valueUSD, 0) : 0;
+
         const row: ReconciliationRow = {
             strategyName: p.strategyName, foundInTrms: !!trms, profileId: p.id,
             app: { 
@@ -432,19 +430,21 @@ export const DiscrepancyCheck: React.FC<DiscrepancyCheckProps> = ({ profiles, tr
                 sellVol: p.deliveredVolume || 0, 
                 src: p.reconciledSrcCost || 0,
                 loadingDate: p.loadingDate || '',
-                deliveryDate: p.deliveryDate || ''
+                deliveryDate: p.deliveryDate || '',
+                volumeType: isAppRealized ? 'Actual' : 'Estimate',
+                priceStatus: isAppRealized ? 'Fixed' : 'Estimate'
             },
             trms: { 
-                buyLegs: trms?.commodityLegs.filter(l => l.buySell === 'Buy') || [], 
-                sellLegs: trms?.commodityLegs.filter(l => l.buySell === 'Sell') || [], 
+                buyLegs, 
+                sellLegs, 
                 src: trms?.srcValue || 0,
                 srcLegs: trms?.srcLegs || [],
                 loadingDate: trms?.loadingDate || '',
                 deliveryDate: trms?.deliveryDate || '',
-                volumeType: trms?.volumeType || 'N/A',
-                priceStatus: trms?.priceStatus || 'N/A',
-                commodityValue: trms?.commodityValue || 0,
-                trmsRealized: trms ? (trms.commodityLegs.some(l => l.buySell === 'Sell' && l.priceStatus === 'Fixed') && trms.volumeType === 'Actual') : false
+                volumeType: trmsVolType,
+                priceStatus: trmsPriceStatus,
+                commodityValue: trmsCommodityValue,
+                trmsRealized: trms ? (sellLegs.some(l => l.priceStatus === 'Fixed') && trmsVolType === 'Actual') : false
             },
             discrepancies: new Set()
         };
@@ -470,7 +470,11 @@ export const DiscrepancyCheck: React.FC<DiscrepancyCheckProps> = ({ profiles, tr
     });
   }, [profiles, trmsData.trmsAgg]);
 
-  const currentRawData = useMemo(() => activeTab === 'reconcile' ? reconciliationData : trmsData[activeTab], [activeTab, trmsData, reconciliationData]);
+  const currentRawData = useMemo(() => {
+    if (activeTab === 'reconcile') return reconciliationData;
+    if (activeTab === 'curves') return trmsData.forwardCurves;
+    return trmsData[activeTab as keyof ReconciliationData] as any[];
+  }, [activeTab, trmsData, reconciliationData]);
 
   const headers = useMemo(() => {
     if (activeTab === 'reconcile') {
@@ -479,7 +483,13 @@ export const DiscrepancyCheck: React.FC<DiscrepancyCheckProps> = ({ profiles, tr
             'Purchase Volume', 'Sales Price', 'Sales Volume', 'SRC Components', 'PnL Sync', 'Value Sync'
         ];
     }
-    if (currentRawData.length === 0) return [];
+    if (activeTab === 'curves') {
+        const baseHeaders = ['File Name', 'As Of Date', 'Month'];
+        const curveIndexes = new Set<string>();
+        trmsData.forwardCurves?.forEach(fc => fc.curves?.forEach(c => curveIndexes.add(c.index)));
+        return [...baseHeaders, ...Array.from(curveIndexes)];
+    }
+    if (!currentRawData || currentRawData.length === 0) return [];
     return Object.keys(currentRawData[0]).sort((a, b) => {
         const iA = PRIORITY_COLUMNS.indexOf(a), iB = PRIORITY_COLUMNS.indexOf(b);
         if (iA !== -1 && iB !== -1) return iA - iB;
@@ -565,6 +575,37 @@ export const DiscrepancyCheck: React.FC<DiscrepancyCheckProps> = ({ profiles, tr
   }, [headers, activeTab, currentRawData]);
 
   const processedData = useMemo(() => {
+    if (activeTab === 'curves') {
+        const rows: any[] = [];
+        trmsData.forwardCurves?.forEach(fc => {
+            // Get all unique months across all curves in this file
+            const months = new Set<string>();
+            fc.curves?.forEach(c => c.points?.forEach(p => months.add(p.month)));
+            const sortedMonths = Array.from(months).sort();
+
+            sortedMonths.forEach(month => {
+                const row: any = {
+                    'File Name': fc.fileName,
+                    'As Of Date': fc.asOfDate,
+                    'Month': month
+                };
+                fc.curves?.forEach(c => {
+                    const point = c.points?.find(p => p.month === month);
+                    row[c.index] = point ? point.value : null;
+                });
+                rows.push(row);
+            });
+        });
+
+        let result = rows;
+        if (debouncedSearch) {
+            const lower = debouncedSearch.toLowerCase();
+            result = result.filter(r => Object.values(r).some(v => String(v).toLowerCase().includes(lower)));
+        }
+        // Apply filters if any (though curves might not need complex filtering yet)
+        return result;
+    }
+
     let result = [...currentRawData];
     if (debouncedSearch) {
       const lower = debouncedSearch.toLowerCase();
@@ -658,6 +699,51 @@ export const DiscrepancyCheck: React.FC<DiscrepancyCheckProps> = ({ profiles, tr
     }
   };
 
+  const handleDownloadReport = () => {
+    if (processedData.length === 0) {
+      toast.error("No data available to download.");
+      return;
+    }
+
+    const reportData = processedData.map((row: any) => {
+      if (activeTab === 'reconcile') {
+        const r = row as ReconciliationRow;
+        return {
+          'Strategy Name': r.strategyName,
+          'Matched in TRMS': r.foundInTrms ? 'Yes' : 'No',
+          'App Loading Date': r.app.loadingDate,
+          'TRMS Loading Date': r.trms.loadingDate,
+          'App Delivery Date': r.app.deliveryDate,
+          'TRMS Delivery Date': r.trms.deliveryDate,
+          'App Volume Type': r.app.volumeType,
+          'TRMS Volume Type': r.trms.volumeType,
+          'App Price Status': r.app.priceStatus,
+          'TRMS Price Status': r.trms.priceStatus,
+          'App Purchase Price': r.app.buyPrice,
+          'TRMS Purchase Price': r.trms.buyLegs.reduce((acc, l) => acc + l.price, 0) / (r.trms.buyLegs.length || 1),
+          'App Purchase Volume': r.app.buyVol,
+          'TRMS Purchase Volume': r.trms.buyLegs.reduce((acc, l) => acc + l.vol, 0),
+          'App Sales Price': r.app.sellPrice,
+          'TRMS Sales Price': r.trms.sellLegs.reduce((acc, l) => acc + l.price, 0) / (r.trms.sellLegs.length || 1),
+          'App Sales Volume': r.app.sellVol,
+          'TRMS Sales Volume': r.trms.sellLegs.reduce((acc, l) => acc + l.vol, 0),
+          'App SRC Cost': r.app.src,
+          'TRMS SRC Cost': r.trms.src,
+          'App Physical P&L': r.app.sellPrice * r.app.sellVol - r.app.buyPrice * r.app.buyVol - r.app.src,
+          'TRMS Base Value': r.trms.commodityValue,
+          'Discrepancies': Array.from(r.discrepancies).join(', ') || 'None'
+        };
+      }
+      return row;
+    });
+
+    const ws = XLSX.utils.json_to_sheet(reportData);
+    const wb = XLSX.utils.book_new();
+    XLSX.utils.book_append_sheet(wb, ws, "Reconciliation Report");
+    XLSX.writeFile(wb, `TRMS_Reconciliation_Report_${new Date().toISOString().split('T')[0]}.xlsx`);
+    toast.success("Report downloaded successfully.");
+  };
+
   const formatUSD = (val: number) => new Intl.NumberFormat('en-US', { style: 'currency', currency: 'USD', maximumFractionDigits: 0 }).format(val);
 
   const stats = useMemo(() => {
@@ -692,13 +778,23 @@ export const DiscrepancyCheck: React.FC<DiscrepancyCheckProps> = ({ profiles, tr
           <TabButton active={activeTab === 'src'} onClick={() => setActiveTab('src')} label="SRC Raw Lines" count={trmsData.summary.src} color="indigo" />
           <TabButton active={activeTab === 'hedging'} onClick={() => setActiveTab('hedging')} label="Hedging Lines" count={trmsData.summary.hedging} color="emerald" />
           <TabButton active={activeTab === 'paper'} onClick={() => setActiveTab('paper')} label="DH/DFT Lines" count={trmsData.summary.paper} color="amber" />
+          <TabButton active={activeTab === 'curves'} onClick={() => setActiveTab('curves')} label="Forward Curves (Jarvis)" count={trmsData.forwardCurves?.length || 0} color="indigo" />
       </div>
 
       <div className="h-[2000px] bg-white rounded-xl border border-slate-200 shadow-sm overflow-hidden flex flex-col">
         <div className="p-3 border-b border-slate-100 bg-slate-50/50 flex flex-col md:flex-row justify-between items-center gap-3 flex-shrink-0">
-          <div className="relative w-full md:w-80">
-            <input type="text" placeholder={`Search strategy...`} value={searchTerm} onChange={(e) => setSearchTerm(e.target.value)} className="block w-full pl-10 pr-3 py-2 border border-slate-300 rounded-lg text-xs font-medium focus:ring-2 focus:ring-indigo-500/20" />
-            <svg className="absolute left-3 top-2.5 h-4 w-4 text-slate-400" fill="none" stroke="currentColor" viewBox="0 0 24 24"><path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M21 21l-6-6m2-5a7 7 0 11-14 0 7 7 0 0114 0z" /></svg>
+          <div className="flex items-center gap-3 w-full md:w-auto">
+            <div className="relative w-full md:w-80">
+              <input type="text" placeholder={`Search strategy...`} value={searchTerm} onChange={(e) => setSearchTerm(e.target.value)} className="block w-full pl-10 pr-3 py-2 border border-slate-300 rounded-lg text-xs font-medium focus:ring-2 focus:ring-indigo-500/20" />
+              <svg className="absolute left-3 top-2.5 h-4 w-4 text-slate-400" fill="none" stroke="currentColor" viewBox="0 0 24 24"><path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M21 21l-6-6m2-5a7 7 0 11-14 0 7 7 0 0114 0z" /></svg>
+            </div>
+            <button 
+              onClick={handleDownloadReport}
+              className="px-4 py-2 bg-white border border-slate-200 text-slate-700 text-xs font-bold rounded-lg hover:bg-slate-50 hover:border-slate-300 transition-all flex items-center gap-2 shadow-sm"
+            >
+              <svg className="w-4 h-4 text-emerald-600" fill="none" stroke="currentColor" viewBox="0 0 24 24"><path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M12 10v6m0 0l-3-3m3 3l3-3m2 8H7a2 2 0 01-2-2V5a2 2 0 012-2h5.586a1 1 0 01.707.293l5.414 5.414a1 1 0 01.293.707V19a2 2 0 01-2 2z" /></svg>
+              Download Report
+            </button>
           </div>
           <div className="text-[10px] text-slate-400 uppercase font-bold flex gap-4"><span>* Comparison excludes PLSB &lt; 2025</span></div>
         </div>
@@ -716,7 +812,7 @@ export const DiscrepancyCheck: React.FC<DiscrepancyCheckProps> = ({ profiles, tr
         
         <div 
           ref={tableContainerRef}
-          onScroll={() => handleSyncScroll('bottom')}
+          onScroll={handleScroll}
           onMouseDown={handleTableMouseDown}
           onContextMenu={(e) => { if (dragMovedRef.current) e.preventDefault(); }}
           className="flex-1 overflow-auto custom-scrollbar relative bg-slate-50/20"
@@ -855,137 +951,33 @@ export const DiscrepancyCheck: React.FC<DiscrepancyCheckProps> = ({ profiles, tr
                 )}
               </div>
               <div className="flex flex-col">
-                {processedData.map((row: any, i) => {
-                  const r = row as ReconciliationRow;
+                {(() => {
+                  const currentRowHeight = activeTab === 'reconcile' ? 140 : 48;
+                  const startIndex = Math.max(0, Math.floor(scrollTop / currentRowHeight) - BUFFER_ROWS);
+                  const endIndex = Math.min(processedData.length, Math.ceil((scrollTop + 2000) / currentRowHeight) + BUFFER_ROWS);
+                  
+                  const paddingTop = startIndex * currentRowHeight;
+                  const paddingBottom = (processedData.length - endIndex) * currentRowHeight;
+
                   return (
-                    <div key={i} className={`flex border-b border-slate-100 transition-colors hover:bg-indigo-50/20 bg-white group ${activeTab === 'reconcile' && !r.foundInTrms ? 'bg-slate-50' : ''}`} style={{ minHeight: ROW_HEIGHT }}>
-                      {activeTab === 'reconcile' ? (
-                        <>
-                          <div className={`px-4 py-2 shrink-0 sticky left-0 z-20 border-r border-slate-50 flex items-center transition-colors group-hover:bg-indigo-50/20 ${!r.foundInTrms ? 'bg-slate-100' : 'bg-white'}`} style={{ width: columnWidths['Strategy Name'] || 280 }}>
-                              <div className="min-w-0">
-                                  <div className="text-[11px] font-bold text-slate-800 truncate">{r.strategyName}</div>
-                                  <div className={`text-[9px] font-bold uppercase tracking-wider ${r.foundInTrms ? 'text-emerald-500' : 'text-slate-400'}`}>{r.foundInTrms ? 'Matched in TRMS' : 'Missing from TRMS'}</div>
-                              </div>
-                          </div>
-                          
-                          <div className="px-4 py-2 shrink-0 flex flex-col justify-center border-r border-slate-50 overflow-hidden" style={{ width: columnWidths['Loading Date'] || DEFAULT_COLUMN_WIDTH }}>
-                              <div className="flex flex-col mb-1 pb-1 border-b border-slate-50">
-                                  <span className="text-[8px] font-bold text-slate-400 uppercase tracking-tighter">App Loading</span>
-                                  <span className="text-[10px] font-bold text-slate-700 font-mono">{r.app.loadingDate || '-'}</span>
-                              </div>
-                              <div className="flex flex-col">
-                                  <span className="text-[8px] font-bold text-slate-400 uppercase tracking-tighter">TRMS Window</span>
-                                  <span className={`text-[10px] font-bold font-mono ${r.foundInTrms && r.app.loadingDate !== r.trms.loadingDate ? 'text-rose-500' : 'text-slate-500'}`}>{r.trms.loadingDate || 'N/A'}</span>
-                              </div>
-                          </div>
-
-                          <div className="px-4 py-2 shrink-0 flex flex-col justify-center border-r border-slate-50 overflow-hidden" style={{ width: columnWidths['Delivery Date'] || DEFAULT_COLUMN_WIDTH }}>
-                              <div className="flex flex-col mb-1 pb-1 border-b border-slate-50">
-                                  <span className="text-[8px] font-bold text-slate-400 uppercase tracking-tighter">App Delivery</span>
-                                  <span className="text-[10px] font-bold text-slate-700 font-mono">{r.app.deliveryDate || '-'}</span>
-                              </div>
-                              <div className="flex flex-col">
-                                  <span className="text-[8px] font-bold text-slate-400 uppercase tracking-tighter">TRMS Window</span>
-                                  <span className={`text-[10px] font-bold font-mono ${r.foundInTrms && r.app.deliveryDate !== r.trms.deliveryDate ? 'text-rose-500' : 'text-slate-500'}`}>{r.trms.deliveryDate || 'N/A'}</span>
-                              </div>
-                          </div>
-
-                          <div className="px-4 py-2 shrink-0 flex items-center justify-center border-r border-slate-50" style={{ width: columnWidths['Volume Type'] || DEFAULT_COLUMN_WIDTH }}>
-                              {!r.foundInTrms ? <span className="text-[10px] text-slate-300 italic">Not found</span> : (
-                                  <div className={`px-3 py-1 rounded-lg text-[9px] font-black uppercase tracking-widest ${r.trms.volumeType === 'Actual' ? 'bg-blue-600 text-white shadow-sm' : 'bg-slate-100 text-slate-400'}`}>
-                                      {r.trms.volumeType}
-                                  </div>
-                              )}
-                          </div>
-
-                          <div className="px-4 py-2 shrink-0 flex items-center justify-center border-r border-slate-50" style={{ width: columnWidths['Price Status'] || DEFAULT_COLUMN_WIDTH }}>
-                              {!r.foundInTrms ? <span className="text-[10px] text-slate-300 italic">Not found</span> : (
-                                  <div className={`px-3 py-1 rounded-lg text-[9px] font-black uppercase tracking-widest ${r.trms.priceStatus === 'Fixed' ? 'bg-emerald-600 text-white shadow-sm' : 'bg-slate-100 text-slate-400'}`}>
-                                      {r.trms.priceStatus}
-                                  </div>
-                              )}
-                          </div>
-
-                          <AlignedSplitCell type="price" appVal={r.app.buyPrice} trmsLegs={r.trms.buyLegs} found={r.foundInTrms} width={columnWidths['Purchase Price'] || DEFAULT_COLUMN_WIDTH} />
-                          <AlignedSplitCell type="vol" appVal={r.app.buyVol} trmsLegs={r.trms.buyLegs} found={r.foundInTrms} width={columnWidths['Purchase Volume'] || DEFAULT_COLUMN_WIDTH} />
-                          <AlignedSplitCell type="price" appVal={r.app.sellPrice} trmsLegs={r.trms.sellLegs} found={r.foundInTrms} width={columnWidths['Sales Price'] || DEFAULT_COLUMN_WIDTH} />
-                          <AlignedSplitCell type="vol" appVal={r.app.sellVol} trmsLegs={r.trms.sellLegs} found={r.foundInTrms} width={columnWidths['Sales Volume'] || DEFAULT_COLUMN_WIDTH} />
-                          
-                          <div className="px-4 py-2 shrink-0 flex flex-col justify-center border-r border-slate-50 overflow-hidden" style={{ width: columnWidths['SRC Components'] || DEFAULT_COLUMN_WIDTH }}>
-                                <div className="flex flex-col mb-2 pb-1 border-b border-slate-50">
-                                    <span className="text-[8px] font-bold text-slate-400 uppercase tracking-tighter">App Reconciled SRC</span>
-                                    <AutoScalingText maxFontSize={10} minFontSize={7} className="font-bold text-slate-700 font-mono">
-                                        {formatUSD(r.app.src)}
-                                    </AutoScalingText>
-                                </div>
-                                <div className="flex-1 overflow-y-auto custom-scrollbar flex flex-col space-y-1">
-                                    {!r.foundInTrms ? <span className="text-[10px] text-slate-300 italic">Not found</span> : r.trms.srcLegs.length === 0 ? <span className="text-[10px] text-rose-500 italic">No SRC Data</span> : (
-                                        <>
-                                            <div className="text-[8px] font-bold text-slate-300 uppercase mb-0.5">TRMS Breakdown (Sum: {formatUSD(r.trms.src)})</div>
-                                            {r.trms.srcLegs.map((leg, idx) => {
-                                                const isM = Math.abs(r.trms.src - r.app.src) < 100;
-                                                return (
-                                                    <div key={idx} className={`h-5 flex items-center justify-between px-1.5 rounded font-mono text-[9px] border ${isM ? 'bg-emerald-50 text-emerald-700 border-emerald-100' : 'bg-slate-50 text-slate-500 border-slate-100'}`}>
-                                                        <span className="truncate pr-1">LEG {idx + 1}</span>
-                                                        <span className="font-bold">{formatUSD(leg.value)}</span>
-                                                    </div>
-                                                );
-                                            })}
-                                        </>
-                                    )}
-                                </div>
-                          </div>
-
-                           <div className="px-4 py-2 shrink-0 flex items-center justify-center border-r border-slate-50" style={{ width: columnWidths['PnL Sync'] || DEFAULT_COLUMN_WIDTH }}>
-                              {r.discrepancies.size > 0 ? (
-                                <div className="flex flex-col gap-1 items-center">
-                                    <div className={`px-2.5 py-1 rounded-full text-[9px] font-black uppercase tracking-tighter ${r.foundInTrms ? 'bg-rose-100 text-rose-700' : 'bg-slate-200 text-slate-500'}`}>{r.foundInTrms ? `${r.discrepancies.size} Differences` : 'Not Found'}</div>
-                                    {r.discrepancies.has('Should be Realized') && (
-                                        <div className="px-2 py-0.5 bg-rose-600 text-white text-[8px] font-black uppercase rounded animate-pulse">
-                                            Should be Realized
-                                        </div>
-                                    )}
-                                </div>
-                              ) : (
-                                <div className="flex items-center gap-1.5 text-emerald-600"><svg className="w-4 h-4" fill="currentColor" viewBox="0 0 20 20"><path fillRule="evenodd" d="M10 18a8 8 0 100-16 8 8 0 000 16zm3.707-9.293a1 1 0 00-1.414-1.414L9 10.586 7.707 9.293a1 1 0 00-1.414 1.414l2 2a1 1 0 001.414 0l4-4z" clipRule="evenodd" /></svg><span className="text-[10px] font-bold uppercase">Perfect Sync</span></div>
-                              )}
-                          </div>
-
-                          <div className="px-4 py-2 shrink-0 flex flex-col justify-center border-r border-slate-50 overflow-hidden" style={{ width: columnWidths['Value Sync'] || DEFAULT_COLUMN_WIDTH }}>
-                              <div className="flex flex-col mb-1 pb-1 border-b border-slate-50">
-                                  <span className="text-[8px] font-bold text-slate-400 uppercase tracking-tighter">App Physical P&L</span>
-                                  <AutoScalingText maxFontSize={10} minFontSize={7} className="font-bold text-slate-700 font-mono">
-                                      {formatUSD(r.app.sellPrice * r.app.sellVol - r.app.buyPrice * r.app.buyVol - r.app.src)}
-                                  </AutoScalingText>
-                              </div>
-                              <div className="flex flex-col">
-                                  <span className="text-[8px] font-bold text-slate-400 uppercase tracking-tighter">TRMS Base Value</span>
-                                  <AutoScalingText maxFontSize={10} minFontSize={7} className={`font-bold font-mono ${r.foundInTrms && Math.abs((r.app.sellPrice * r.app.sellVol - r.app.buyPrice * r.app.buyVol - r.app.src) - r.trms.commodityValue) > 100 ? 'text-rose-500' : 'text-slate-500'}`}>
-                                      {r.foundInTrms ? formatUSD(r.trms.commodityValue) : 'N/A'}
-                                  </AutoScalingText>
-                              </div>
-                          </div>
-                          <div className="px-4 py-2 shrink-0 sticky right-0 z-30 bg-white group-hover:bg-indigo-50 border-l border-slate-100 flex items-center justify-center" style={{ width: 80 }}>
-                                <button 
-                                    onClick={() => handleRowEdit(r.profileId)}
-                                    className="p-2 text-indigo-600 hover:bg-indigo-100 rounded-full transition-colors"
-                                    title="Edit Cargo in List"
-                                >
-                                    <svg className="w-4 h-4" fill="none" stroke="currentColor" viewBox="0 0 24 24"><path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M11 5H6a2 2 0 00-2 2v11a2 2 0 002 2h11a2 2 0 002-2v-5m-1.414-9.414a2 2 0 112.828 2.828L11.828 15H9v-2.828l8.586-8.586z" /></svg>
-                                </button>
-                          </div>
-                        </>
-                      ) : (
-                        headers.map((header, idx) => {
-                          const width = columnWidths[header] || DEFAULT_COLUMN_WIDTH;
-                          return (
-                            <div key={header} className={`px-4 py-3 text-slate-600 whitespace-nowrap shrink-0 truncate text-[11px] border-r border-slate-50 ${idx === 0 ? 'sticky left-0 z-20 bg-white group-hover:bg-indigo-50/20 font-bold' : ''}`} style={{ width }}>{String(row[header] ?? '-')}</div>
-                          );
-                        })
-                      )}
-                    </div>
+                    <>
+                      {paddingTop > 0 && <div style={{ height: paddingTop }} />}
+                      {processedData.slice(startIndex, endIndex).map((row: any, i) => (
+                        <ReconciliationRowItem 
+                          key={startIndex + i}
+                          row={row}
+                          activeTab={activeTab}
+                          columnWidths={columnWidths}
+                          handleRowEdit={handleRowEdit}
+                          formatUSD={formatUSD}
+                          headers={headers}
+                          rowHeight={currentRowHeight}
+                        />
+                      ))}
+                      {paddingBottom > 0 && <div style={{ height: paddingBottom }} />}
+                    </>
                   );
-                })}
+                })()}
               </div>
             </div>
           ) : (
@@ -1071,12 +1063,194 @@ const AlignedSplitCell = ({ type, appVal, trmsLegs, found, width }: { type: 'pri
             {!found ? <span className="text-[10px] text-slate-300 italic">Not found</span> : trmsLegs.length === 0 ? <span className="text-[10px] text-rose-500 italic">No Commodity Data</span> : (
                 trmsLegs.map((leg, idx) => {
                     const val = type === 'price' ? leg.price : leg.vol, isM = type === 'price' ? Math.abs(val - appVal) < 0.0051 : Math.abs(val - appVal) < 1.1;
-                    return <div key={idx} className={`h-5 flex items-center px-1.5 rounded font-mono text-[9px] border ${isM ? 'bg-emerald-50 text-emerald-700 font-bold border-emerald-100' : 'text-slate-500 opacity-80 border-transparent'}`}>{type === 'price' ? val.toFixed(3) : val.toLocaleString()}</div>;
+                    const diffPct = appVal !== 0 ? ((val - appVal) / Math.abs(appVal)) * 100 : 0;
+                    return (
+                        <div key={idx} className={`h-5 flex items-center justify-between px-1.5 rounded font-mono text-[9px] border ${isM ? 'bg-emerald-50 text-emerald-700 font-bold border-emerald-100' : 'text-slate-500 opacity-80 border-transparent'}`}>
+                            <span>{type === 'price' ? val.toFixed(3) : val.toLocaleString()}</span>
+                            {!isM && Math.abs(diffPct) > 0.1 && (
+                                <span className={`text-[7px] font-black ${Math.abs(diffPct) > 5 ? 'text-rose-500' : 'text-amber-500'}`}>
+                                    {diffPct > 0 ? '+' : ''}{diffPct.toFixed(1)}%
+                                </span>
+                            )}
+                        </div>
+                    );
                 })
             )}
         </div>
     </div>
 );
+
+const ReconciliationRowItem = memo(({ row, activeTab, columnWidths, handleRowEdit, formatUSD, headers, rowHeight }: { 
+  row: any, 
+  activeTab: string, 
+  columnWidths: Record<string, number>, 
+  handleRowEdit: (id: string) => void, 
+  formatUSD: (val: number) => string,
+  headers: string[],
+  rowHeight: number
+}) => {
+  const r = row as ReconciliationRow;
+  return (
+    <div className={`flex border-b border-slate-100 transition-colors hover:bg-indigo-50/20 bg-white group ${activeTab === 'reconcile' && !r.foundInTrms ? 'bg-slate-50' : ''}`} style={{ height: rowHeight, contentVisibility: 'auto', containIntrinsicSize: `auto ${rowHeight}px` }}>
+      {activeTab === 'reconcile' ? (
+        <>
+          <div className={`px-4 py-2 shrink-0 sticky left-0 z-20 border-r border-slate-50 flex items-center transition-colors group-hover:bg-indigo-50/20 ${!r.foundInTrms ? 'bg-slate-100' : 'bg-white'}`} style={{ width: columnWidths['Strategy Name'] || 280 }}>
+              <div className="min-w-0">
+                  <div className="text-[11px] font-bold text-slate-800 truncate">{r.strategyName}</div>
+                  <div className={`text-[9px] font-bold uppercase tracking-wider ${r.foundInTrms ? 'text-emerald-500' : 'text-slate-400'}`}>{r.foundInTrms ? 'Matched in TRMS' : 'Missing from TRMS'}</div>
+              </div>
+          </div>
+          
+          <div className="px-4 py-2 shrink-0 flex flex-col justify-center border-r border-slate-50 overflow-hidden" style={{ width: columnWidths['Loading Date'] || DEFAULT_COLUMN_WIDTH }}>
+              <div className="flex flex-col mb-1 pb-1 border-b border-slate-50">
+                  <span className="text-[8px] font-bold text-slate-400 uppercase tracking-tighter">App Loading</span>
+                  <span className="text-[10px] font-bold text-slate-700 font-mono">{r.app.loadingDate || '-'}</span>
+              </div>
+              <div className="flex flex-col">
+                  <span className="text-[8px] font-bold text-slate-400 uppercase tracking-tighter">TRMS Window</span>
+                  <span className={`text-[10px] font-bold font-mono ${r.foundInTrms && r.app.loadingDate !== r.trms.loadingDate ? 'text-rose-500' : 'text-slate-500'}`}>{r.trms.loadingDate || 'N/A'}</span>
+              </div>
+          </div>
+
+          <div className="px-4 py-2 shrink-0 flex flex-col justify-center border-r border-slate-50 overflow-hidden" style={{ width: columnWidths['Delivery Date'] || DEFAULT_COLUMN_WIDTH }}>
+              <div className="flex flex-col mb-1 pb-1 border-b border-slate-50">
+                  <span className="text-[8px] font-bold text-slate-400 uppercase tracking-tighter">App Delivery</span>
+                  <span className="text-[10px] font-bold text-slate-700 font-mono">{r.app.deliveryDate || '-'}</span>
+              </div>
+              <div className="flex flex-col">
+                  <span className="text-[8px] font-bold text-slate-400 uppercase tracking-tighter">TRMS Window</span>
+                  <span className={`text-[10px] font-bold font-mono ${r.foundInTrms && r.app.deliveryDate !== r.trms.deliveryDate ? 'text-rose-500' : 'text-slate-500'}`}>{r.trms.deliveryDate || 'N/A'}</span>
+              </div>
+          </div>
+
+          <div className="px-4 py-2 shrink-0 flex flex-col justify-center border-r border-slate-50 overflow-hidden" style={{ width: columnWidths['Volume Type'] || DEFAULT_COLUMN_WIDTH }}>
+              <div className="flex flex-col mb-1 pb-1 border-b border-slate-50">
+                  <span className="text-[8px] font-bold text-slate-400 uppercase tracking-tighter">App Status</span>
+                  <div className={`px-2 py-0.5 rounded text-[8px] font-black uppercase w-fit ${r.app.volumeType === 'Actual' ? 'bg-blue-600 text-white' : 'bg-slate-100 text-slate-400'}`}>
+                      {r.app.volumeType}
+                  </div>
+              </div>
+              <div className="flex flex-col">
+                  <span className="text-[8px] font-bold text-slate-400 uppercase tracking-tighter">TRMS Status</span>
+                  {!r.foundInTrms ? <span className="text-[10px] text-slate-300 italic">N/A</span> : (
+                      <div className={`px-2 py-0.5 rounded text-[8px] font-black uppercase w-fit ${r.trms.volumeType === 'Actual' ? 'bg-blue-600 text-white' : 'bg-slate-100 text-slate-400'}`}>
+                          {r.trms.volumeType}
+                      </div>
+                  )}
+              </div>
+          </div>
+
+          <div className="px-4 py-2 shrink-0 flex flex-col justify-center border-r border-slate-50 overflow-hidden" style={{ width: columnWidths['Price Status'] || DEFAULT_COLUMN_WIDTH }}>
+              <div className="flex flex-col mb-1 pb-1 border-b border-slate-50">
+                  <span className="text-[8px] font-bold text-slate-400 uppercase tracking-tighter">App Status</span>
+                  <div className={`px-2 py-0.5 rounded text-[8px] font-black uppercase w-fit ${r.app.priceStatus === 'Fixed' ? 'bg-emerald-600 text-white' : 'bg-slate-100 text-slate-400'}`}>
+                      {r.app.priceStatus}
+                  </div>
+              </div>
+              <div className="flex flex-col">
+                  <span className="text-[8px] font-bold text-slate-400 uppercase tracking-tighter">TRMS Status</span>
+                  {!r.foundInTrms ? <span className="text-[10px] text-slate-300 italic">N/A</span> : (
+                      <div className={`px-2 py-0.5 rounded text-[8px] font-black uppercase w-fit ${r.trms.priceStatus === 'Fixed' ? 'bg-emerald-600 text-white' : 'bg-slate-100 text-slate-400'}`}>
+                          {r.trms.priceStatus}
+                      </div>
+                  )}
+              </div>
+          </div>
+
+          <AlignedSplitCell type="price" appVal={r.app.buyPrice} trmsLegs={r.trms.buyLegs} found={r.foundInTrms} width={columnWidths['Purchase Price'] || DEFAULT_COLUMN_WIDTH} />
+          <AlignedSplitCell type="vol" appVal={r.app.buyVol} trmsLegs={r.trms.buyLegs} found={r.foundInTrms} width={columnWidths['Purchase Volume'] || DEFAULT_COLUMN_WIDTH} />
+          <AlignedSplitCell type="price" appVal={r.app.sellPrice} trmsLegs={r.trms.sellLegs} found={r.foundInTrms} width={columnWidths['Sales Price'] || DEFAULT_COLUMN_WIDTH} />
+          <AlignedSplitCell type="vol" appVal={r.app.sellVol} trmsLegs={r.trms.sellLegs} found={r.foundInTrms} width={columnWidths['Sales Volume'] || DEFAULT_COLUMN_WIDTH} />
+          
+          <div className="px-4 py-2 shrink-0 flex flex-col justify-center border-r border-slate-50 overflow-hidden" style={{ width: columnWidths['SRC Components'] || DEFAULT_COLUMN_WIDTH }}>
+                <div className="flex flex-col mb-2 pb-1 border-b border-slate-50">
+                    <span className="text-[8px] font-bold text-slate-400 uppercase tracking-tighter">App Reconciled SRC</span>
+                    <AutoScalingText maxFontSize={10} minFontSize={7} className="font-bold text-slate-700 font-mono">
+                        {formatUSD(r.app.src)}
+                    </AutoScalingText>
+                </div>
+                <div className="flex-1 overflow-y-auto custom-scrollbar flex flex-col space-y-1">
+                    {!r.foundInTrms ? <span className="text-[10px] text-slate-300 italic">Not found</span> : r.trms.srcLegs.length === 0 ? <span className="text-[10px] text-rose-500 italic">No SRC Data</span> : (
+                        <>
+                            <div className="text-[8px] font-bold text-slate-300 uppercase mb-0.5 flex justify-between items-center">
+                                <span>TRMS Breakdown (Sum: {formatUSD(r.trms.src)})</span>
+                                {r.app.src !== 0 && Math.abs((r.trms.src - r.app.src) / r.app.src) > 0.001 && (
+                                    <span className={`text-[8px] font-black ${Math.abs((r.trms.src - r.app.src) / r.app.src) > 0.05 ? 'text-rose-500' : 'text-amber-500'}`}>
+                                        {((r.trms.src - r.app.src) / r.app.src * 100).toFixed(1)}%
+                                    </span>
+                                )}
+                            </div>
+                            {r.trms.srcLegs.map((leg, idx) => {
+                                const isM = Math.abs(r.trms.src - r.app.src) < 100;
+                                return (
+                                    <div key={idx} className={`h-5 flex items-center justify-between px-1.5 rounded font-mono text-[9px] border ${isM ? 'bg-emerald-50 text-emerald-700 border-emerald-100' : 'bg-slate-50 text-slate-500 border-slate-100'}`}>
+                                        <span className="truncate pr-1">LEG {idx + 1}</span>
+                                        <span className="font-bold">{formatUSD(leg.value)}</span>
+                                    </div>
+                                );
+                            })}
+                        </>
+                    )}
+                </div>
+          </div>
+
+           <div className="px-4 py-2 shrink-0 flex items-center justify-center border-r border-slate-50" style={{ width: columnWidths['PnL Sync'] || DEFAULT_COLUMN_WIDTH }}>
+              {r.discrepancies.size > 0 ? (
+                <div className="flex flex-col gap-1 items-center">
+                    <div className={`px-2.5 py-1 rounded-full text-[9px] font-black uppercase tracking-tighter ${r.foundInTrms ? 'bg-rose-100 text-rose-700' : 'bg-slate-200 text-slate-500'}`}>{r.foundInTrms ? `${r.discrepancies.size} Differences` : 'Not Found'}</div>
+                    {r.discrepancies.has('Should be Realized') && (
+                        <div className="px-2 py-0.5 bg-rose-600 text-white text-[8px] font-black uppercase rounded animate-pulse">
+                            Should be Realized
+                        </div>
+                    )}
+                </div>
+              ) : (
+                <div className="flex items-center gap-1.5 text-emerald-600"><svg className="w-4 h-4" fill="currentColor" viewBox="0 0 20 20"><path fillRule="evenodd" d="M10 18a8 8 0 100-16 8 8 0 000 16zm3.707-9.293a1 1 0 00-1.414-1.414L9 10.586 7.707 9.293a1 1 0 00-1.414 1.414l2 2a1 1 0 001.414 0l4-4z" clipRule="evenodd" /></svg><span className="text-[10px] font-bold uppercase">Perfect Sync</span></div>
+              )}
+          </div>
+
+          <div className="px-4 py-2 shrink-0 flex flex-col justify-center border-r border-slate-50 overflow-hidden" style={{ width: columnWidths['Value Sync'] || DEFAULT_COLUMN_WIDTH }}>
+              <div className="flex flex-col mb-1 pb-1 border-b border-slate-50">
+                  <span className="text-[8px] font-bold text-slate-400 uppercase tracking-tighter">App Physical P&L</span>
+                  <AutoScalingText maxFontSize={10} minFontSize={7} className="font-bold text-slate-700 font-mono">
+                      {formatUSD(r.app.sellPrice * r.app.sellVol - r.app.buyPrice * r.app.buyVol - r.app.src)}
+                  </AutoScalingText>
+              </div>
+              <div className="flex flex-col">
+                  <div className="flex justify-between items-center">
+                      <span className="text-[8px] font-bold text-slate-400 uppercase tracking-tighter">TRMS Base Value</span>
+                      {r.foundInTrms && (r.app.sellPrice * r.app.sellVol - r.app.buyPrice * r.app.buyVol - r.app.src) !== 0 && (
+                          <span className={`text-[8px] font-black ${Math.abs((r.trms.commodityValue - (r.app.sellPrice * r.app.sellVol - r.app.buyPrice * r.app.buyVol - r.app.src)) / (r.app.sellPrice * r.app.sellVol - r.app.buyPrice * r.app.buyVol - r.app.src)) > 0.05 ? 'text-rose-500' : 'text-amber-500'}`}>
+                              {((r.trms.commodityValue - (r.app.sellPrice * r.app.sellVol - r.app.buyPrice * r.app.buyVol - r.app.src)) / Math.abs(r.app.sellPrice * r.app.sellVol - r.app.buyPrice * r.app.buyVol - r.app.src) * 100).toFixed(1)}%
+                          </span>
+                      )}
+                  </div>
+                  <AutoScalingText maxFontSize={10} minFontSize={7} className={`font-bold font-mono ${r.foundInTrms && Math.abs((r.app.sellPrice * r.app.sellVol - r.app.buyPrice * r.app.buyVol - r.app.src) - r.trms.commodityValue) > 100 ? 'text-rose-500' : 'text-slate-500'}`}>
+                      {r.foundInTrms ? formatUSD(r.trms.commodityValue) : 'N/A'}
+                  </AutoScalingText>
+              </div>
+          </div>
+          <div className="px-4 py-2 shrink-0 sticky right-0 z-30 bg-white group-hover:bg-indigo-50 border-l border-slate-100 flex items-center justify-center" style={{ width: 80 }}>
+                <button 
+                    onClick={() => handleRowEdit(r.profileId)}
+                    className="p-2 text-indigo-600 hover:bg-indigo-100 rounded-full transition-colors"
+                    title="Edit Cargo in List"
+                >
+                    <svg className="w-4 h-4" fill="none" stroke="currentColor" viewBox="0 0 24 24"><path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M11 5H6a2 2 0 00-2 2v11a2 2 0 002 2h11a2 2 0 002-2v-5m-1.414-9.414a2 2 0 112.828 2.828L11.828 15H9v-2.828l8.586-8.586z" /></svg>
+                </button>
+          </div>
+        </>
+      ) : (
+        headers.map((header, idx) => {
+          const width = columnWidths[header] || DEFAULT_COLUMN_WIDTH;
+          return (
+            <div key={header} className={`px-4 py-3 text-slate-600 whitespace-nowrap shrink-0 truncate text-[11px] border-r border-slate-50 ${idx === 0 ? 'sticky left-0 z-20 bg-white group-hover:bg-indigo-50/20 font-bold' : ''}`} style={{ width }}>{String(row[header] ?? '-')}</div>
+          );
+        })
+      )}
+    </div>
+  );
+});
 
 const TabButton = ({ active, onClick, label, count, color }: { active: boolean, onClick: () => void, label: string, count: number, color: string }) => {
     const cls = { indigo: 'text-indigo-600 border-indigo-500 bg-indigo-50', emerald: 'text-emerald-600 border-emerald-500 bg-emerald-50', amber: 'text-amber-600 border-amber-500 bg-amber-50', rose: 'text-rose-600 border-rose-500 bg-rose-50' }[color as 'indigo'|'emerald'|'amber'|'rose'];

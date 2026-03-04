@@ -1,4 +1,4 @@
-import React, { useState, useLayoutEffect, useRef } from 'react';
+import React, { useState, useLayoutEffect, useRef, memo } from 'react';
 
 interface AutoScalingTextProps {
   children: React.ReactNode;
@@ -7,7 +7,7 @@ interface AutoScalingTextProps {
   minFontSize?: number; // in px
 }
 
-export const AutoScalingText: React.FC<AutoScalingTextProps> = ({ 
+const AutoScalingTextComponent: React.FC<AutoScalingTextProps> = ({ 
   children, 
   className = "", 
   maxFontSize = 32, 
@@ -22,16 +22,20 @@ export const AutoScalingText: React.FC<AutoScalingTextProps> = ({
     const text = textRef.current;
     if (!container || !text) return;
 
-    let currentFontSize = maxFontSize;
-    text.style.fontSize = `${currentFontSize}px`;
+    // Reset to max font size to measure original width
+    text.style.fontSize = `${maxFontSize}px`;
+    const containerWidth = container.offsetWidth;
+    const textWidth = text.offsetWidth;
 
-    // Simple iterative scale down
-    while (text.offsetWidth > container.offsetWidth && currentFontSize > minFontSize) {
-      currentFontSize -= 1;
-      text.style.fontSize = `${currentFontSize}px`;
+    if (textWidth > containerWidth && containerWidth > 0) {
+      // Calculate scale factor
+      const scaleFactor = containerWidth / textWidth;
+      const calculatedFontSize = Math.max(minFontSize, Math.floor(maxFontSize * scaleFactor));
+      setFontSize(calculatedFontSize);
+      text.style.fontSize = `${calculatedFontSize}px`;
+    } else {
+      setFontSize(maxFontSize);
     }
-    
-    setFontSize(currentFontSize);
   }, [children, maxFontSize, minFontSize]);
 
   return (
@@ -42,3 +46,5 @@ export const AutoScalingText: React.FC<AutoScalingTextProps> = ({
     </div>
   );
 };
+
+export const AutoScalingText = memo(AutoScalingTextComponent);

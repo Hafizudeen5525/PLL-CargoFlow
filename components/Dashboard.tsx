@@ -104,7 +104,6 @@ export const Dashboard: React.FC<DashboardProps> = ({ profiles, marketData, forw
       }
 
       return filtered.map((p: CargoProfile) => {
-          if (p.pnlBucket === PnLBucket.Realized) return p;
           return recalculateProfile(p, true, targetDate) as CargoProfile;
       });
   }, [profiles, groupFilter, targetDate]);
@@ -117,11 +116,6 @@ export const Dashboard: React.FC<DashboardProps> = ({ profiles, marketData, forw
       const success: any[] = [];
 
       viewProfiles.forEach((p: CargoProfile) => {
-          if (p.pnlBucket === PnLBucket.Realized) {
-              success.push({ ...p, _status: 'Realized', _source: 'Reconciled', _msg: 'Price locked' });
-              return;
-          }
-
           const sellTrace = explainPricing(p.sellFormula, p.deliveryDate, targetDate);
           const buyTrace = explainPricing(p.buyFormula, p.loadingDate || p.deliveryDate, targetDate);
 
@@ -152,8 +146,8 @@ export const Dashboard: React.FC<DashboardProps> = ({ profiles, marketData, forw
   const strategyMovements = useMemo(() => {
       if (!baselineDate || !targetDate) return [];
       return viewProfiles.map((p: CargoProfile) => {
-          const pBase = (p.pnlBucket === PnLBucket.Realized) ? p : recalculateProfile(p, true, baselineDate) as CargoProfile;
-          const pCurr = (p.pnlBucket === PnLBucket.Realized) ? p : recalculateProfile(p, true, targetDate) as CargoProfile;
+          const pBase = recalculateProfile(p, true, baselineDate) as CargoProfile;
+          const pCurr = recalculateProfile(p, true, targetDate) as CargoProfile;
           const delta = (pCurr.finalTotalPnL || 0) - (pBase.finalTotalPnL || 0);
           return { name: p.strategyName, delta };
       }).filter((m: { name: string, delta: number }) => Math.abs(m.delta) > 0.01).sort((a: any, b: any) => Math.abs(b.delta) - Math.abs(a.delta));
@@ -221,7 +215,7 @@ export const Dashboard: React.FC<DashboardProps> = ({ profiles, marketData, forw
 
     filtered.forEach((p: CargoProfile) => {
         let cp = p;
-        if (p.pnlBucket !== PnLBucket.Realized && dateStr) {
+        if (dateStr) {
             cp = recalculateProfile(p, true, dateStr) as CargoProfile;
         }
         
@@ -720,8 +714,8 @@ const DrillDownTable = ({ profiles, config, onClose, onCargoClick, targetDate, f
     }, [profiles, config]);
 
     const getMovementData = (p: CargoProfile) => {
-        const pBase = (p.pnlBucket === PnLBucket.Realized) ? p : recalculateProfile(p, true, baselineDate) as CargoProfile;
-        const pCurr = (p.pnlBucket === PnLBucket.Realized) ? p : recalculateProfile(p, true, targetDate) as CargoProfile;
+        const pBase = recalculateProfile(p, true, baselineDate) as CargoProfile;
+        const pCurr = recalculateProfile(p, true, targetDate) as CargoProfile;
         
         const extractValues = (prof: CargoProfile) => {
             let val = 0;
