@@ -58,9 +58,17 @@ export const ForwardCurveModal: React.FC<ForwardCurveModalProps> = ({ onClose, o
   const activeIndices = useMemo(() => activeColumns.slice(1), [activeColumns]);
 
   useEffect(() => {
-    refreshDates();
-    loadCurveData(new Date().toISOString().split('T')[0]);
+    const dates = getAvailableCurveDates();
+    setAvailableDates(dates);
+    
+    const today = new Date().toISOString().split('T')[0];
+    const latest = dates.length > 0 ? dates[0] : today;
+    
+    loadCurveData(latest);
     setHistoricalGrid(getHistoricalCurve());
+    
+    if (dates.length >= 1 && !compareDateA) setCompareDateA(dates[0]);
+    if (dates.length >= 2 && !compareDateB) setCompareDateB(dates[1]);
   }, []);
 
   const refreshDates = () => {

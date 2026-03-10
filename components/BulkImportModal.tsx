@@ -23,7 +23,8 @@ const COLUMN_MAPPING: Record<string, string[]> = {
   buyFormula: ['buy formula', 'purchase formula'],
   absoluteBuyPrice: ['buy price', 'purchase price', 'cost price'],
   salesRevenue: ['sales revenue', 'revenue', 'invoice value'],
-  reconciledPurchaseCost: ['purchase cost', 'cost', 'total cost'],
+  reconciledSalesRevenue: ['reconciled sales revenue', 'reconciled revenue', 'finance revenue', 'actual revenue'],
+  reconciledPurchaseCost: ['reconciled purchase cost', 'reconciled cost', 'finance cost', 'actual cost', 'purchase cost', 'cost', 'total cost'],
   finalTotalPnL: ['total pnl', 'final pnl', 'profit', 'p&l', 'net pnl'],
   incoterms: ['incoterms', 'terms'],
   pnlBucket: ['status', 'bucket', 'state']
@@ -122,7 +123,7 @@ export const BulkImportModal: React.FC<BulkImportModalProps> = ({ existingProfil
                         if (!isNaN(volNum)) (parsedFields as any)[key] = volNum;
                     } else if (key.includes('Date')) {
                         (parsedFields as any)[key] = parseDate(rawVal);
-                    } else if (['absoluteSellPrice', 'absoluteBuyPrice', 'salesRevenue', 'reconciledPurchaseCost', 'finalTotalPnL'].includes(key)) {
+                    } else if (['absoluteSellPrice', 'absoluteBuyPrice', 'salesRevenue', 'reconciledSalesRevenue', 'reconciledPurchaseCost', 'finalTotalPnL'].includes(key)) {
                         const cleanNum = parseFloat(rawVal.replace(/[^0-9.-]/g, ''));
                         if (!isNaN(cleanNum)) (parsedFields as any)[key] = cleanNum;
                     } else if (key === 'pnlBucket') {

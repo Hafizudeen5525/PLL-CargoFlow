@@ -4,7 +4,7 @@ import { AutoScalingText } from './AutoScalingText';
 import { toast } from 'react-hot-toast';
 import * as XLSX from 'xlsx';
 import { CargoProfile, PnLBucket, ForwardCurveData, ForwardCurve, ForwardCurvePoint } from '../types';
-import { getGroupName, GROUPS } from '../services/calculationService';
+import { getGroupName, GROUPS, saveForwardCurve, ForwardCurveRow } from '../services/calculationService';
 
 export interface TRMSCommodityLeg {
     price: number;
@@ -36,6 +36,8 @@ export interface ReconciliationRow {
         deliveryDate: string;
         volumeType: string;
         priceStatus: string;
+        reconciledPurchaseCost: number;
+        reconciledSalesRevenue: number;
     };
     trms: {
         buyLegs: TRMSCommodityLeg[];
@@ -47,9 +49,25 @@ export interface ReconciliationRow {
         volumeType: string;
         priceStatus: string;
         commodityValue: number;
+        trmsPurchaseValue: number;
+        trmsSalesValue: number;
+        reconciledPurchaseCost: number;
+        reconciledSalesRevenue: number;
         trmsRealized: boolean;
+        commWindowEndDate: string;
     };
     discrepancies: Set<string>;
+    errorPcts: {
+        buyPrice: number;
+        sellPrice: number;
+        buyVol: number;
+        sellVol: number;
+        src: number;
+        loadingDate: number;
+        deliveryDate: number;
+        purchaseCost: number;
+        salesRevenue: number;
+    };
 }
 
 export interface TRMSAggregation {
@@ -65,6 +83,11 @@ export interface TRMSAggregation {
         volumeType: string;
         priceStatus: string;
         commodityValue: number;
+        trmsPurchaseValue: number;
+        trmsSalesValue: number;
+        reconciledPurchaseCost: number;
+        reconciledSalesRevenue: number;
+        commWindowEndDate: string;
     }
 }
 
@@ -75,11 +98,19 @@ export interface ReconciliationData {
     trmsAgg: TRMSAggregation;
     forwardCurves: ForwardCurveData[];
     uniqueValues: Record<string, Record<string, any[]>>;
+    portfolioName?: string;
+    portfolioYear?: string;
     summary: {
         total: number;
         src: number;
         hedging: number;
         paper: number;
+    };
+    fileNames?: string[];
+    syncOptions?: {
+        syncReconciled: boolean;
+        syncPrices: boolean;
+        overwriteManual: boolean;
     };
 }
 
@@ -88,6 +119,7 @@ interface DiscrepancyCheckProps {
   trmsData: ReconciliationData;
   onTrmsUpload: (data: ReconciliationData) => void;
   onEditProfile?: (profile: CargoProfile) => void;
+  onForwardCurveUpdate?: () => void;
 }
 
 type SortConfig = {
@@ -95,7 +127,7 @@ type SortConfig = {
   direction: 'asc' | 'desc';
 };
 
-type TRMSTab = 'reconcile' | 'src' | 'hedging' | 'paper' | 'curves';
+type TRMSTab = 'reconcile' | 'src' | 'hedging' | 'paper';
 
 const ROW_HEIGHT = 140; 
 const VISIBLE_ROWS = 40; 
@@ -150,9 +182,23 @@ const extractIndexFromRef = (ref: string): string => {
     return 'Other';
 };
 
-export const DiscrepancyCheck: React.FC<DiscrepancyCheckProps> = ({ profiles, trmsData, onTrmsUpload, onEditProfile }) => {
+export const DiscrepancyCheck: React.FC<DiscrepancyCheckProps> = ({ 
+  profiles, 
+  trmsData, 
+  onTrmsUpload, 
+  onEditProfile,
+  onForwardCurveUpdate
+}) => {
   const [activeTab, setActiveTab] = useState<TRMSTab>('reconcile');
   const [isParsing, setIsParsing] = useState(false);
+  const [showSyncModal, setShowSyncModal] = useState(false);
+  const [pendingData, setPendingData] = useState<ReconciliationData | null>(null);
+  const [syncOptions, setSyncOptions] = useState({
+    syncReconciled: true,
+    syncPrices: false,
+    overwriteManual: false,
+    syncForwardCurves: false
+  });
   
   const [searchTerm, setSearchTerm] = useState('');
   const [debouncedSearch, setDebouncedSearch] = useState('');
@@ -160,6 +206,7 @@ export const DiscrepancyCheck: React.FC<DiscrepancyCheckProps> = ({ profiles, tr
   
   const [activeFilters, setActiveFilters] = useState<Record<string, Set<any>>>({});
   const [openFilterMenu, setOpenFilterMenu] = useState<string | null>(null);
+  const [showReportPreview, setShowReportPreview] = useState(false);
   const [filterSearch, setFilterSearch] = useState('');
   const filterMenuRef = useRef<HTMLDivElement>(null);
   const [expandedNodes, setExpandedNodes] = useState<Set<string>>(new Set());
@@ -257,6 +304,8 @@ export const DiscrepancyCheck: React.FC<DiscrepancyCheckProps> = ({ profiles, tr
     'Sales Price': 200,
     'Sales Volume': 200,
     'SRC Components': 200,
+    'Purchase Cost': 200,
+    'Sales Revenue': 200,
     'PnL Sync': 200,
     'Value Sync': 200
   });
@@ -317,18 +366,30 @@ export const DiscrepancyCheck: React.FC<DiscrepancyCheckProps> = ({ profiles, tr
       trmsAgg: {},
       forwardCurves: [],
       uniqueValues: {},
-      summary: { total: 0, src: 0, hedging: 0, paper: 0 }
+      portfolioName: 'Unknown',
+      portfolioYear: 'Unknown',
+      summary: { total: 0, src: 0, hedging: 0, paper: 0 },
+      fileNames: Array.from(files).map(f => f.name)
     };
 
     const processFile = (file: File) => {
       const reader = new FileReader();
       reader.onload = (evt) => {
-        const bstr = evt.target?.result;
+        const arrayBuffer = evt.target?.result;
         const worker = new Worker(new URL('../services/excelWorker.ts', import.meta.url), { type: 'module' });
         
         worker.onmessage = (e) => {
           const result = e.data;
+          if (result.debugInfo) {
+            console.log('Excel Worker Debug Info:', result.debugInfo);
+          }
           if (result.success) {
+            if (result.portfolioName && result.portfolioName !== 'Unknown') {
+              aggregatedData.portfolioName = result.portfolioName;
+            }
+            if (result.portfolioYear && result.portfolioYear !== 'Unknown') {
+              aggregatedData.portfolioYear = result.portfolioYear;
+            }
             // Aggregate data
             aggregatedData.src.push(...result.src);
             aggregatedData.hedging.push(...result.hedging);
@@ -352,6 +413,8 @@ export const DiscrepancyCheck: React.FC<DiscrepancyCheckProps> = ({ profiles, tr
                   }
                 });
                 existing.commodityValue += incoming.commodityValue;
+                if (incoming.reconciledPurchaseCost > 0) existing.reconciledPurchaseCost = incoming.reconciledPurchaseCost;
+                if (incoming.reconciledSalesRevenue > 0) existing.reconciledSalesRevenue = incoming.reconciledSalesRevenue;
                 if (incoming.volumeType === 'Actual') existing.volumeType = 'Actual';
                 if (incoming.priceStatus === 'Fixed') existing.priceStatus = 'Fixed';
               }
@@ -374,7 +437,8 @@ export const DiscrepancyCheck: React.FC<DiscrepancyCheckProps> = ({ profiles, tr
           worker.terminate();
 
           if (processedFiles === files.length) {
-            onTrmsUpload(aggregatedData);
+            setPendingData(aggregatedData);
+            setShowSyncModal(true);
             toast.success(`Data from ${files.length} file(s) aggregated.`, { id: loadingToast });
             setIsParsing(false);
           }
@@ -391,12 +455,12 @@ export const DiscrepancyCheck: React.FC<DiscrepancyCheckProps> = ({ profiles, tr
         };
 
         worker.postMessage({ 
-          data: bstr, 
+          data: arrayBuffer, 
           whitelistColumns: WHITELIST_COLUMNS,
           priorityColumns: PRIORITY_COLUMNS
         });
       };
-      reader.readAsBinaryString(file);
+      reader.readAsArrayBuffer(file);
     };
 
     Array.from(files).forEach(processFile);
@@ -432,7 +496,9 @@ export const DiscrepancyCheck: React.FC<DiscrepancyCheckProps> = ({ profiles, tr
                 loadingDate: p.loadingDate || '',
                 deliveryDate: p.deliveryDate || '',
                 volumeType: isAppRealized ? 'Actual' : 'Estimate',
-                priceStatus: isAppRealized ? 'Fixed' : 'Estimate'
+                priceStatus: isAppRealized ? 'Fixed' : 'Estimate',
+                reconciledPurchaseCost: p.reconciledPurchaseCost || 0,
+                reconciledSalesRevenue: p.reconciledSalesRevenue || 0
             },
             trms: { 
                 buyLegs, 
@@ -444,22 +510,73 @@ export const DiscrepancyCheck: React.FC<DiscrepancyCheckProps> = ({ profiles, tr
                 volumeType: trmsVolType,
                 priceStatus: trmsPriceStatus,
                 commodityValue: trmsCommodityValue,
-                trmsRealized: trms ? (sellLegs.some(l => l.priceStatus === 'Fixed') && trmsVolType === 'Actual') : false
+                trmsPurchaseValue: trms?.trmsPurchaseValue || 0,
+                trmsSalesValue: trms?.trmsSalesValue || 0,
+                reconciledPurchaseCost: trms?.reconciledPurchaseCost || 0,
+                reconciledSalesRevenue: trms?.reconciledSalesRevenue || 0,
+                trmsRealized: trms ? (sellLegs.some(l => l.priceStatus === 'Fixed') && trmsVolType === 'Actual') : false,
+                commWindowEndDate: trms?.commWindowEndDate || ''
             },
-            discrepancies: new Set()
+            discrepancies: new Set(),
+            errorPcts: {
+                buyPrice: 100, sellPrice: 100, buyVol: 100, sellVol: 100, src: 100,
+                loadingDate: 100, deliveryDate: 100, purchaseCost: 100, salesRevenue: 100
+            }
         };
+
+        const getMonth = (dStr: string) => {
+            if (!dStr) return null;
+            const d = new Date(dStr);
+            return isNaN(d.getTime()) ? null : `${d.getUTCFullYear()}-${d.getUTCMonth()}`;
+        };
+
+        const calcError = (app: number, trmsVals: number[]) => {
+            if (trmsVals.length === 0) return 100;
+            if (app === 0) {
+                const best = trmsVals.reduce((prev, curr) => Math.abs(curr) < Math.abs(prev) ? curr : prev);
+                return best === 0 ? 0 : 100;
+            }
+            const best = trmsVals.reduce((prev, curr) => Math.abs(curr - app) < Math.abs(prev - app) ? curr : prev);
+            return (Math.abs(app - best) / Math.abs(app)) * 100;
+        };
+
         if (trms) {
-            const hasBP = row.trms.buyLegs.some(l => Math.abs(l.price - row.app.buyPrice) < 0.0051);
-            const hasSP = row.trms.sellLegs.some(l => Math.abs(l.price - row.app.sellPrice) < 0.0051);
-            const hasBV = row.trms.buyLegs.some(l => Math.abs(l.vol - row.app.buyVol) < 1.1);
-            const hasSV = row.trms.sellLegs.some(l => Math.abs(l.vol - row.app.sellVol) < 1.1);
-            if (!hasBP && row.app.buyPrice > 0) row.discrepancies.add('Buy Price');
-            if (!hasSP && row.app.sellPrice > 0) row.discrepancies.add('Sell Price');
-            if (!hasBV && row.app.buyVol > 0) row.discrepancies.add('Buy Vol');
-            if (!hasSV && row.app.sellVol > 0) row.discrepancies.add('Sell Vol');
-            if (Math.abs(row.app.src - row.trms.src) > 100) row.discrepancies.add('SRC Cost');
-            if (row.app.loadingDate !== row.trms.loadingDate && row.trms.loadingDate) row.discrepancies.add('Loading Date');
-            if (row.app.deliveryDate !== row.trms.deliveryDate && row.trms.deliveryDate) row.discrepancies.add('Delivery Date');
+            // Price/Vol Errors
+            row.errorPcts.buyPrice = calcError(row.app.buyPrice, row.trms.buyLegs.map(l => l.price));
+            row.errorPcts.sellPrice = calcError(row.app.sellPrice, row.trms.sellLegs.map(l => l.price));
+            row.errorPcts.buyVol = calcError(row.app.buyVol, row.trms.buyLegs.map(l => l.vol));
+            row.errorPcts.sellVol = calcError(row.app.sellVol, row.trms.sellLegs.map(l => l.vol));
+            
+            // Cost/Revenue Errors
+            const appPurc = row.app.reconciledPurchaseCost > 0 ? row.app.reconciledPurchaseCost : row.app.buyPrice * row.app.buyVol;
+            const appSales = row.app.reconciledSalesRevenue > 0 ? row.app.reconciledSalesRevenue : row.app.sellPrice * row.app.sellVol;
+            row.errorPcts.purchaseCost = calcError(appPurc, row.trms.buyLegs.map(l => Math.abs(l.valueUSD)));
+            row.errorPcts.salesRevenue = calcError(appSales, row.trms.sellLegs.map(l => Math.abs(l.valueUSD)));
+
+            // SRC Error
+            if (row.trms.srcLegs.length === 0) {
+                row.errorPcts.src = row.app.src === 0 ? 0 : 100;
+            } else {
+                row.errorPcts.src = calcError(row.app.src, row.trms.srcLegs.map(l => l.value));
+            }
+
+            // Date Errors
+            const appLMonth = getMonth(row.app.loadingDate);
+            const trmsLMonths = row.trms.buyLegs.map(l => getMonth(l.startDate)).filter(m => m !== null);
+            row.errorPcts.loadingDate = trmsLMonths.some(m => m === appLMonth) ? 0 : 100;
+
+            const appDMonth = getMonth(row.app.deliveryDate);
+            const trmsDMonths = row.trms.sellLegs.map(l => getMonth(l.endDate)).filter(m => m !== null);
+            row.errorPcts.deliveryDate = trmsDMonths.some(m => m === appDMonth) ? 0 : 100;
+
+            // Discrepancies based on error thresholds
+            if (row.errorPcts.buyPrice > 0.01 && row.app.buyPrice > 0) row.discrepancies.add('Buy Price');
+            if (row.errorPcts.sellPrice > 0.01 && row.app.sellPrice > 0) row.discrepancies.add('Sell Price');
+            if (row.errorPcts.buyVol > 0.1 && row.app.buyVol > 0) row.discrepancies.add('Buy Vol');
+            if (row.errorPcts.sellVol > 0.1 && row.app.sellVol > 0) row.discrepancies.add('Sell Vol');
+            if (row.errorPcts.src > 0.1 && (row.app.src > 0 || row.trms.src > 0)) row.discrepancies.add('SRC Cost');
+            if (row.errorPcts.loadingDate > 0) row.discrepancies.add('Loading Date');
+            if (row.errorPcts.deliveryDate > 0) row.discrepancies.add('Delivery Date');
             
             // Realization Check
             if (row.trms.trmsRealized && p.pnlBucket !== PnLBucket.Realized) {
@@ -472,7 +589,6 @@ export const DiscrepancyCheck: React.FC<DiscrepancyCheckProps> = ({ profiles, tr
 
   const currentRawData = useMemo(() => {
     if (activeTab === 'reconcile') return reconciliationData;
-    if (activeTab === 'curves') return trmsData.forwardCurves;
     return trmsData[activeTab as keyof ReconciliationData] as any[];
   }, [activeTab, trmsData, reconciliationData]);
 
@@ -480,14 +596,8 @@ export const DiscrepancyCheck: React.FC<DiscrepancyCheckProps> = ({ profiles, tr
     if (activeTab === 'reconcile') {
         return [
             'Strategy Name', 'Loading Date', 'Delivery Date', 'Volume Type', 'Price Status', 'Purchase Price', 
-            'Purchase Volume', 'Sales Price', 'Sales Volume', 'SRC Components', 'PnL Sync', 'Value Sync'
+            'Purchase Volume', 'Sales Price', 'Sales Volume', 'SRC Components', 'Purchase Cost', 'Sales Revenue', 'Value Sync'
         ];
-    }
-    if (activeTab === 'curves') {
-        const baseHeaders = ['File Name', 'As Of Date', 'Month'];
-        const curveIndexes = new Set<string>();
-        trmsData.forwardCurves?.forEach((fc: ForwardCurveData) => fc.curves?.forEach((c: ForwardCurve) => curveIndexes.add(c.index)));
-        return [...baseHeaders, ...Array.from(curveIndexes)];
     }
     if (!currentRawData || currentRawData.length === 0) return [];
     return Object.keys(currentRawData[0]).sort((a, b) => {
@@ -560,6 +670,8 @@ export const DiscrepancyCheck: React.FC<DiscrepancyCheckProps> = ({ profiles, tr
                   if (header === 'Purchase Volume') return rec.app.buyVol;
                   if (header === 'Sales Price') return rec.app.sellPrice;
                   if (header === 'Sales Volume') return rec.app.sellVol;
+                  if (header === 'Purchase Cost') return rec.trms.trmsPurchaseValue;
+                  if (header === 'Sales Revenue') return rec.trms.trmsSalesValue;
                   if (header === 'Loading Date') return rec.app.loadingDate;
                   if (header === 'Delivery Date') return rec.app.deliveryDate;
                   if (header === 'Volume Type') return rec.trms.volumeType;
@@ -575,37 +687,6 @@ export const DiscrepancyCheck: React.FC<DiscrepancyCheckProps> = ({ profiles, tr
   }, [headers, activeTab, currentRawData]);
 
   const processedData = useMemo(() => {
-    if (activeTab === 'curves') {
-        const rows: any[] = [];
-        trmsData.forwardCurves?.forEach((fc: ForwardCurveData) => {
-            // Get all unique months across all curves in this file
-            const months = new Set<string>();
-            fc.curves?.forEach((c: ForwardCurve) => c.points?.forEach((p: ForwardCurvePoint) => months.add(p.month)));
-            const sortedMonths = Array.from(months).sort();
-
-            sortedMonths.forEach(month => {
-                const row: any = {
-                    'File Name': fc.fileName,
-                    'As Of Date': fc.asOfDate,
-                    'Month': month
-                };
-                fc.curves?.forEach((c: ForwardCurve) => {
-                    const point = c.points?.find((p: ForwardCurvePoint) => p.month === month);
-                    row[c.index] = point ? point.value : null;
-                });
-                rows.push(row);
-            });
-        });
-
-        let result = rows;
-        if (debouncedSearch) {
-            const lower = debouncedSearch.toLowerCase();
-            result = result.filter(r => Object.values(r).some(v => String(v).toLowerCase().includes(lower)));
-        }
-        // Apply filters if any (though curves might not need complex filtering yet)
-        return result;
-    }
-
     let result = [...currentRawData];
     if (debouncedSearch) {
       const lower = debouncedSearch.toLowerCase();
@@ -632,6 +713,8 @@ export const DiscrepancyCheck: React.FC<DiscrepancyCheckProps> = ({ profiles, tr
             else if (header === 'Purchase Volume') val = r.app.buyVol;
             else if (header === 'Sales Price') val = r.app.sellPrice;
             else if (header === 'Sales Volume') val = r.app.sellVol;
+            else if (header === 'Purchase Cost') val = r.trms.trmsPurchaseValue;
+            else if (header === 'Sales Revenue') val = r.trms.trmsSalesValue;
             else if (header === 'Loading Date') val = r.app.loadingDate;
             else if (header === 'Delivery Date') val = r.app.deliveryDate;
             else if (header === 'Volume Type') val = r.trms.volumeType;
@@ -655,6 +738,8 @@ export const DiscrepancyCheck: React.FC<DiscrepancyCheckProps> = ({ profiles, tr
             if (key === 'Purchase Volume') return r.app.buyVol;
             if (key === 'Sales Price') return r.app.sellPrice;
             if (key === 'Sales Volume') return r.app.sellVol;
+            if (key === 'Purchase Cost') return r.trms.trmsPurchaseValue;
+            if (key === 'Sales Revenue') return r.trms.trmsSalesValue;
             if (key === 'Loading Date') return r.app.loadingDate;
             if (key === 'Delivery Date') return r.app.deliveryDate;
             if (key === 'Volume Type') return r.trms.volumeType;
@@ -704,7 +789,254 @@ export const DiscrepancyCheck: React.FC<DiscrepancyCheckProps> = ({ profiles, tr
       toast.error("No data available to download.");
       return;
     }
+    setShowReportPreview(true);
+  };
 
+  const generateReportHTML = () => {
+    const tableHeaders = headers.map(h => `<th style="border: 1px solid #e2e8f0; padding: 12px 16px; background: #f8fafc; font-size: 10px; text-transform: uppercase; font-family: sans-serif; color: #475569; font-weight: 800; letter-spacing: 0.5px; text-align: left;">${h}</th>`).join('');
+    
+    const tableRows = processedData.map((row: any) => {
+        if (activeTab === 'reconcile') {
+            const r = row as ReconciliationRow;
+            const loadingMatch = r.errorPcts.loadingDate === 0;
+            const deliveryMatch = r.errorPcts.deliveryDate === 0;
+            
+            const getErrorColor = (pct: number) => pct > 5 ? '#ef4444' : pct > 0.1 ? '#f59e0b' : '#10b981';
+            const getBgColor = (pct: number) => pct > 5 ? '#fef2f2' : pct > 0.1 ? '#fffbeb' : '#f0fdf4';
+
+            const renderLegs = (legs: TRMSCommodityLeg[]) => {
+                if (legs.length === 0) return '<div style="color: #94a3b8; font-style: italic; font-size: 9px;">No legs found</div>';
+                return legs.map((l, i) => `
+                    <div style="font-size: 9px; padding: 4px; border: 1px solid #e2e8f0; border-radius: 4px; margin-top: 4px; background: #f8fafc;">
+                        <div style="display: flex; justify-between; font-weight: bold; color: ${l.buySell === 'Buy' ? '#2563eb' : '#db2777'};">
+                            <span>LEG ${i+1} (${l.buySell})</span>
+                            <span style="margin-left: auto;">$${l.price.toFixed(3)} | ${l.vol.toLocaleString()}</span>
+                        </div>
+                        <div style="font-size: 8px; color: #64748b; margin-top: 2px;">${l.startDate} to ${l.endDate} | ${l.settlementType}</div>
+                    </div>
+                `).join('');
+            };
+
+            const renderSrcLegs = (legs: TRMSSrcLeg[]) => {
+                if (legs.length === 0) return '<div style="color: #94a3b8; font-style: italic; font-size: 9px;">No SRC legs</div>';
+                return legs.map((l, i) => `
+                    <div style="font-size: 9px; padding: 4px; border: 1px solid #e2e8f0; border-radius: 4px; margin-top: 4px; background: #f8fafc; display: flex; justify-content: space-between;">
+                        <span>${l.description}</span>
+                        <span style="font-weight: bold;">${formatUSD(l.value)}</span>
+                    </div>
+                `).join('');
+            };
+
+            return `
+                <tr style="font-family: monospace; background: ${!r.foundInTrms ? '#f8fafc' : 'white'};">
+                    <td style="border: 1px solid #e2e8f0; padding: 12px 16px; font-size: 11px; font-weight: bold; color: #1e293b;">
+                        ${r.strategyName}
+                        <div style="font-size: 9px; margin-top: 4px; color: ${r.foundInTrms ? '#10b981' : '#94a3b8'}; font-weight: 900; text-transform: uppercase;">
+                            ${r.foundInTrms ? '● Matched' : '○ Missing'}
+                        </div>
+                    </td>
+                    <td style="border: 1px solid #e2e8f0; padding: 12px 16px; font-size: 10px; background: ${r.foundInTrms ? (loadingMatch ? '#f0fdf4' : '#fef2f2') : 'transparent'};">
+                        <div style="color: #64748b; font-size: 8px; font-weight: bold; text-transform: uppercase;">App Loading</div>
+                        <div style="font-weight: bold; color: #1e293b;">${r.app.loadingDate || '-'}</div>
+                        <div style="margin-top: 8px; color: #64748b; font-size: 8px; font-weight: bold; text-transform: uppercase;">TRMS Window</div>
+                        <div style="font-weight: bold; color: #475569;">${r.trms.loadingDate || '-'}</div>
+                    </td>
+                    <td style="border: 1px solid #e2e8f0; padding: 12px 16px; font-size: 10px; background: ${r.foundInTrms ? (deliveryMatch ? '#f0fdf4' : '#fef2f2') : 'transparent'};">
+                        <div style="color: #64748b; font-size: 8px; font-weight: bold; text-transform: uppercase;">App Delivery</div>
+                        <div style="font-weight: bold; color: #1e293b;">${r.app.deliveryDate || '-'}</div>
+                        <div style="margin-top: 8px; color: #64748b; font-size: 8px; font-weight: bold; text-transform: uppercase;">TRMS Window</div>
+                        <div style="font-weight: bold; color: #475569;">${r.trms.deliveryDate || '-'}</div>
+                    </td>
+                    <td style="border: 1px solid #e2e8f0; padding: 12px 16px; font-size: 10px;">
+                        <div style="display: inline-block; padding: 2px 6px; border-radius: 4px; background: ${r.app.volumeType === 'Actual' ? '#2563eb' : '#f1f5f9'}; color: ${r.app.volumeType === 'Actual' ? 'white' : '#64748b'}; font-size: 9px; font-weight: bold;">${r.app.volumeType}</div>
+                        <div style="margin-top: 4px; font-size: 9px; color: #94a3b8;">TRMS: ${r.trms.volumeType}</div>
+                    </td>
+                    <td style="border: 1px solid #e2e8f0; padding: 12px 16px; font-size: 10px;">
+                        <div style="display: inline-block; padding: 2px 6px; border-radius: 4px; background: ${r.app.priceStatus === 'Fixed' ? '#059669' : '#f1f5f9'}; color: ${r.app.priceStatus === 'Fixed' ? 'white' : '#64748b'}; font-size: 9px; font-weight: bold;">${r.app.priceStatus}</div>
+                        <div style="margin-top: 4px; font-size: 9px; color: #94a3b8;">TRMS: ${r.trms.priceStatus}</div>
+                    </td>
+                    <td style="border: 1px solid #e2e8f0; padding: 12px 16px; font-size: 10px; background: ${getBgColor(r.errorPcts.buyPrice)};">
+                        <div style="color: #64748b; font-size: 8px; font-weight: bold; text-transform: uppercase;">App Price</div>
+                        <div style="font-weight: bold; color: #1e293b;">$${r.app.buyPrice.toFixed(3)}</div>
+                        <div style="margin-top: 4px; font-size: 9px; color: ${getErrorColor(r.errorPcts.buyPrice)}; font-weight: bold;">Err: ${r.errorPcts.buyPrice.toFixed(2)}%</div>
+                        <div style="margin-top: 8px; color: #64748b; font-size: 8px; font-weight: bold; text-transform: uppercase;">TRMS Legs</div>
+                        ${renderLegs(r.trms.buyLegs)}
+                    </td>
+                    <td style="border: 1px solid #e2e8f0; padding: 12px 16px; font-size: 10px; background: ${getBgColor(r.errorPcts.buyVol)};">
+                        <div style="color: #64748b; font-size: 8px; font-weight: bold; text-transform: uppercase;">App Vol</div>
+                        <div style="font-weight: bold; color: #1e293b;">${r.app.buyVol.toLocaleString()}</div>
+                        <div style="margin-top: 4px; font-size: 9px; color: ${getErrorColor(r.errorPcts.buyVol)}; font-weight: bold;">Err: ${r.errorPcts.buyVol.toFixed(2)}%</div>
+                    </td>
+                    <td style="border: 1px solid #e2e8f0; padding: 12px 16px; font-size: 10px; background: ${getBgColor(r.errorPcts.sellPrice)};">
+                        <div style="color: #64748b; font-size: 8px; font-weight: bold; text-transform: uppercase;">App Price</div>
+                        <div style="font-weight: bold; color: #1e293b;">$${r.app.sellPrice.toFixed(3)}</div>
+                        <div style="margin-top: 4px; font-size: 9px; color: ${getErrorColor(r.errorPcts.sellPrice)}; font-weight: bold;">Err: ${r.errorPcts.sellPrice.toFixed(2)}%</div>
+                        <div style="margin-top: 8px; color: #64748b; font-size: 8px; font-weight: bold; text-transform: uppercase;">TRMS Legs</div>
+                        ${renderLegs(r.trms.sellLegs)}
+                    </td>
+                    <td style="border: 1px solid #e2e8f0; padding: 12px 16px; font-size: 10px; background: ${getBgColor(r.errorPcts.sellVol)};">
+                        <div style="color: #64748b; font-size: 8px; font-weight: bold; text-transform: uppercase;">App Vol</div>
+                        <div style="font-weight: bold; color: #1e293b;">${r.app.sellVol.toLocaleString()}</div>
+                        <div style="margin-top: 4px; font-size: 9px; color: ${getErrorColor(r.errorPcts.sellVol)}; font-weight: bold;">Err: ${r.errorPcts.sellVol.toFixed(2)}%</div>
+                    </td>
+                    <td style="border: 1px solid #e2e8f0; padding: 12px 16px; font-size: 10px; background: ${getBgColor(r.errorPcts.src)};">
+                        <div style="color: #64748b; font-size: 8px; font-weight: bold; text-transform: uppercase;">App SRC</div>
+                        <div style="font-weight: bold; color: #1e293b;">${formatUSD(r.app.src)}</div>
+                        <div style="margin-top: 4px; font-size: 9px; color: ${getErrorColor(r.errorPcts.src)}; font-weight: bold;">Err: ${r.errorPcts.src.toFixed(2)}%</div>
+                        <div style="margin-top: 8px; color: #64748b; font-size: 8px; font-weight: bold; text-transform: uppercase;">TRMS Breakdown</div>
+                        ${renderSrcLegs(r.trms.srcLegs)}
+                    </td>
+                    <td style="border: 1px solid #e2e8f0; padding: 12px 16px; font-size: 10px; background: ${getBgColor(r.errorPcts.purchaseCost)};">
+                        <div style="color: #64748b; font-size: 8px; font-weight: bold; text-transform: uppercase;">App Cost</div>
+                        <div style="font-weight: bold; color: #1e293b;">${formatUSD(r.app.reconciledPurchaseCost || r.app.buyPrice * r.app.buyVol)}</div>
+                        <div style="margin-top: 4px; font-size: 9px; color: ${getErrorColor(r.errorPcts.purchaseCost)}; font-weight: bold;">Err: ${r.errorPcts.purchaseCost.toFixed(2)}%</div>
+                    </td>
+                    <td style="border: 1px solid #e2e8f0; padding: 12px 16px; font-size: 10px; background: ${getBgColor(r.errorPcts.salesRevenue)};">
+                        <div style="color: #64748b; font-size: 8px; font-weight: bold; text-transform: uppercase;">App Revenue</div>
+                        <div style="font-weight: bold; color: #1e293b;">${formatUSD(r.app.reconciledSalesRevenue || r.app.sellPrice * r.app.sellVol)}</div>
+                        <div style="margin-top: 4px; font-size: 9px; color: ${getErrorColor(r.errorPcts.salesRevenue)}; font-weight: bold;">Err: ${r.errorPcts.salesRevenue.toFixed(2)}%</div>
+                    </td>
+                    <td style="border: 1px solid #e2e8f0; padding: 12px 16px; font-size: 10px;">
+                        <div style="color: #64748b; font-size: 8px; font-weight: bold; text-transform: uppercase;">App P&L</div>
+                        <div style="font-weight: bold; color: #1e293b;">${formatUSD((r.app.reconciledSalesRevenue || r.app.sellPrice * r.app.sellVol) - (r.app.reconciledPurchaseCost || r.app.buyPrice * r.app.buyVol) - r.app.src)}</div>
+                        <div style="margin-top: 8px; color: #64748b; font-size: 8px; font-weight: bold; text-transform: uppercase;">TRMS Base Value</div>
+                        <div style="font-weight: bold; color: #475569;">${formatUSD(r.trms.commodityValue)}</div>
+                        <div style="margin-top: 8px; color: #ef4444; font-size: 9px; font-weight: bold;">${Array.from(r.discrepancies).join(', ') || ''}</div>
+                    </td>
+                </tr>
+            `;
+        }
+        return '';
+    }).join('');
+
+    const summaryCards = `
+        <div style="display: grid; grid-template-columns: repeat(4, 1fr); gap: 15px; margin-bottom: 30px; font-family: sans-serif;">
+            <div style="background: #0f172a; color: white; padding: 20px; border-radius: 16px; border: 1px solid #1e293b; box-shadow: 0 4px 6px -1px rgba(0,0,0,0.1);">
+                <div style="font-size: 10px; text-transform: uppercase; color: #fb7185; font-weight: 900; letter-spacing: 1px; margin-bottom: 8px;">Total Discrepancies</div>
+                <div style="font-size: 32px; font-weight: 900; font-family: monospace;">${stats.totalDiscrepancies}</div>
+                <div style="font-size: 10px; color: #64748b; margin-top: 8px; font-weight: bold;">POINTS REQUIRING ATTENTION</div>
+            </div>
+            <div style="background: #0f172a; color: white; padding: 20px; border-radius: 16px; border: 1px solid #1e293b; box-shadow: 0 4px 6px -1px rgba(0,0,0,0.1);">
+                <div style="font-size: 10px; text-transform: uppercase; color: #34d399; font-weight: 900; letter-spacing: 1px; margin-bottom: 8px;">Perfect Matches</div>
+                <div style="font-size: 32px; font-weight: 900; font-family: monospace;">${stats.matchedCount}</div>
+                <div style="font-size: 10px; color: #64748b; margin-top: 8px; font-weight: bold;">STRATEGIES IN FULL SYNC</div>
+            </div>
+            <div style="background: white; border: 1px solid #e2e8f0; padding: 20px; border-radius: 16px; grid-column: span 2; box-shadow: 0 1px 3px rgba(0,0,0,0.1);">
+                <div style="font-size: 10px; text-transform: uppercase; color: #94a3b8; font-weight: 900; letter-spacing: 1px; margin-bottom: 15px;">Average Error Summary</div>
+                <div style="display: grid; grid-template-columns: repeat(4, 1fr); gap: 15px;">
+                    <div><div style="font-size: 8px; color: #94a3b8; font-weight: bold; text-transform: uppercase;">Purc Price</div><div style="font-size: 14px; font-weight: 900; font-family: monospace; color: ${stats.avgErrors.buyPrice > 5 ? '#ef4444' : '#0f172a'}">${stats.avgErrors.buyPrice.toFixed(2)}%</div></div>
+                    <div><div style="font-size: 8px; color: #94a3b8; font-weight: bold; text-transform: uppercase;">Purc Vol</div><div style="font-size: 14px; font-weight: 900; font-family: monospace; color: ${stats.avgErrors.buyVol > 5 ? '#ef4444' : '#0f172a'}">${stats.avgErrors.buyVol.toFixed(2)}%</div></div>
+                    <div><div style="font-size: 8px; color: #94a3b8; font-weight: bold; text-transform: uppercase;">Sales Price</div><div style="font-size: 14px; font-weight: 900; font-family: monospace; color: ${stats.avgErrors.sellPrice > 5 ? '#ef4444' : '#0f172a'}">${stats.avgErrors.sellPrice.toFixed(2)}%</div></div>
+                    <div><div style="font-size: 8px; color: #94a3b8; font-weight: bold; text-transform: uppercase;">Sales Vol</div><div style="font-size: 14px; font-weight: 900; font-family: monospace; color: ${stats.avgErrors.sellVol > 5 ? '#ef4444' : '#0f172a'}">${stats.avgErrors.sellVol.toFixed(2)}%</div></div>
+                    <div><div style="font-size: 8px; color: #94a3b8; font-weight: bold; text-transform: uppercase;">SRC Cost</div><div style="font-size: 14px; font-weight: 900; font-family: monospace; color: ${stats.avgErrors.src > 5 ? '#ef4444' : '#0f172a'}">${stats.avgErrors.src.toFixed(2)}%</div></div>
+                    <div><div style="font-size: 8px; color: #94a3b8; font-weight: bold; text-transform: uppercase;">Purc Cost</div><div style="font-size: 14px; font-weight: 900; font-family: monospace; color: ${stats.avgErrors.purchaseCost > 5 ? '#ef4444' : '#0f172a'}">${stats.avgErrors.purchaseCost.toFixed(2)}%</div></div>
+                    <div><div style="font-size: 8px; color: #94a3b8; font-weight: bold; text-transform: uppercase;">Sales Rev</div><div style="font-size: 14px; font-weight: 900; font-family: monospace; color: ${stats.avgErrors.salesRevenue > 5 ? '#ef4444' : '#0f172a'}">${stats.avgErrors.salesRevenue.toFixed(2)}%</div></div>
+                    <div><div style="font-size: 8px; color: #94a3b8; font-weight: bold; text-transform: uppercase;">Critical</div><div style="font-size: 14px; font-weight: 900; font-family: monospace; color: ${stats.criticalErrorsCount > 0 ? '#ef4444' : '#10b981'}">${stats.criticalErrorsCount} SNs</div></div>
+                </div>
+            </div>
+        </div>
+
+        <div style="display: grid; grid-template-columns: repeat(4, 1fr); gap: 15px; margin-bottom: 30px; font-family: sans-serif;">
+            <div style="background: #f8fafc; padding: 15px; border-radius: 12px; border: 1px solid #e2e8f0;">
+                <div style="font-size: 9px; color: #64748b; font-weight: bold; text-transform: uppercase; margin-bottom: 4px;">Total Volume Alignment</div>
+                <div style="font-size: 16px; font-weight: 900;">App: ${stats.totals.appVol.toLocaleString()}</div>
+                <div style="font-size: 12px; color: #94a3b8;">TRMS: ${stats.totals.trmsVol.toLocaleString()}</div>
+                <div style="font-size: 10px; color: ${Math.abs(stats.totals.appVol - stats.totals.trmsVol) > 1000 ? '#ef4444' : '#10b981'}; font-weight: bold; margin-top: 4px;">Diff: ${(stats.totals.appVol - stats.totals.trmsVol).toLocaleString()}</div>
+            </div>
+            <div style="background: #f8fafc; padding: 15px; border-radius: 12px; border: 1px solid #e2e8f0;">
+                <div style="font-size: 9px; color: #64748b; font-weight: bold; text-transform: uppercase; margin-bottom: 4px;">Total Purchase Cost</div>
+                <div style="font-size: 16px; font-weight: 900;">App: ${formatUSD(stats.totals.appCost)}</div>
+                <div style="font-size: 12px; color: #94a3b8;">TRMS: ${formatUSD(stats.totals.trmsCost)}</div>
+                <div style="font-size: 10px; color: ${Math.abs(stats.totals.appCost - stats.totals.trmsCost) > 10000 ? '#ef4444' : '#10b981'}; font-weight: bold; margin-top: 4px;">Diff: ${formatUSD(stats.totals.appCost - stats.totals.trmsCost)}</div>
+            </div>
+            <div style="background: #f8fafc; padding: 15px; border-radius: 12px; border: 1px solid #e2e8f0;">
+                <div style="font-size: 9px; color: #64748b; font-weight: bold; text-transform: uppercase; margin-bottom: 4px;">Total Sales Revenue</div>
+                <div style="font-size: 16px; font-weight: 900;">App: ${formatUSD(stats.totals.appRev)}</div>
+                <div style="font-size: 12px; color: #94a3b8;">TRMS: ${formatUSD(stats.totals.trmsRev)}</div>
+                <div style="font-size: 10px; color: ${Math.abs(stats.totals.appRev - stats.totals.trmsRev) > 10000 ? '#ef4444' : '#10b981'}; font-weight: bold; margin-top: 4px;">Diff: ${formatUSD(stats.totals.appRev - stats.totals.trmsRev)}</div>
+            </div>
+            <div style="background: #f8fafc; padding: 15px; border-radius: 12px; border: 1px solid #e2e8f0;">
+                <div style="font-size: 9px; color: #64748b; font-weight: bold; text-transform: uppercase; margin-bottom: 4px;">Total SRC Alignment</div>
+                <div style="font-size: 16px; font-weight: 900;">App: ${formatUSD(stats.totals.appSrc)}</div>
+                <div style="font-size: 12px; color: #94a3b8;">TRMS: ${formatUSD(stats.totals.trmsSrc)}</div>
+                <div style="font-size: 10px; color: ${Math.abs(stats.totals.appSrc - stats.totals.trmsSrc) > 1000 ? '#ef4444' : '#10b981'}; font-weight: bold; margin-top: 4px;">Diff: ${formatUSD(stats.totals.appSrc - stats.totals.trmsSrc)}</div>
+            </div>
+        </div>
+    `;
+
+    return `
+        <!DOCTYPE html>
+        <html>
+            <head>
+                <meta charset="UTF-8">
+                <title>TRMS Reconciliation Report</title>
+                <style>
+                    body { font-family: -apple-system, BlinkMacSystemFont, "Segoe UI", Roboto, Helvetica, Arial, sans-serif; padding: 40px; background-color: #f1f5f9; color: #0f172a; line-height: 1.5; }
+                    .container { max-width: 1600px; margin: 0 auto; background: white; padding: 50px; border-radius: 32px; box-shadow: 0 25px 50px -12px rgba(0,0,0,0.15); border: 1px solid #e2e8f0; }
+                    .header { display: flex; justify-content: space-between; align-items: flex-start; margin-bottom: 40px; border-bottom: 2px solid #f1f5f9; padding-bottom: 30px; }
+                    .title-area h1 { font-size: 36px; font-weight: 900; letter-spacing: -1.5px; margin: 0; color: #0f172a; }
+                    .portfolio-info { margin-top: 10px; display: flex; gap: 20px; }
+                    .info-pill { background: #f1f5f9; padding: 4px 12px; border-radius: 999px; font-size: 11px; font-weight: 800; color: #475569; text-transform: uppercase; letter-spacing: 0.5px; }
+                    .meta { font-size: 11px; color: #94a3b8; font-weight: bold; text-transform: uppercase; letter-spacing: 1px; }
+                    table { width: 100%; border-collapse: separate; border-spacing: 0; margin-top: 20px; border: 1px solid #e2e8f0; border-radius: 16px; overflow: hidden; box-shadow: 0 4px 6px -1px rgba(0,0,0,0.05); }
+                    th { text-align: left; background-color: #f8fafc; padding: 14px 16px; font-size: 10px; font-weight: 800; text-transform: uppercase; letter-spacing: 0.5px; color: #475569; border-bottom: 2px solid #e2e8f0; }
+                    td { padding: 14px 16px; border-bottom: 1px solid #f1f5f9; vertical-align: top; }
+                    tr:last-child td { border-bottom: none; }
+                    tr:hover { background-color: #f8fafc; }
+                </style>
+            </head>
+            <body>
+                <div class="container">
+                    <div class="header">
+                        <div class="title-area">
+                            <h1>TRMS Reconciliation Report</h1>
+                            <div class="portfolio-info">
+                                <span class="info-pill">Portfolio: ${trmsData.portfolioName || 'N/A'}</span>
+                                <span class="info-pill">Year: ${trmsData.portfolioYear || 'N/A'}</span>
+                            </div>
+                        </div>
+                        <div style="text-align: right;">
+                            <div class="meta">Generated on ${new Date().toLocaleString()}</div>
+                            <div style="font-size: 10px; color: #6366f1; font-weight: 900; margin-top: 5px; text-transform: uppercase;">App Version 2.5 • Verified</div>
+                        </div>
+                    </div>
+                    
+                    ${summaryCards}
+                    
+                    <table>
+                        <thead><tr>${tableHeaders}</tr></thead>
+                        <tbody>${tableRows}</tbody>
+                    </table>
+                    
+                    <div style="margin-top: 50px; padding: 30px; background: #f8fafc; border-radius: 16px; border: 1px solid #e2e8f0; text-align: center;">
+                        <div style="font-size: 11px; color: #94a3b8; font-weight: 900; text-transform: uppercase; letter-spacing: 3px;">
+                            End of Reconciliation Report • Confidential Data
+                        </div>
+                        <div style="font-size: 9px; color: #cbd5e1; margin-top: 10px;">
+                            This report was generated automatically by the TRMS Reconciliation Engine.
+                        </div>
+                    </div>
+                </div>
+            </body>
+        </html>
+    `;
+  };
+
+  const handleDownloadHTML = () => {
+    const html = generateReportHTML();
+    const blob = new Blob([html], { type: 'text/html' });
+    const url = URL.createObjectURL(blob);
+    const a = document.createElement('a');
+    a.href = url;
+    a.download = `TRMS_Reconciliation_Report_${new Date().toISOString().split('T')[0]}.html`;
+    document.body.appendChild(a);
+    a.click();
+    document.body.removeChild(a);
+    URL.revokeObjectURL(url);
+    toast.success("HTML report downloaded successfully.");
+  };
+
+  const handleDownloadExcel = () => {
     const reportData = processedData.map((row: any) => {
       if (activeTab === 'reconcile') {
         const r = row as ReconciliationRow;
@@ -713,23 +1045,36 @@ export const DiscrepancyCheck: React.FC<DiscrepancyCheckProps> = ({ profiles, tr
           'Matched in TRMS': r.foundInTrms ? 'Yes' : 'No',
           'App Loading Date': r.app.loadingDate,
           'TRMS Loading Date': r.trms.loadingDate,
+          'Loading Date Error %': r.errorPcts.loadingDate,
           'App Delivery Date': r.app.deliveryDate,
           'TRMS Delivery Date': r.trms.deliveryDate,
+          'Delivery Date Error %': r.errorPcts.deliveryDate,
           'App Volume Type': r.app.volumeType,
           'TRMS Volume Type': r.trms.volumeType,
           'App Price Status': r.app.priceStatus,
           'TRMS Price Status': r.trms.priceStatus,
           'App Purchase Price': r.app.buyPrice,
-          'TRMS Purchase Price': r.trms.buyLegs.reduce((acc, l) => acc + l.price, 0) / (r.trms.buyLegs.length || 1),
+          'TRMS Purchase Price (Best Match)': r.trms.buyLegs.length > 0 ? r.trms.buyLegs.reduce((prev, curr) => Math.abs(curr.price - r.app.buyPrice) < Math.abs(prev.price - r.app.buyPrice) ? curr : prev).price : 0,
+          'Purchase Price Error %': r.errorPcts.buyPrice,
           'App Purchase Volume': r.app.buyVol,
-          'TRMS Purchase Volume': r.trms.buyLegs.reduce((acc, l) => acc + l.vol, 0),
+          'TRMS Purchase Volume (Best Match)': r.trms.buyLegs.length > 0 ? r.trms.buyLegs.reduce((prev, curr) => Math.abs(curr.vol - r.app.buyVol) < Math.abs(prev.vol - r.app.buyVol) ? curr : prev).vol : 0,
+          'Purchase Volume Error %': r.errorPcts.buyVol,
           'App Sales Price': r.app.sellPrice,
-          'TRMS Sales Price': r.trms.sellLegs.reduce((acc, l) => acc + l.price, 0) / (r.trms.sellLegs.length || 1),
+          'TRMS Sales Price (Best Match)': r.trms.sellLegs.length > 0 ? r.trms.sellLegs.reduce((prev, curr) => Math.abs(curr.price - r.app.sellPrice) < Math.abs(prev.price - r.app.sellPrice) ? curr : prev).price : 0,
+          'Sales Price Error %': r.errorPcts.sellPrice,
           'App Sales Volume': r.app.sellVol,
-          'TRMS Sales Volume': r.trms.sellLegs.reduce((acc, l) => acc + l.vol, 0),
+          'TRMS Sales Volume (Best Match)': r.trms.sellLegs.length > 0 ? r.trms.sellLegs.reduce((prev, curr) => Math.abs(curr.vol - r.app.sellVol) < Math.abs(prev.vol - r.app.sellVol) ? curr : prev).vol : 0,
+          'Sales Volume Error %': r.errorPcts.sellVol,
+          'App Purchase Cost': r.app.reconciledPurchaseCost > 0 ? r.app.reconciledPurchaseCost : r.app.buyPrice * r.app.buyVol,
+          'TRMS Purchase Value (Best Match)': r.trms.buyLegs.length > 0 ? r.trms.buyLegs.reduce((prev, curr) => Math.abs(Math.abs(curr.valueUSD) - (r.app.reconciledPurchaseCost > 0 ? r.app.reconciledPurchaseCost : r.app.buyPrice * r.app.buyVol)) < Math.abs(Math.abs(prev.valueUSD) - (r.app.reconciledPurchaseCost > 0 ? r.app.reconciledPurchaseCost : r.app.buyPrice * r.app.buyVol)) ? curr : prev).valueUSD : 0,
+          'Purchase Cost Error %': r.errorPcts.purchaseCost,
+          'App Sales Revenue': r.app.reconciledSalesRevenue > 0 ? r.app.reconciledSalesRevenue : r.app.sellPrice * r.app.sellVol,
+          'TRMS Sales Value (Best Match)': r.trms.sellLegs.length > 0 ? r.trms.sellLegs.reduce((prev, curr) => Math.abs(Math.abs(curr.valueUSD) - (r.app.reconciledSalesRevenue > 0 ? r.app.reconciledSalesRevenue : r.app.sellPrice * r.app.sellVol)) < Math.abs(Math.abs(prev.valueUSD) - (r.app.reconciledSalesRevenue > 0 ? r.app.reconciledSalesRevenue : r.app.sellPrice * r.app.sellVol)) ? curr : prev).valueUSD : 0,
+          'Sales Revenue Error %': r.errorPcts.salesRevenue,
           'App SRC Cost': r.app.src,
-          'TRMS SRC Cost': r.trms.src,
-          'App Physical P&L': r.app.sellPrice * r.app.sellVol - r.app.buyPrice * r.app.buyVol - r.app.src,
+          'TRMS SRC Cost (Best Match)': r.trms.srcLegs.length > 0 ? r.trms.srcLegs.reduce((prev, curr) => Math.abs(curr.value - r.app.src) < Math.abs(prev.value - r.app.src) ? curr : prev).value : 0,
+          'SRC Cost Error %': r.errorPcts.src,
+          'App Physical P&L': (r.app.reconciledSalesRevenue > 0 ? r.app.reconciledSalesRevenue : r.app.sellPrice * r.app.sellVol) - (r.app.reconciledPurchaseCost > 0 ? r.app.reconciledPurchaseCost : r.app.buyPrice * r.app.buyVol) - r.app.src,
           'TRMS Base Value': r.trms.commodityValue,
           'Discrepancies': Array.from(r.discrepancies).join(', ') || 'None'
         };
@@ -741,7 +1086,7 @@ export const DiscrepancyCheck: React.FC<DiscrepancyCheckProps> = ({ profiles, tr
     const wb = XLSX.utils.book_new();
     XLSX.utils.book_append_sheet(wb, ws, "Reconciliation Report");
     XLSX.writeFile(wb, `TRMS_Reconciliation_Report_${new Date().toISOString().split('T')[0]}.xlsx`);
-    toast.success("Report downloaded successfully.");
+    toast.success("Excel report downloaded successfully.");
   };
 
   const formatUSD = (val: number) => new Intl.NumberFormat('en-US', { style: 'currency', currency: 'USD', maximumFractionDigits: 0 }).format(val);
@@ -751,11 +1096,193 @@ export const DiscrepancyCheck: React.FC<DiscrepancyCheckProps> = ({ profiles, tr
     const matchedCount = reconciliationData.filter(r => r.foundInTrms && r.discrepancies.size === 0).length;
     const totalSrcValue = Object.values(trmsData.trmsAgg).reduce((acc, curr) => acc + curr.srcValue, 0);
     const totalHedgingPnL = Object.values(trmsData.trmsAgg).reduce((acc, curr) => acc + curr.hedgingPnL, 0);
-    return { totalDiscrepancies, matchedCount, totalSrcValue, totalHedgingPnL };
+
+    const foundRows = reconciliationData.filter(r => r.foundInTrms);
+    
+    const totals = {
+        appVol: reconciliationData.reduce((acc, r) => acc + r.app.buyVol + r.app.sellVol, 0),
+        trmsVol: reconciliationData.reduce((acc, r) => acc + r.trms.buyLegs.reduce((sum, l) => sum + l.vol, 0) + r.trms.sellLegs.reduce((sum, l) => sum + l.vol, 0), 0),
+        appCost: reconciliationData.reduce((acc, r) => acc + (r.app.reconciledPurchaseCost || r.app.buyPrice * r.app.buyVol), 0),
+        trmsCost: reconciliationData.reduce((acc, r) => acc + r.trms.buyLegs.reduce((sum, l) => sum + Math.abs(l.valueUSD), 0), 0),
+        appRev: reconciliationData.reduce((acc, r) => acc + (r.app.reconciledSalesRevenue || r.app.sellPrice * r.app.sellVol), 0),
+        trmsRev: reconciliationData.reduce((acc, r) => acc + r.trms.sellLegs.reduce((sum, l) => sum + Math.abs(l.valueUSD), 0), 0),
+        appSrc: reconciliationData.reduce((acc, r) => acc + r.app.src, 0),
+        trmsSrc: reconciliationData.reduce((acc, r) => acc + r.trms.src, 0),
+    };
+
+    const avgErrors = {
+        buyPrice: foundRows.length ? foundRows.reduce((acc, r) => acc + r.errorPcts.buyPrice, 0) / foundRows.length : 0,
+        sellPrice: foundRows.length ? foundRows.reduce((acc, r) => acc + r.errorPcts.sellPrice, 0) / foundRows.length : 0,
+        buyVol: foundRows.length ? foundRows.reduce((acc, r) => acc + r.errorPcts.buyVol, 0) / foundRows.length : 0,
+        sellVol: foundRows.length ? foundRows.reduce((acc, r) => acc + r.errorPcts.sellVol, 0) / foundRows.length : 0,
+        src: foundRows.length ? foundRows.reduce((acc, r) => acc + r.errorPcts.src, 0) / foundRows.length : 0,
+        purchaseCost: foundRows.length ? foundRows.reduce((acc, r) => acc + r.errorPcts.purchaseCost, 0) / foundRows.length : 0,
+        salesRevenue: foundRows.length ? foundRows.reduce((acc, r) => acc + r.errorPcts.salesRevenue, 0) / foundRows.length : 0,
+    };
+
+    const criticalErrorsCount = foundRows.filter(r => 
+        r.errorPcts.buyPrice > 5 || r.errorPcts.sellPrice > 5 || 
+        r.errorPcts.buyVol > 5 || r.errorPcts.sellVol > 5 || 
+        r.errorPcts.src > 5 || r.errorPcts.purchaseCost > 5 || 
+        r.errorPcts.salesRevenue > 5
+    ).length;
+
+    return { totalDiscrepancies, matchedCount, totalSrcValue, totalHedgingPnL, avgErrors, totals, criticalErrorsCount };
   }, [reconciliationData, trmsData.trmsAgg]);
 
+  const handleConfirmSync = () => {
+    if (pendingData) {
+      if (syncOptions.syncForwardCurves && pendingData.forwardCurves && pendingData.forwardCurves.length > 0) {
+        pendingData.forwardCurves.forEach(fc => {
+          const monthToPrices: Record<string, Record<string, number>> = {};
+          fc.curves.forEach(curve => {
+            curve.points.forEach(point => {
+              if (!monthToPrices[point.month]) monthToPrices[point.month] = {};
+              monthToPrices[point.month][curve.index] = point.value;
+            });
+          });
+
+          const rows: ForwardCurveRow[] = Object.entries(monthToPrices).map(([month, prices]) => ({
+            month,
+            prices
+          })).sort((a, b) => a.month.localeCompare(b.month));
+
+          if (rows.length > 0) {
+            saveForwardCurve(fc.asOfDate, rows);
+            toast.success(`Forward curve for ${fc.asOfDate} imported.`);
+            if (onForwardCurveUpdate) onForwardCurveUpdate();
+          }
+        });
+      }
+
+      onTrmsUpload({
+        ...pendingData,
+        syncOptions
+      });
+      setPendingData(null);
+      setShowSyncModal(false);
+    }
+  };
+
   return (
-    <div className="flex flex-col space-y-4 p-4 lg:p-6">
+    <div className="h-full flex flex-col bg-slate-50 relative">
+      {/* Sync Options Modal */}
+      <AnimatePresence>
+        {showSyncModal && (
+          <div className="fixed inset-0 z-[100] flex items-center justify-center p-4 bg-slate-900/60 backdrop-blur-sm">
+            <motion.div 
+              initial={{ opacity: 0, scale: 0.9 }}
+              animate={{ opacity: 1, scale: 1 }}
+              exit={{ opacity: 0, scale: 0.9 }}
+              className="bg-white rounded-2xl shadow-2xl w-full max-w-md overflow-hidden border border-slate-200"
+            >
+              <div className="p-6 border-b border-slate-100 bg-slate-50">
+                <h3 className="text-lg font-bold text-slate-800 flex items-center gap-2">
+                  <svg className="w-5 h-5 text-indigo-600" fill="none" stroke="currentColor" viewBox="0 0 24 24"><path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M4 4v5h.582m15.356 2A8.001 8.001 0 004.582 9m0 0H9m11 11v-5h-.581m0 0a8.003 8.003 0 01-15.357-2m15.357 2H15" /></svg>
+                  Jarvis Sync Options
+                </h3>
+                <div className="mt-2 flex flex-wrap gap-1">
+                  {pendingData?.fileNames?.map(name => (
+                    <span key={name} className="px-2 py-0.5 bg-indigo-50 text-indigo-600 text-[10px] font-bold rounded-full border border-indigo-100 truncate max-w-[150px]">
+                      {name}
+                    </span>
+                  ))}
+                </div>
+              </div>
+              
+              <div className="p-6 space-y-6">
+                <div className="space-y-4">
+                  <label className="flex items-start gap-3 cursor-pointer group">
+                    <input 
+                      type="checkbox" 
+                      checked={syncOptions.syncReconciled}
+                      onChange={e => setSyncOptions(prev => ({ ...prev, syncReconciled: e.target.checked }))}
+                      className="mt-1 w-4 h-4 text-indigo-600 rounded border-slate-300 focus:ring-indigo-500"
+                    />
+                    <div>
+                      <span className="block text-sm font-bold text-slate-700 group-hover:text-indigo-600 transition-colors">Sync Reconciled Values</span>
+                      <span className="block text-xs text-slate-500">Import official Finance Revenue and Cost from Master Sheet. This will override market calculations.</span>
+                    </div>
+                  </label>
+
+                  <label className="flex items-start gap-3 cursor-pointer group">
+                    <input 
+                      type="checkbox" 
+                      checked={syncOptions.syncPrices}
+                      onChange={e => setSyncOptions(prev => ({ ...prev, syncPrices: e.target.checked }))}
+                      className="mt-1 w-4 h-4 text-indigo-600 rounded border-slate-300 focus:ring-indigo-500"
+                    />
+                    <div>
+                      <span className="block text-sm font-bold text-slate-700 group-hover:text-indigo-600 transition-colors">Sync Absolute Prices</span>
+                      <span className="block text-xs text-slate-500">Import Buy/Sell prices directly from Jarvis. Useful for matching TRMS exactly.</span>
+                    </div>
+                  </label>
+
+                  {syncOptions.syncPrices && (
+                    <motion.label 
+                      initial={{ opacity: 0, x: 20 }}
+                      animate={{ opacity: 1, x: 0 }}
+                      className="flex items-start gap-3 cursor-pointer group ml-7 p-3 bg-amber-50 rounded-lg border border-amber-100"
+                    >
+                      <input 
+                        type="checkbox" 
+                        checked={syncOptions.overwriteManual}
+                        onChange={e => setSyncOptions(prev => ({ ...prev, overwriteManual: e.target.checked }))}
+                        className="mt-1 w-4 h-4 text-amber-600 rounded border-amber-300 focus:ring-amber-500"
+                      />
+                      <div>
+                        <span className="block text-sm font-bold text-amber-800">Overwrite Manual Prices</span>
+                        <span className="block text-xs text-amber-600">If checked, this will replace prices even if you have manually locked them in the form.</span>
+                      </div>
+                    </motion.label>
+                  )}
+
+                  {pendingData?.forwardCurves && pendingData.forwardCurves.length > 0 && (
+                    <label className="flex items-start gap-3 cursor-pointer group">
+                      <input 
+                        type="checkbox" 
+                        checked={syncOptions.syncForwardCurves}
+                        onChange={e => setSyncOptions(prev => ({ ...prev, syncForwardCurves: e.target.checked }))}
+                        className="mt-1 w-4 h-4 text-indigo-600 rounded border-slate-300 focus:ring-indigo-500"
+                      />
+                      <div>
+                        <span className="block text-sm font-bold text-slate-700 group-hover:text-indigo-600 transition-colors">
+                          Import Forward Curves ({pendingData.forwardCurves.length})
+                        </span>
+                        <span className="block text-xs text-slate-500">Extract and save forward curve data from the "Forward Curve" sheet in Jarvis files.</span>
+                      </div>
+                    </label>
+                  )}
+                </div>
+
+                <div className="p-4 bg-slate-50 rounded-xl border border-slate-100">
+                  <h4 className="text-[10px] font-bold text-slate-400 uppercase mb-2">Multi-File Handling</h4>
+                  <p className="text-[10px] text-slate-500 leading-relaxed italic">
+                    "Latest File Wins": If multiple files contain data for the same strategy, the system will merge individual TRMS line items but will use the reconciled values from the last file processed as the source of truth.
+                  </p>
+                </div>
+              </div>
+
+              <div className="p-4 bg-slate-50 border-t border-slate-100 flex gap-3">
+                <button 
+                  onClick={() => { setShowSyncModal(false); setPendingData(null); }}
+                  className="flex-1 px-4 py-2.5 text-sm font-bold text-slate-600 hover:bg-slate-200 rounded-xl transition-all"
+                >
+                  Discard
+                </button>
+                <button 
+                  onClick={handleConfirmSync}
+                  className="flex-[2] px-4 py-2.5 text-sm font-bold text-white bg-indigo-600 hover:bg-indigo-700 rounded-xl shadow-lg shadow-indigo-200 transition-all"
+                >
+                  Apply Sync
+                </button>
+              </div>
+            </motion.div>
+          </div>
+        )}
+      </AnimatePresence>
+
+      <div className="flex flex-col space-y-4 p-4 lg:p-6">
       <div className="bg-white p-3 rounded-xl border border-slate-200 shadow-sm flex flex-col md:flex-row justify-between items-center gap-3 flex-shrink-0">
         <div className="flex-1">
           <h2 className="text-xl font-bold text-slate-800 flex items-center gap-2">
@@ -778,7 +1305,6 @@ export const DiscrepancyCheck: React.FC<DiscrepancyCheckProps> = ({ profiles, tr
           <TabButton active={activeTab === 'src'} onClick={() => setActiveTab('src')} label="SRC Raw Lines" count={trmsData.summary.src} color="indigo" />
           <TabButton active={activeTab === 'hedging'} onClick={() => setActiveTab('hedging')} label="Hedging Lines" count={trmsData.summary.hedging} color="emerald" />
           <TabButton active={activeTab === 'paper'} onClick={() => setActiveTab('paper')} label="DH/DFT Lines" count={trmsData.summary.paper} color="amber" />
-          <TabButton active={activeTab === 'curves'} onClick={() => setActiveTab('curves')} label="Forward Curves (Jarvis)" count={trmsData.forwardCurves?.length || 0} color="indigo" />
       </div>
 
       <div className="h-[2000px] bg-white rounded-xl border border-slate-200 shadow-sm overflow-hidden flex flex-col">
@@ -794,6 +1320,20 @@ export const DiscrepancyCheck: React.FC<DiscrepancyCheckProps> = ({ profiles, tr
             >
               <svg className="w-4 h-4 text-emerald-600" fill="none" stroke="currentColor" viewBox="0 0 24 24"><path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M12 10v6m0 0l-3-3m3 3l3-3m2 8H7a2 2 0 01-2-2V5a2 2 0 012-2h5.586a1 1 0 01.707.293l5.414 5.414a1 1 0 01.293.707V19a2 2 0 01-2 2z" /></svg>
               Download Report
+            </button>
+            <button 
+              onClick={() => {
+                if (window.confirm('Are you sure you want to clear all TRMS and Jarvis data? This will not affect your cargo profiles.')) {
+                  onTrmsUpload({
+                    src: [], hedging: [], paper: [], trmsAgg: {}, forwardCurves: [], uniqueValues: {},
+                    summary: { total: 0, src: 0, hedging: 0, paper: 0 }
+                  });
+                }
+              }}
+              className="px-4 py-2 bg-white border border-rose-200 text-rose-600 text-xs font-bold rounded-lg hover:bg-rose-50 hover:border-rose-300 transition-all flex items-center gap-2 shadow-sm"
+            >
+              <svg className="w-4 h-4" fill="none" stroke="currentColor" viewBox="0 0 24 24"><path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M19 7l-.867 12.142A2 2 0 0116.138 21H7.862a2 2 0 01-1.995-1.858L5 7m5 4v6m4-6v6m1-10V4a1 1 0 00-1-1h-4a1 1 0 00-1 1v3M4 7h16" /></svg>
+              Clear Data
             </button>
           </div>
           <div className="text-[10px] text-slate-400 uppercase font-bold flex gap-4"><span>* Comparison excludes PLSB &lt; 2025</span></div>
@@ -1000,7 +1540,7 @@ export const DiscrepancyCheck: React.FC<DiscrepancyCheckProps> = ({ profiles, tr
       </div>
 
       {/* Summary Cards moved below table */}
-      <div className="grid grid-cols-1 md:grid-cols-4 gap-3 flex-shrink-0">
+      <div className="grid grid-cols-1 md:grid-cols-2 lg:grid-cols-4 gap-3 flex-shrink-0">
           <motion.div whileHover={{ scale: 1.02 }} className="bg-slate-900 p-4 rounded-2xl border border-slate-800 shadow-xl flex flex-col justify-between overflow-hidden relative group">
               <div className="absolute top-0 right-0 p-4 opacity-10 group-hover:opacity-30 transition-opacity">
                   <svg className="w-16 h-16 text-white" fill="none" stroke="currentColor" viewBox="0 0 24 24"><path strokeLinecap="round" strokeLinejoin="round" strokeWidth={1} d="M12 9v2m0 4h.01m-6.938 4h13.856c1.54 0 2.502-1.667 1.732-3L13.732 4c-.77-1.333-2.694-1.333-3.464 0L3.34 16c-.77 1.333.192 3 1.732 3z" /></svg>
@@ -1023,55 +1563,109 @@ export const DiscrepancyCheck: React.FC<DiscrepancyCheckProps> = ({ profiles, tr
               </div>
           </motion.div>
 
-          <div className="bg-white p-4 rounded-2xl border border-slate-200 shadow-sm flex flex-col justify-between">
-              <div>
-                  <span className="text-[10px] font-black text-slate-400 uppercase tracking-widest block mb-1">Total TRMS SRC Value</span>
-                  <div className="flex items-baseline gap-2">
-                       <h3 className="text-3xl font-black text-indigo-600">{formatUSD(stats.totalSrcValue)}</h3>
-                  </div>
-                  <p className="text-[10px] text-slate-400 mt-2 font-bold uppercase tracking-tighter">Aggregated shipping costs</p>
-              </div>
-          </div>
-
-          <div className="bg-white p-4 rounded-2xl border border-slate-200 shadow-sm flex flex-col justify-between">
-              <div>
-                  <span className="text-[10px] font-black text-slate-400 uppercase tracking-widest block mb-1">Hedging P&L Impact</span>
-                  <div className="flex flex-col gap-1">
-                       <h3 className={`text-3xl font-black ${stats.totalHedgingPnL >= 0 ? 'text-emerald-600' : 'text-rose-600'}`}>
-                        {formatUSD(stats.totalHedgingPnL)}
-                      </h3>
-                      <div className="text-[9px] font-black uppercase px-2 py-0.5 rounded bg-blue-100 text-blue-700 w-max">
-                          TRMS Portfolio View
+          <div className="bg-white p-4 rounded-2xl border border-slate-200 shadow-sm flex flex-col justify-between col-span-1 md:col-span-2">
+              <span className="text-[10px] font-black text-slate-400 uppercase tracking-widest block mb-3">Average Error Summary</span>
+              <div className="grid grid-cols-2 sm:grid-cols-4 gap-4">
+                  {[
+                      { label: 'Purc Price', val: stats.avgErrors.buyPrice },
+                      { label: 'Purc Vol', val: stats.avgErrors.buyVol },
+                      { label: 'Sales Price', val: stats.avgErrors.sellPrice },
+                      { label: 'Sales Vol', val: stats.avgErrors.sellVol },
+                      { label: 'SRC Cost', val: stats.avgErrors.src },
+                      { label: 'Purc Cost', val: stats.avgErrors.purchaseCost },
+                      { label: 'Sales Rev', val: stats.avgErrors.salesRevenue }
+                  ].map(err => (
+                      <div key={err.label} className="flex flex-col">
+                          <span className="text-[8px] font-bold text-slate-400 uppercase truncate">{err.label}</span>
+                          <span className={`text-sm font-black font-mono ${err.val > 5 ? 'text-rose-600' : err.val > 0.1 ? 'text-amber-600' : 'text-emerald-600'}`}>
+                              {err.val.toFixed(2)}%
+                          </span>
                       </div>
-                  </div>
+                  ))}
               </div>
           </div>
       </div>
+      {/* Report Preview Modal */}
+      <AnimatePresence>
+        {showReportPreview && (
+          <div className="fixed inset-0 z-[110] flex items-center justify-center p-4 bg-slate-900/80 backdrop-blur-md">
+            <motion.div 
+              initial={{ opacity: 0, scale: 0.95, y: 20 }}
+              animate={{ opacity: 1, scale: 1, y: 0 }}
+              exit={{ opacity: 0, scale: 0.95, y: 20 }}
+              className="bg-white rounded-3xl shadow-2xl w-full max-w-6xl h-[90vh] overflow-hidden border border-slate-200 flex flex-col"
+            >
+              <div className="p-6 border-b border-slate-100 bg-slate-50 flex justify-between items-center">
+                <div>
+                    <h3 className="text-xl font-black text-slate-800 flex items-center gap-2">
+                        <svg className="w-6 h-6 text-indigo-600" fill="none" stroke="currentColor" viewBox="0 0 24 24"><path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M9 17v-2m3 2v-4m3 2v-6m-9-9H5a2 2 0 00-2 2v12a2 2 0 002 2h10a2 2 0 002-2V7a2 2 0 00-2-2h-2M9 5a2 2 0 012 2h2a2 2 0 002-2M9 5a2 2 0 012 2h2a2 2 0 012 2" /></svg>
+                        Report Preview
+                    </h3>
+                    <p className="text-xs text-slate-500 font-bold uppercase tracking-widest mt-1">Review your reconciliation data before export</p>
+                </div>
+                <div className="flex items-center gap-3">
+                    <button 
+                        onClick={handleDownloadHTML}
+                        className="px-4 py-2 bg-indigo-600 text-white text-xs font-black rounded-xl hover:bg-indigo-700 transition-all flex items-center gap-2 shadow-lg shadow-indigo-200"
+                    >
+                        <svg className="w-4 h-4" fill="none" stroke="currentColor" viewBox="0 0 24 24"><path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M4 16v1a2 2 0 002 2h12a2 2 0 002-2v-1m-4-4l-4 4m0 0l-4-4m4 4V4" /></svg>
+                        Download HTML
+                    </button>
+                    <button 
+                        onClick={handleDownloadExcel}
+                        className="px-4 py-2 bg-emerald-600 text-white text-xs font-black rounded-xl hover:bg-emerald-700 transition-all flex items-center gap-2 shadow-lg shadow-emerald-200"
+                    >
+                        <svg className="w-4 h-4" fill="none" stroke="currentColor" viewBox="0 0 24 24"><path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M12 10v6m0 0l-3-3m3 3l3-3m2 8H7a2 2 0 01-2-2V5a2 2 0 012-2h5.586a1 1 0 01.707.293l5.414 5.414a1 1 0 01.293.707V19a2 2 0 01-2 2z" /></svg>
+                        Download Excel
+                    </button>
+                    <button 
+                        onClick={() => setShowReportPreview(false)}
+                        className="p-2 text-slate-400 hover:text-slate-600 hover:bg-slate-100 rounded-full transition-all"
+                    >
+                        <svg className="w-6 h-6" fill="none" stroke="currentColor" viewBox="0 0 24 24"><path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M6 18L18 6M6 6l12 12" /></svg>
+                    </button>
+                </div>
+              </div>
+              
+              <div className="flex-1 overflow-auto p-8 bg-slate-100/50">
+                  <div 
+                    className="bg-white shadow-2xl rounded-2xl p-10 border border-slate-200 mx-auto max-w-5xl"
+                    dangerouslySetInnerHTML={{ __html: generateReportHTML() }}
+                  />
+              </div>
+            </motion.div>
+          </div>
+        )}
+      </AnimatePresence>
     </div>
+  </div>
   );
 };
 
-const AlignedSplitCell = ({ type, appVal, trmsLegs, found, width }: { type: 'price' | 'vol', appVal: number, trmsLegs: TRMSCommodityLeg[], found: boolean, width: number }) => (
+const AlignedSplitCell = ({ type, appVal, trmsLegs, found, width, formatUSD, errorPct }: { type: 'price' | 'vol' | 'value', appVal: number, trmsLegs: TRMSCommodityLeg[], found: boolean, width: number, formatUSD: (v: number) => string, errorPct: number }) => (
     <div className="px-4 py-2 shrink-0 flex flex-col justify-center border-r border-slate-50 overflow-hidden" style={{ width }}>
         <div className="flex flex-col mb-2 pb-1 border-b border-slate-50">
-            <span className="text-[8px] font-bold text-slate-400 uppercase tracking-tighter">App {type === 'price' ? 'Price' : 'Vol'}</span>
+            <div className="flex justify-between items-center">
+                <span className="text-[8px] font-bold text-slate-400 uppercase tracking-tighter">App {type === 'price' ? 'Price' : type === 'vol' ? 'Vol' : 'Value'}</span>
+                {found && errorPct > 0 && (
+                    <span className={`text-[8px] font-black ${errorPct > 5 ? 'text-rose-500' : 'text-amber-500'}`}>
+                        Err: {errorPct.toFixed(1)}%
+                    </span>
+                )}
+            </div>
             <AutoScalingText maxFontSize={10} minFontSize={7} className="font-bold text-slate-700 font-mono">
-                {type === 'price' ? `$${appVal.toFixed(3)}` : appVal.toLocaleString()}
+                {type === 'price' ? `$${appVal.toFixed(3)}` : type === 'vol' ? appVal.toLocaleString() : formatUSD(appVal)}
             </AutoScalingText>
         </div>
         <div className="flex-1 overflow-y-auto custom-scrollbar flex flex-col space-y-1">
             {!found ? <span className="text-[10px] text-slate-300 italic">Not found</span> : trmsLegs.length === 0 ? <span className="text-[10px] text-rose-500 italic">No Commodity Data</span> : (
                 trmsLegs.map((leg, idx) => {
-                    const val = type === 'price' ? leg.price : leg.vol, isM = type === 'price' ? Math.abs(val - appVal) < 0.0051 : Math.abs(val - appVal) < 1.1;
-                    const diffPct = appVal !== 0 ? ((val - appVal) / Math.abs(appVal)) * 100 : 0;
+                    const val = type === 'price' ? leg.price : type === 'vol' ? leg.vol : Math.abs(leg.valueUSD);
+                    const isM = type === 'price' ? Math.abs(val - appVal) < 0.0051 : (type === 'vol' ? Math.abs(val - appVal) < 1.1 : Math.abs(val - appVal) < 100);
                     return (
                         <div key={idx} className={`h-5 flex items-center justify-between px-1.5 rounded font-mono text-[9px] border ${isM ? 'bg-emerald-50 text-emerald-700 font-bold border-emerald-100' : 'text-slate-500 opacity-80 border-transparent'}`}>
-                            <span>{type === 'price' ? val.toFixed(3) : val.toLocaleString()}</span>
-                            {!isM && Math.abs(diffPct) > 0.1 && (
-                                <span className={`text-[7px] font-black ${Math.abs(diffPct) > 5 ? 'text-rose-500' : 'text-amber-500'}`}>
-                                    {diffPct > 0 ? '+' : ''}{diffPct.toFixed(1)}%
-                                </span>
-                            )}
+                            <span className="truncate pr-1">LEG {idx + 1}</span>
+                            <span className="font-bold">{type === 'price' ? `$${val.toFixed(3)}` : type === 'vol' ? val.toLocaleString() : formatUSD(val)}</span>
                         </div>
                     );
                 })
@@ -1090,6 +1684,21 @@ const ReconciliationRowItem = memo(({ row, activeTab, columnWidths, handleRowEdi
   rowHeight: number
 }) => {
   const r = row as ReconciliationRow;
+
+  const getMonthStr = (dateStr: string) => {
+      if (!dateStr) return '';
+      const d = new Date(dateStr);
+      if (isNaN(d.getTime())) return '';
+      return `${d.getUTCFullYear()}-${String(d.getUTCMonth() + 1).padStart(2, '0')}`;
+  };
+
+  const commMonth = getMonthStr(r.trms.commWindowEndDate);
+  const appLoadingMonth = getMonthStr(r.app.loadingDate);
+  const appDeliveryMonth = getMonthStr(r.app.deliveryDate);
+
+  const loadingMonthMatch = commMonth && appLoadingMonth && commMonth === appLoadingMonth;
+  const deliveryMonthMatch = commMonth && appDeliveryMonth && commMonth === appDeliveryMonth;
+
   return (
     <div className={`flex border-b border-slate-100 transition-colors hover:bg-indigo-50/20 bg-white group ${activeTab === 'reconcile' && !r.foundInTrms ? 'bg-slate-50' : ''}`} style={{ height: rowHeight, contentVisibility: 'auto', containIntrinsicSize: `auto ${rowHeight}px` }}>
       {activeTab === 'reconcile' ? (
@@ -1101,9 +1710,16 @@ const ReconciliationRowItem = memo(({ row, activeTab, columnWidths, handleRowEdi
               </div>
           </div>
           
-          <div className="px-4 py-2 shrink-0 flex flex-col justify-center border-r border-slate-50 overflow-hidden" style={{ width: columnWidths['Loading Date'] || DEFAULT_COLUMN_WIDTH }}>
+          <div className={`px-4 py-2 shrink-0 flex flex-col justify-center border-r border-slate-50 overflow-hidden ${r.foundInTrms ? (loadingMonthMatch ? 'bg-emerald-50/50' : 'bg-rose-50/50') : ''}`} style={{ width: columnWidths['Loading Date'] || DEFAULT_COLUMN_WIDTH }}>
               <div className="flex flex-col mb-1 pb-1 border-b border-slate-50">
-                  <span className="text-[8px] font-bold text-slate-400 uppercase tracking-tighter">App Loading</span>
+                  <div className="flex justify-between items-center">
+                    <span className="text-[8px] font-bold text-slate-400 uppercase tracking-tighter">App Loading</span>
+                    {r.foundInTrms && (
+                        <span className={`text-[8px] font-black ${r.errorPcts.loadingDate > 0 ? 'text-rose-500' : 'text-emerald-500'}`}>
+                            {r.errorPcts.loadingDate > 0 ? 'Month Mismatch' : 'Month Match'}
+                        </span>
+                    )}
+                  </div>
                   <span className="text-[10px] font-bold text-slate-700 font-mono">{r.app.loadingDate || '-'}</span>
               </div>
               <div className="flex flex-col">
@@ -1112,9 +1728,16 @@ const ReconciliationRowItem = memo(({ row, activeTab, columnWidths, handleRowEdi
               </div>
           </div>
 
-          <div className="px-4 py-2 shrink-0 flex flex-col justify-center border-r border-slate-50 overflow-hidden" style={{ width: columnWidths['Delivery Date'] || DEFAULT_COLUMN_WIDTH }}>
+          <div className={`px-4 py-2 shrink-0 flex flex-col justify-center border-r border-slate-50 overflow-hidden ${r.foundInTrms ? (deliveryMonthMatch ? 'bg-emerald-50/50' : 'bg-rose-50/50') : ''}`} style={{ width: columnWidths['Delivery Date'] || DEFAULT_COLUMN_WIDTH }}>
               <div className="flex flex-col mb-1 pb-1 border-b border-slate-50">
-                  <span className="text-[8px] font-bold text-slate-400 uppercase tracking-tighter">App Delivery</span>
+                  <div className="flex justify-between items-center">
+                    <span className="text-[8px] font-bold text-slate-400 uppercase tracking-tighter">App Delivery</span>
+                    {r.foundInTrms && (
+                        <span className={`text-[8px] font-black ${r.errorPcts.deliveryDate > 0 ? 'text-rose-500' : 'text-emerald-500'}`}>
+                            {r.errorPcts.deliveryDate > 0 ? 'Month Mismatch' : 'Month Match'}
+                        </span>
+                    )}
+                  </div>
                   <span className="text-[10px] font-bold text-slate-700 font-mono">{r.app.deliveryDate || '-'}</span>
               </div>
               <div className="flex flex-col">
@@ -1157,28 +1780,32 @@ const ReconciliationRowItem = memo(({ row, activeTab, columnWidths, handleRowEdi
               </div>
           </div>
 
-          <AlignedSplitCell type="price" appVal={r.app.buyPrice} trmsLegs={r.trms.buyLegs} found={r.foundInTrms} width={columnWidths['Purchase Price'] || DEFAULT_COLUMN_WIDTH} />
-          <AlignedSplitCell type="vol" appVal={r.app.buyVol} trmsLegs={r.trms.buyLegs} found={r.foundInTrms} width={columnWidths['Purchase Volume'] || DEFAULT_COLUMN_WIDTH} />
-          <AlignedSplitCell type="price" appVal={r.app.sellPrice} trmsLegs={r.trms.sellLegs} found={r.foundInTrms} width={columnWidths['Sales Price'] || DEFAULT_COLUMN_WIDTH} />
-          <AlignedSplitCell type="vol" appVal={r.app.sellVol} trmsLegs={r.trms.sellLegs} found={r.foundInTrms} width={columnWidths['Sales Volume'] || DEFAULT_COLUMN_WIDTH} />
+          <AlignedSplitCell type="price" appVal={r.app.buyPrice} trmsLegs={r.trms.buyLegs} found={r.foundInTrms} width={columnWidths['Purchase Price'] || DEFAULT_COLUMN_WIDTH} formatUSD={formatUSD} errorPct={r.errorPcts.buyPrice} />
+          <AlignedSplitCell type="vol" appVal={r.app.buyVol} trmsLegs={r.trms.buyLegs} found={r.foundInTrms} width={columnWidths['Purchase Volume'] || DEFAULT_COLUMN_WIDTH} formatUSD={formatUSD} errorPct={r.errorPcts.buyVol} />
+          <AlignedSplitCell type="price" appVal={r.app.sellPrice} trmsLegs={r.trms.sellLegs} found={r.foundInTrms} width={columnWidths['Sales Price'] || DEFAULT_COLUMN_WIDTH} formatUSD={formatUSD} errorPct={r.errorPcts.sellPrice} />
+          <AlignedSplitCell type="vol" appVal={r.app.sellVol} trmsLegs={r.trms.sellLegs} found={r.foundInTrms} width={columnWidths['Sales Volume'] || DEFAULT_COLUMN_WIDTH} formatUSD={formatUSD} errorPct={r.errorPcts.sellVol} />
           
           <div className="px-4 py-2 shrink-0 flex flex-col justify-center border-r border-slate-50 overflow-hidden" style={{ width: columnWidths['SRC Components'] || DEFAULT_COLUMN_WIDTH }}>
                 <div className="flex flex-col mb-2 pb-1 border-b border-slate-50">
-                    <span className="text-[8px] font-bold text-slate-400 uppercase tracking-tighter">App Reconciled SRC</span>
+                    <div className="flex justify-between items-center">
+                        <span className="text-[8px] font-bold text-slate-400 uppercase tracking-tighter">App Reconciled SRC</span>
+                        {r.foundInTrms && r.errorPcts.src > 0 && (
+                            <span className={`text-[8px] font-black ${r.errorPcts.src > 5 ? 'text-rose-500' : 'text-amber-500'}`}>
+                                Err: {r.errorPcts.src.toFixed(1)}%
+                            </span>
+                        )}
+                    </div>
                     <AutoScalingText maxFontSize={10} minFontSize={7} className="font-bold text-slate-700 font-mono">
                         {formatUSD(r.app.src)}
                     </AutoScalingText>
                 </div>
                 <div className="flex-1 overflow-y-auto custom-scrollbar flex flex-col space-y-1">
-                    {!r.foundInTrms ? <span className="text-[10px] text-slate-300 italic">Not found</span> : r.trms.srcLegs.length === 0 ? <span className="text-[10px] text-rose-500 italic">No SRC Data</span> : (
+                    {!r.foundInTrms ? <span className="text-[10px] text-slate-300 italic">Not found</span> : r.trms.srcLegs.length === 0 ? (
+                        r.app.src === 0 ? <span className="text-[10px] text-emerald-500 italic">Match (Both 0)</span> : <span className="text-[10px] text-rose-500 italic">No SRC Data</span>
+                    ) : (
                         <>
                             <div className="text-[8px] font-bold text-slate-300 uppercase mb-0.5 flex justify-between items-center">
                                 <span>TRMS Breakdown (Sum: {formatUSD(r.trms.src)})</span>
-                                {r.app.src !== 0 && Math.abs((r.trms.src - r.app.src) / r.app.src) > 0.001 && (
-                                    <span className={`text-[8px] font-black ${Math.abs((r.trms.src - r.app.src) / r.app.src) > 0.05 ? 'text-rose-500' : 'text-amber-500'}`}>
-                                        {((r.trms.src - r.app.src) / r.app.src * 100).toFixed(1)}%
-                                    </span>
-                                )}
                             </div>
                             {r.trms.srcLegs.map((leg, idx) => {
                                 const isM = Math.abs(r.trms.src - r.app.src) < 100;
@@ -1194,26 +1821,31 @@ const ReconciliationRowItem = memo(({ row, activeTab, columnWidths, handleRowEdi
                 </div>
           </div>
 
-           <div className="px-4 py-2 shrink-0 flex items-center justify-center border-r border-slate-50" style={{ width: columnWidths['PnL Sync'] || DEFAULT_COLUMN_WIDTH }}>
-              {r.discrepancies.size > 0 ? (
-                <div className="flex flex-col gap-1 items-center">
-                    <div className={`px-2.5 py-1 rounded-full text-[9px] font-black uppercase tracking-tighter ${r.foundInTrms ? 'bg-rose-100 text-rose-700' : 'bg-slate-200 text-slate-500'}`}>{r.foundInTrms ? `${r.discrepancies.size} Differences` : 'Not Found'}</div>
-                    {r.discrepancies.has('Should be Realized') && (
-                        <div className="px-2 py-0.5 bg-rose-600 text-white text-[8px] font-black uppercase rounded animate-pulse">
-                            Should be Realized
-                        </div>
-                    )}
-                </div>
-              ) : (
-                <div className="flex items-center gap-1.5 text-emerald-600"><svg className="w-4 h-4" fill="currentColor" viewBox="0 0 20 20"><path fillRule="evenodd" d="M10 18a8 8 0 100-16 8 8 0 000 16zm3.707-9.293a1 1 0 00-1.414-1.414L9 10.586 7.707 9.293a1 1 0 00-1.414 1.414l2 2a1 1 0 001.414 0l4-4z" clipRule="evenodd" /></svg><span className="text-[10px] font-bold uppercase">Perfect Sync</span></div>
-              )}
-          </div>
+          <AlignedSplitCell 
+            type="value" 
+            appVal={r.app.reconciledPurchaseCost > 0 ? r.app.reconciledPurchaseCost : r.app.buyPrice * r.app.buyVol} 
+            trmsLegs={r.trms.buyLegs} 
+            found={r.foundInTrms} 
+            width={columnWidths['Purchase Cost'] || DEFAULT_COLUMN_WIDTH} 
+            formatUSD={formatUSD} 
+            errorPct={r.errorPcts.purchaseCost}
+          />
+
+          <AlignedSplitCell 
+            type="value" 
+            appVal={r.app.reconciledSalesRevenue > 0 ? r.app.reconciledSalesRevenue : r.app.sellPrice * r.app.sellVol} 
+            trmsLegs={r.trms.sellLegs} 
+            found={r.foundInTrms} 
+            width={columnWidths['Sales Revenue'] || DEFAULT_COLUMN_WIDTH} 
+            formatUSD={formatUSD} 
+            errorPct={r.errorPcts.salesRevenue}
+          />
 
           <div className="px-4 py-2 shrink-0 flex flex-col justify-center border-r border-slate-50 overflow-hidden" style={{ width: columnWidths['Value Sync'] || DEFAULT_COLUMN_WIDTH }}>
               <div className="flex flex-col mb-1 pb-1 border-b border-slate-50">
                   <span className="text-[8px] font-bold text-slate-400 uppercase tracking-tighter">App Physical P&L</span>
                   <AutoScalingText maxFontSize={10} minFontSize={7} className="font-bold text-slate-700 font-mono">
-                      {formatUSD(r.app.sellPrice * r.app.sellVol - r.app.buyPrice * r.app.buyVol - r.app.src)}
+                      {formatUSD((r.app.reconciledSalesRevenue > 0 ? r.app.reconciledSalesRevenue : r.app.sellPrice * r.app.sellVol) - (r.app.reconciledPurchaseCost > 0 ? r.app.reconciledPurchaseCost : r.app.buyPrice * r.app.buyVol) - r.app.src)}
                   </AutoScalingText>
               </div>
               <div className="flex flex-col">

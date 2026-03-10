@@ -2,7 +2,7 @@
 import React, { useState, useMemo, useRef, useEffect, useCallback } from 'react';
 import { CargoProfile, PnLBucket, EmptyCargoProfile } from '../types';
 import { motion, AnimatePresence } from 'framer-motion';
-import { detectUnit, recalculateProfile, getGroupName, GROUPS, getPortfolioYear } from '../services/calculationService';
+import { detectUnit, recalculateProfile, getGroupName, GROUPS, getPortfolioYear, saveForwardCurve, ForwardCurveRow } from '../services/calculationService';
 import { WorldMap } from './WorldMap';
 import { CalendarView } from './CalendarView';
 import { JarvisPreviewModal } from './JarvisPreviewModal';
@@ -18,6 +18,7 @@ interface CargoListProps {
   onBulkDelete: (ids: Set<string>) => void;
   onBulkUpdate?: (ids: Set<string>, updates: Partial<CargoProfile>) => void;
   onBulkImport?: (profiles: CargoProfile[]) => void;
+  onForwardCurveUpdate?: () => void;
   trmsData?: ReconciliationData;
 }
 
@@ -27,7 +28,7 @@ const COLUMN_WIDTH = 180;
 const STRATEGY_COL_WIDTH = 210;
 
 export const CargoList: React.FC<CargoListProps> = ({ 
-    profiles, onEdit, onDelete, onActualize, onBulkDelete, onBulkUpdate, onBulkImport, trmsData 
+    profiles, onEdit, onDelete, onActualize, onBulkDelete, onBulkUpdate, onBulkImport, onForwardCurveUpdate, trmsData 
 }) => {
   const [viewMode, setViewMode] = useState<ViewMode>('table');
   const [selectedIds, setSelectedIds] = useState<Set<string>>(new Set());
@@ -184,6 +185,7 @@ export const CargoList: React.FC<CargoListProps> = ({
     const loadingToast = toast.loading(`Extracting ${files.length} Jarvis Workbook(s)...`);
     
     const mergedData: Record<string, Partial<CargoProfile>> = {};
+    const foundForwardCurves: Array<{ date: string, curve: ForwardCurveRow[], fileName: string }> = [];
 
     const cleanNumeric = (val: any): number => {
         if (val === undefined || val === null || val === '' || val === '-' || String(val).trim() === '-') return 0;
@@ -330,6 +332,80 @@ export const CargoList: React.FC<CargoListProps> = ({
                         'Reconciled Sales Revenue': 'reconciledSalesRevenue'
                     };
                     extractSheetData('Master Sheet', masterMap);
+
+                    // Extract Forward Curve if exists
+                    const fcSheetName = workbook.SheetNames.find(n => {
+                        const lower = n.trim().toLowerCase();
+                        return lower === "forward curve" || (lower.includes("forward") && lower.includes("curve"));
+                    });
+                    const fcSheet = fcSheetName ? workbook.Sheets[fcSheetName] : null;
+                    if (fcSheet) {
+                        let asOfDate = new Date().toISOString().split('T')[0];
+                        const asOfCell = fcSheet['B1'];
+                        if (asOfCell) {
+                            if (asOfCell.t === 'd') asOfDate = asOfCell.v.toISOString().split('T')[0];
+                            else if (typeof asOfCell.v === 'number') {
+                                const d = new Date(Math.round((asOfCell.v - 25569) * 86400 * 1000));
+                                asOfDate = d.toISOString().split('T')[0];
+                            } else asOfDate = String(asOfCell.v);
+                        }
+
+                        const indexes: string[] = [];
+                        for (let i = 2; i <= 11; i++) {
+                            const cell = fcSheet[XLSX.utils.encode_cell({ r: 1, c: i })];
+                            if (cell) indexes.push(String(cell.v).trim());
+                            else {
+                                const fallback = ['BRIPE', 'JCC', 'Dated Brent', 'HH', 'NBP', 'JKM', 'TTF', 'AECO', 'Station 2', 'HH Last Day'];
+                                indexes.push(fallback[i-2] || `Index ${i-1}`);
+                            }
+                        }
+
+                        const monthToPrices: Record<string, Record<string, number>> = {};
+                        const fcRows = XLSX.utils.sheet_to_json(fcSheet, { header: 1 }) as any[][];
+                        
+                        for (let r = 3; r < fcRows.length; r++) {
+                            const row = fcRows[r];
+                            const monthVal = row[1]; // Column B
+                            if (monthVal === undefined || monthVal === null) continue;
+                            
+                            let monthStr = '';
+                            if (monthVal instanceof Date) {
+                                const y = monthVal.getUTCFullYear();
+                                const m = String(monthVal.getUTCMonth() + 1).padStart(2, '0');
+                                monthStr = `${y}-${m}`;
+                            } else if (typeof monthVal === 'number') {
+                                const date = new Date(Math.round((monthVal - 25569) * 86400 * 1000));
+                                const y = date.getUTCFullYear();
+                                const m = String(date.getUTCMonth() + 1).padStart(2, '0');
+                                monthStr = `${y}-${m}`;
+                            } else {
+                                monthStr = String(monthVal).trim();
+                            }
+
+                            if (!monthToPrices[monthStr]) monthToPrices[monthStr] = {};
+
+                            for (let i = 0; i < indexes.length; i++) {
+                                const val = row[i + 2]; // Columns C onwards
+                                const numVal = typeof val === 'number' ? val : parseFloat(String(val || '').replace(/[$,]/g, ''));
+                                if (!isNaN(numVal) && numVal !== 0) {
+                                    monthToPrices[monthStr][indexes[i]] = numVal;
+                                }
+                            }
+                        }
+
+                        const fcRowsToSave: ForwardCurveRow[] = Object.entries(monthToPrices).map(([month, prices]) => ({
+                            month,
+                            prices
+                        })).sort((a, b) => a.month.localeCompare(b.month));
+
+                        if (fcRowsToSave.length > 0) {
+                            foundForwardCurves.push({
+                                date: asOfDate,
+                                curve: fcRowsToSave,
+                                fileName: file.name
+                            });
+                        }
+                    }
                     
                     resolve();
                 } catch (err) {
@@ -345,6 +421,24 @@ export const CargoList: React.FC<CargoListProps> = ({
         // Process all files sequentially to avoid memory issues with large workbooks
         for (let i = 0; i < files.length; i++) {
             await processFile(files[i]);
+        }
+
+        // Handle Forward Curves found
+        if (foundForwardCurves.length > 0) {
+            const importPrices = window.confirm(
+                `Found Forward Curve data in ${foundForwardCurves.length} file(s).\n\n` +
+                `Do you want to import these prices into the Forward Curve manager?`
+            );
+
+            if (importPrices) {
+                // If multiple files, suggest taking the latest one or just import all (they are keyed by date)
+                // We'll import all, but if multiple files have the same date, the last one processed wins.
+                foundForwardCurves.forEach(fc => {
+                    saveForwardCurve(fc.date, fc.curve);
+                });
+                toast.success(`Imported Forward Curves from ${foundForwardCurves.length} file(s)`);
+                if (onForwardCurveUpdate) onForwardCurveUpdate();
+            }
         }
 
         const processedJarvisRows = Object.values(mergedData).map((parsedFields: any) => {

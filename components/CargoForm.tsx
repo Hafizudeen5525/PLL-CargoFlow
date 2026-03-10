@@ -18,6 +18,18 @@ interface CargoFormProps {
 const INDEX_OPTIONS = ['HH', 'HH Last Day', 'TTF', 'JKM', 'Dated Brent', 'JCC', 'BRIPE', 'NBP', 'AECO', 'STN 2'];
 const INCOTERM_OPTIONS = ['FOB', 'DES', 'CIF', 'CFR', 'DAT'];
 
+const formatWithCommas = (val: number | string) => {
+    if (val === undefined || val === null || val === '') return '';
+    const num = Number(val);
+    if (isNaN(num)) return String(val);
+    // Use a fixed precision for display if it's a small number, or standard locale string
+    return num.toLocaleString('en-US', { maximumFractionDigits: 4 });
+};
+
+const parseCommas = (val: string) => {
+    return val.replace(/,/g, '');
+};
+
 const InputGroup: React.FC<{
     label: string;
     name: string;
@@ -31,30 +43,55 @@ const InputGroup: React.FC<{
     children?: React.ReactNode;
     className?: string;
     footer?: React.ReactNode;
-}> = React.memo(({ label, name, value, onChange, type = "text", step, readOnly = false, disabled = false, hint, children, className = "", footer }) => (
-    <div className={`flex flex-col group relative ${className}`}>
-      <label className="text-[10px] font-bold text-slate-400 uppercase tracking-wide mb-1.5 ml-1">{label}</label>
-      <div className="relative">
-        <input
-            type={type}
-            step={step}
-            name={name}
-            value={value ?? ''}
-            onChange={onChange}
-            readOnly={readOnly}
-            disabled={disabled}
-            className={`w-full px-3 py-2.5 sm:py-2.5 rounded-lg border text-sm transition-all shadow-sm ${
-                readOnly || disabled
-                ? 'bg-slate-50 border-slate-200 text-slate-500 font-mono cursor-not-allowed' 
-                : 'bg-white border-slate-200 focus:ring-2 focus:ring-blue-500/20 focus:border-blue-500 text-slate-800'
-            }`}
-        />
-        {children}
-      </div>
-      {hint && <p className="text-[10px] text-slate-400 mt-1 ml-1">{hint}</p>}
-      {footer && <div className="mt-1.5">{footer}</div>}
-    </div>
-));
+    isFormatted?: boolean;
+}> = React.memo(({ label, name, value, onChange, type = "text", step, readOnly = false, disabled = false, hint, children, className = "", footer, isFormatted = false }) => {
+    const displayValue = isFormatted ? formatWithCommas(value) : value;
+
+    const handleInputChange = (e: React.ChangeEvent<HTMLInputElement | HTMLSelectElement>) => {
+        if (isFormatted && e.target.type === 'text') {
+            const raw = parseCommas(e.target.value);
+            // Only allow numbers and one decimal point
+            if (raw !== '' && isNaN(Number(raw)) && raw !== '-') return;
+            
+            const fakeEvent = {
+                ...e,
+                target: {
+                    ...e.target,
+                    name: e.target.name,
+                    value: raw
+                }
+            } as React.ChangeEvent<HTMLInputElement>;
+            onChange(fakeEvent);
+        } else {
+            onChange(e);
+        }
+    };
+
+    return (
+        <div className={`flex flex-col group relative ${className}`}>
+          <label className="text-[10px] font-bold text-slate-400 uppercase tracking-wide mb-1.5 ml-1">{label}</label>
+          <div className="relative">
+            <input
+                type={isFormatted ? 'text' : type}
+                step={step}
+                name={name}
+                value={displayValue ?? ''}
+                onChange={handleInputChange}
+                readOnly={readOnly}
+                disabled={disabled}
+                className={`w-full px-3 py-2.5 sm:py-2.5 rounded-lg border text-sm transition-all shadow-sm ${
+                    readOnly || disabled
+                    ? 'bg-slate-50 border-slate-200 text-slate-500 font-mono cursor-not-allowed' 
+                    : 'bg-white border-slate-200 focus:ring-2 focus:ring-blue-500/20 focus:border-blue-500 text-slate-800'
+                }`}
+            />
+            {children}
+          </div>
+          {hint && <p className="text-[10px] text-slate-400 mt-1 ml-1">{hint}</p>}
+          {footer && <div className="mt-1.5">{footer}</div>}
+        </div>
+    );
+});
 
 const FormulaIndicesDisplay: React.FC<{ formula: string, refDate: string }> = ({ formula, refDate }) => {
     const indices = useMemo(() => {
@@ -332,7 +369,7 @@ export const CargoForm: React.FC<CargoFormProps> = ({ initialData, source = 'lis
                             <input type="number" name="buyPriceRounding" value={formData.buyPriceRounding} onChange={handleChange} className="w-10 text-xs border rounded p-1" min="0" max="6" />
                         </div>
                     </div>
-                    <InputGroup label="Loaded Volume" name="loadedVolume" type="number" value={formData.loadedVolume} onChange={handleChange} />
+                    <InputGroup label="Loaded Volume" name="loadedVolume" value={formData.loadedVolume} onChange={handleChange} isFormatted={true} />
                     {pricingMode === 'formula' ? (
                         <InputGroup label="Formula" name="buyFormula" value={formData.buyFormula} onChange={handleChange} hint="e.g. JKM - 0.50" footer={<FormulaIndicesDisplay formula={formData.buyFormula} refDate={formData.loadingDate} />} />
                     ) : (
@@ -361,7 +398,7 @@ export const CargoForm: React.FC<CargoFormProps> = ({ initialData, source = 'lis
                             <input type="number" name="sellPriceRounding" value={formData.sellPriceRounding} onChange={handleChange} className="w-10 text-xs border rounded p-1" min="0" max="6" />
                         </div>
                     </div>
-                    <InputGroup label="Delivered Volume" name="deliveredVolume" type="number" value={formData.deliveredVolume} onChange={handleChange} />
+                    <InputGroup label="Delivered Volume" name="deliveredVolume" value={formData.deliveredVolume} onChange={handleChange} isFormatted={true} />
                     {pricingMode === 'formula' ? (
                         <InputGroup label="Formula" name="sellFormula" value={formData.sellFormula} onChange={handleChange} hint="e.g. 115% HH + 2.50" footer={<FormulaIndicesDisplay formula={formData.sellFormula} refDate={formData.deliveryDate} />} />
                     ) : (
@@ -403,7 +440,7 @@ export const CargoForm: React.FC<CargoFormProps> = ({ initialData, source = 'lis
                 <div className="grid grid-cols-1 lg:grid-cols-2 gap-8">
                     <div className="space-y-6">
                         <h4 className="text-xs font-bold text-emerald-600 uppercase border-l-2 border-emerald-500 pl-2">Purchase Tier 2</h4>
-                        <InputGroup label="Tier 2 Loaded Volume" name="tier2LoadedVolume" type="number" value={formData.tier2LoadedVolume} onChange={handleChange} />
+                        <InputGroup label="Tier 2 Loaded Volume" name="tier2LoadedVolume" value={formData.tier2LoadedVolume} onChange={handleChange} isFormatted={true} />
                         {pricingMode === 'formula' ? (
                             <InputGroup label="Tier 2 Formula" name="tier2BuyFormula" value={formData.tier2BuyFormula} onChange={handleChange} footer={<FormulaIndicesDisplay formula={formData.tier2BuyFormula} refDate={formData.loadingDate} />} />
                         ) : (
@@ -426,7 +463,7 @@ export const CargoForm: React.FC<CargoFormProps> = ({ initialData, source = 'lis
                     </div>
                     <div className="space-y-6">
                         <h4 className="text-xs font-bold text-blue-600 uppercase border-l-2 border-blue-500 pl-2">Sales Tier 2</h4>
-                        <InputGroup label="Tier 2 Delivered Volume" name="tier2DeliveredVolume" type="number" value={formData.tier2DeliveredVolume} onChange={handleChange} />
+                        <InputGroup label="Tier 2 Delivered Volume" name="tier2DeliveredVolume" value={formData.tier2DeliveredVolume} onChange={handleChange} isFormatted={true} />
                         {pricingMode === 'formula' ? (
                             <InputGroup label="Tier 2 Formula" name="tier2SellFormula" value={formData.tier2SellFormula} onChange={handleChange} footer={<FormulaIndicesDisplay formula={formData.tier2SellFormula} refDate={formData.deliveryDate} />} />
                         ) : (
@@ -467,7 +504,7 @@ export const CargoForm: React.FC<CargoFormProps> = ({ initialData, source = 'lis
               </div>
               <div className="flex flex-col">
                 <label className="text-[10px] font-bold text-amber-600 uppercase mb-1.5 ml-1">Override SRC</label>
-                <input type="number" name="reconciledSrcCost" value={formData.reconciledSrcCost} onChange={handleChange} className="w-full px-3 py-2.5 bg-white border border-amber-200 rounded-lg text-sm focus:ring-2 focus:ring-amber-500/20 focus:border-amber-500" />
+                <InputGroup label="" name="reconciledSrcCost" value={formData.reconciledSrcCost} onChange={handleChange} isFormatted={true} className="!mb-0" />
               </div>
             </div>
           </div>
@@ -555,6 +592,46 @@ export const CargoForm: React.FC<CargoFormProps> = ({ initialData, source = 'lis
                 </AnimatePresence>
             </div>
         )}
+
+        {/* Finance Reconciliation Section */}
+        <div className="bg-slate-50 p-4 sm:p-6 rounded-xl border border-slate-200 space-y-4 shadow-sm">
+            <div className="flex items-center gap-2 mb-2">
+                <svg className="w-5 h-5 text-slate-500" fill="none" stroke="currentColor" viewBox="0 0 24 24"><path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M9 12l2 2 4-4m5.618-4.016A11.955 11.955 0 0112 2.944a11.955 11.955 0 01-8.618 3.04A12.02 12.02 0 003 9c0 5.591 3.824 10.29 9 11.622 5.176-1.332 9-6.03 9-11.622 0-1.042-.133-2.052-.382-3.016z" /></svg>
+                <h3 className="text-sm font-bold text-slate-800">Finance Reconciliation (Jarvis)</h3>
+            </div>
+            <div className="grid grid-cols-1 sm:grid-cols-2 gap-4">
+                <div className="space-y-2">
+                    <label className="text-[10px] font-bold text-slate-500 uppercase tracking-wider">Reconciled Sales Revenue</label>
+                    <div className="relative">
+                        <InputGroup 
+                            label=""
+                            name="reconciledSalesRevenue" 
+                            value={formData.reconciledSalesRevenue} 
+                            onChange={handleChange} 
+                            isFormatted={true}
+                            className="!mb-0"
+                        />
+                        <span className="absolute left-3 top-2.5 text-slate-400 text-xs">$</span>
+                    </div>
+                    <p className="text-[9px] text-slate-400">If set, this overrides the calculated sales revenue.</p>
+                </div>
+                <div className="space-y-2">
+                    <label className="text-[10px] font-bold text-slate-500 uppercase tracking-wider">Reconciled Purchase Cost</label>
+                    <div className="relative">
+                        <InputGroup 
+                            label=""
+                            name="reconciledPurchaseCost" 
+                            value={formData.reconciledPurchaseCost} 
+                            onChange={handleChange} 
+                            isFormatted={true}
+                            className="!mb-0"
+                        />
+                        <span className="absolute left-3 top-2.5 text-slate-400 text-xs">$</span>
+                    </div>
+                    <p className="text-[9px] text-slate-400">If set, this overrides the calculated purchase cost.</p>
+                </div>
+            </div>
+        </div>
 
         {/* Financial Footer */}
         <div className="bg-slate-900 text-white p-4 sm:p-6 rounded-xl shadow-xl flex flex-col sm:flex-row justify-between items-stretch sm:items-center gap-6">
