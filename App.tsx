@@ -169,6 +169,81 @@ const App: React.FC = () => {
     }
   }, [trmsData.forwardCurves]);
 
+  // Auto-sync from Jarvis based on options
+  useEffect(() => {
+    if (Object.keys(trmsData.trmsAgg).length > 0) {
+      const options = trmsData.syncOptions || { syncReconciled: true, syncPrices: false, overwriteManual: false };
+      let syncCount = 0;
+      
+      updateProfiles((prev: CargoProfile[]) => {
+        return prev.map(p => {
+          const trms = trmsData.trmsAgg[p.strategyName];
+          if (!trms) return p;
+
+          const updated = { ...p };
+          let changed = false;
+
+          // 1. Sync Reconciled Values
+          if (options.syncReconciled) {
+            if (trms.reconciledPurchaseCost > 0 && trms.reconciledPurchaseCost !== p.reconciledPurchaseCost) {
+              updated.reconciledPurchaseCost = trms.reconciledPurchaseCost;
+              changed = true;
+            }
+            if (trms.reconciledSalesRevenue > 0 && trms.reconciledSalesRevenue !== p.reconciledSalesRevenue) {
+              updated.reconciledSalesRevenue = trms.reconciledSalesRevenue;
+              changed = true;
+            }
+          }
+
+          // 2. Sync Absolute Prices
+          if (options.syncPrices) {
+            const buyLegs = trms.commodityLegs.filter(l => l.buySell === 'Buy');
+            const sellLegs = trms.commodityLegs.filter(l => l.buySell === 'Sell');
+
+            if (buyLegs.length > 0) {
+              // Use weighted average if volume is available, otherwise simple average
+              const totalVol = buyLegs.reduce((acc, l) => acc + l.vol, 0);
+              const avgBuyPrice = totalVol > 0 
+                ? buyLegs.reduce((acc, l) => acc + (l.price * l.vol), 0) / totalVol
+                : buyLegs.reduce((acc, l) => acc + l.price, 0) / buyLegs.length;
+
+              if ((!p.isBuyPriceManual || options.overwriteManual) && Math.abs(avgBuyPrice - (p.absoluteBuyPrice || 0)) > 0.001) {
+                updated.absoluteBuyPrice = avgBuyPrice;
+                // We no longer automatically set isBuyPriceManual to true here
+                // to avoid overriding the formula-based calculation mode.
+                changed = true;
+              }
+            }
+
+            if (sellLegs.length > 0) {
+              const totalVol = sellLegs.reduce((acc, l) => acc + l.vol, 0);
+              const avgSellPrice = totalVol > 0 
+                ? sellLegs.reduce((acc, l) => acc + (l.price * l.vol), 0) / totalVol
+                : sellLegs.reduce((acc, l) => acc + l.price, 0) / sellLegs.length;
+
+              if ((!p.isSellPriceManual || options.overwriteManual) && Math.abs(avgSellPrice - (p.absoluteSellPrice || 0)) > 0.001) {
+                updated.absoluteSellPrice = avgSellPrice;
+                // We no longer automatically set isSellPriceManual to true here
+                changed = true;
+              }
+            }
+          }
+
+          if (changed) {
+            syncCount++;
+            return recalculateProfile(updated, true) as CargoProfile;
+          }
+          return p;
+        });
+      });
+      
+      if (syncCount > 0) {
+        const msg = options.syncPrices ? `Synced reconciliation & prices for ${syncCount} cargo(es)` : `Synced reconciled values for ${syncCount} cargo(es)`;
+        toast.success(msg, { icon: '💰' });
+      }
+    }
+  }, [trmsData.trmsAgg, trmsData.syncOptions]);
+
   // History Helper
   const updateProfiles = useCallback((newProfiles: CargoProfile[] | ((prev: CargoProfile[]) => CargoProfile[])) => {
     setProfiles((prev: CargoProfile[]) => {
@@ -462,6 +537,7 @@ const App: React.FC = () => {
                             onBulkDelete={handleBulkDelete}
                             onBulkUpdate={handleBulkUpdate}
                             onBulkImport={handleBulkImport}
+                            onForwardCurveUpdate={() => setForwardCurve(getForwardCurve())}
                             trmsData={trmsData}
                         />
                     </motion.div>
@@ -481,6 +557,7 @@ const App: React.FC = () => {
                             trmsData={trmsData}
                             onTrmsUpload={setTrmsData}
                             onEditProfile={(p: CargoProfile) => handleEdit(p, 'list')}
+                            onForwardCurveUpdate={() => setForwardCurve(getForwardCurve())}
                         />
                     </motion.div>
                 ) : null}

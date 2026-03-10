@@ -139,6 +139,22 @@ export interface CargoProfile {
   jarvisNo?: string;
 }
 
+export interface ForwardCurvePoint {
+  month: string;
+  value: number;
+}
+
+export interface ForwardCurve {
+  index: string;
+  points: ForwardCurvePoint[];
+}
+
+export interface ForwardCurveData {
+  asOfDate: string;
+  curves: ForwardCurve[];
+  fileName?: string;
+}
+
 export const EmptyCargoProfile: Omit<CargoProfile, 'id'> = {
   source: '',
   strategyName: '',
