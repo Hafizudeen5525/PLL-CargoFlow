@@ -475,10 +475,6 @@ export function recalculateProfile(p: Partial<CargoProfile>, useMarket: boolean 
     const totalPurchaseCost = t1PurchaseCost + t2PurchaseCost;
 
     const totalDelVol = (up.deliveredVolume || 0) + (up.tier2DeliveredVolume || 0);
-    if (up.reconciledSrcCost && up.reconciledSrcCost > 0 && (!up.srcUnitFee || up.srcUnitFee === 0) && totalDelVol > 0) {
-        up.srcUnitFee = up.reconciledSrcCost / totalDelVol;
-    }
-
     const calcSrcCost = (up.incoterms === 'DES') ? (up.srcUnitFee || 0) * totalDelVol : 0;
     const finalSrcCost = (up.reconciledSrcCost && up.reconciledSrcCost > 0) ? up.reconciledSrcCost : calcSrcCost;
 

@@ -4,14 +4,33 @@ self.onmessage = (e: MessageEvent) => {
   const { data, whitelistColumns, priorityColumns } = e.data;
   
   try {
-    const wb = XLSX.read(data, { type: 'binary', cellDates: true });
-    const ws = wb.Sheets[wb.SheetNames[0]];
-    const rawData = XLSX.utils.sheet_to_json(ws);
+    const wb = XLSX.read(data, { type: 'array', cellDates: true });
+    
+    // Robust sheet selection
+    const sheetNames = wb.SheetNames;
+    const masterSheetName = sheetNames.find(n => 
+        ['master sheet', 'mastersheet', 'master', 'jarvis master'].includes(n.toLowerCase())
+    );
+    const mainSheet = masterSheetName ? wb.Sheets[masterSheetName] : wb.Sheets[sheetNames[0]];
+    const rawData = XLSX.utils.sheet_to_json(mainSheet);
     
     const srcRows: any[] = [];
     const hedgingRows: any[] = [];
     const paperRows: any[] = [];
     const trmsAgg: any = {};
+    let portfolioName = 'Unknown';
+    let portfolioYear = 'Unknown';
+
+    const findValue = (row: any, aliases: string[]) => {
+        for (const alias of aliases) {
+            if (row[alias] !== undefined) return row[alias];
+            const norm = alias.toLowerCase().replace(/[\s_]/g, '');
+            for (const key of Object.keys(row)) {
+                if (key.toLowerCase().replace(/[\s_]/g, '') === norm) return row[key];
+            }
+        }
+        return undefined;
+    };
 
     const extractIndexFromRef = (ref: string): string => {
         const r = String(ref || '').toUpperCase();
@@ -24,13 +43,20 @@ self.onmessage = (e: MessageEvent) => {
     };
 
     rawData.forEach((row: any) => {
-      const rawY = row['Plsb Year Bucket'];
+      const rawY = findValue(row, ['Plsb Year Bucket', 'Year', 'Year Bucket']);
       let y = typeof rawY === 'number' ? rawY : parseInt(String(rawY || '').replace(/[^0-9]/g, ''));
-      if (isNaN(y) || y < 2025) return;
+      if (isNaN(y) || y < 2024) return;
       
-      const sName = String(row['Strategy Name'] || '').trim();
+      if (portfolioYear === 'Unknown') portfolioYear = String(y);
+      
+      const sName = String(findValue(row, ['Strategy Name', 'Strategy', 'Deal Name']) || '').trim();
       if (!sName || sName.includes("GLNG") || sName.includes("CSPA")) return;
       
+      const iPort = String(row['Internal Portfolio'] || '').trim();
+      if (portfolioName === 'Unknown' && iPort && iPort !== 'Hedging LNG' && iPort !== 'DH LNG' && iPort !== 'DFT LNG') {
+          portfolioName = iPort;
+      }
+
       if (!trmsAgg[sName]) {
           trmsAgg[sName] = { 
               commodityLegs: [], 
@@ -38,14 +64,41 @@ self.onmessage = (e: MessageEvent) => {
               srcLegs: [],
               hedgingPnL: 0,
               hedgingTrades: 0,
-              hedgingIndices: [], // Use array instead of Set for serialization
+              hedgingIndices: [],
               loadingDate: '',
               deliveryDate: '',
               volumeType: 'Estimate',
               priceStatus: 'Estimate',
-              commodityValue: 0
+              commodityValue: 0,
+              trmsPurchaseValue: 0,
+              trmsSalesValue: 0,
+              reconciledPurchaseCost: 0,
+              reconciledSalesRevenue: 0,
+              commWindowEndDate: ''
           };
       }
+
+      // Extract reconciled values if present (Jarvis Master Sheet)
+      const recPurchaseRaw = findValue(row, [
+          'Reconciled Purchase Cost', 
+          'Finance Purchase Cost', 
+          'Finance Cost', 
+          'Actual Purchase Cost', 
+          'Purchase Cost Reconciled'
+      ]);
+      const recSalesRaw = findValue(row, [
+          'Reconciled Sales Revenue', 
+          'Finance Sales Revenue', 
+          'Finance Revenue', 
+          'Actual Sales Revenue', 
+          'Sales Revenue Reconciled'
+      ]);
+
+      const recPurchase = typeof recPurchaseRaw === 'number' ? recPurchaseRaw : parseFloat(String(recPurchaseRaw || '').replace(/[^0-9.-]/g, '')) || 0;
+      const recSales = typeof recSalesRaw === 'number' ? recSalesRaw : parseFloat(String(recSalesRaw || '').replace(/[^0-9.-]/g, '')) || 0;
+
+      if (recPurchase > 0) trmsAgg[sName].reconciledPurchaseCost = recPurchase;
+      if (recSales > 0) trmsAgg[sName].reconciledSalesRevenue = recSales;
 
       const rowVolType = String(row['Volume Type'] || 'Estimate');
       if (rowVolType === 'Actual') {
@@ -73,11 +126,13 @@ self.onmessage = (e: MessageEvent) => {
 
       const cType = String(row['Cflow Type'] || '').trim();
       const cTypeLower = cType.toLowerCase();
-      const iPort = String(row['Internal Portfolio'] || '').trim();
       const valUSD = getRowValue(['Base_Total_Value_USD', 'Base Total Value USD', 'Total_Value_USD', 'Total Value USD', 'Base_Total_Value', 'Total_Value']);
       
       if (cTypeLower === "commodity" || cTypeLower === "physical" || cTypeLower === "base value" || cTypeLower === "cargo value") {
           trmsAgg[sName].commodityValue += valUSD;
+          const buySell = String(row['Buy_Sell'] || '').trim();
+          if (buySell === 'Buy') trmsAgg[sName].trmsPurchaseValue += Math.abs(valUSD);
+          if (buySell === 'Sell') trmsAgg[sName].trmsSalesValue += Math.abs(valUSD);
       }
       const pnlChange = Number(row['Change_in_Total_PnL'] || 0);
       const ref = String(row['Reference'] || '');
@@ -111,7 +166,10 @@ self.onmessage = (e: MessageEvent) => {
               valueUSD: valUSD
           });
           if (buySell === 'Buy' && sDate) trmsAgg[sName].loadingDate = sDate;
-          if (buySell === 'Sell' && eDate) trmsAgg[sName].deliveryDate = eDate;
+          if (buySell === 'Sell' && eDate) {
+              trmsAgg[sName].deliveryDate = eDate;
+              trmsAgg[sName].commWindowEndDate = eDate;
+          }
       }
 
       if (iPort === "Hedging LNG") {
@@ -140,9 +198,22 @@ self.onmessage = (e: MessageEvent) => {
 
     // Extract Forward Curve if exists
     let forwardCurveData = null;
-    const fcSheet = wb.Sheets["Forward Curve"];
+    const fcSheetName = wb.SheetNames.find(n => {
+        const lower = n.trim().toLowerCase();
+        return lower === "forward curve" || (lower.includes("forward") && lower.includes("curve"));
+    });
+    const fcSheet = fcSheetName ? wb.Sheets[fcSheetName] : null;
     if (fcSheet) {
-        const asOfDate = fcSheet['A2'] ? (fcSheet['A2'].w || String(fcSheet['A2'].v)) : 'Unknown';
+        let asOfDate = 'Unknown';
+        const a2 = fcSheet['A2'];
+        if (a2) {
+            if (a2.t === 'd' || (a2.t === 'n' && a2.v > 20000)) {
+                const d = a2.v instanceof Date ? a2.v : new Date(Math.round((a2.v - 25569) * 86400 * 1000));
+                asOfDate = d.toISOString().split('T')[0];
+            } else {
+                asOfDate = a2.w || String(a2.v);
+            }
+        }
         
         // Read indexes from C2:K2
         const indexes: string[] = [];
@@ -170,18 +241,23 @@ self.onmessage = (e: MessageEvent) => {
             
             let monthStr = '';
             if (monthVal instanceof Date) {
-                monthStr = monthVal.toISOString().split('T')[0];
+                const y = monthVal.getUTCFullYear();
+                const m = String(monthVal.getUTCMonth() + 1).padStart(2, '0');
+                monthStr = `${y}-${m}`;
             } else if (typeof monthVal === 'number') {
                 const date = new Date(Math.round((monthVal - 25569) * 86400 * 1000));
-                monthStr = date.toISOString().split('T')[0];
+                const y = date.getUTCFullYear();
+                const m = String(date.getUTCMonth() + 1).padStart(2, '0');
+                monthStr = `${y}-${m}`;
             } else {
                 monthStr = String(monthVal);
             }
 
             for (let i = 0; i < indexes.length; i++) {
                 const val = row[i + 2]; // Columns C to K
-                if (typeof val === 'number') {
-                    curves[i].points.push({ month: monthStr, value: val });
+                const numVal = typeof val === 'number' ? val : parseFloat(String(val || '').replace(/[$,]/g, ''));
+                if (!isNaN(numVal) && numVal !== 0) {
+                    curves[i].points.push({ month: monthStr, value: numVal });
                 }
             }
         }
@@ -195,6 +271,10 @@ self.onmessage = (e: MessageEvent) => {
       paper: paperRows,
       trmsAgg,
       forwardCurve: forwardCurveData,
+      debugInfo: {
+        sheetNames: wb.SheetNames,
+        foundFcSheet: fcSheetName || 'None'
+      },
       summary: {
         total: rawData.length,
         src: srcRows.length,
