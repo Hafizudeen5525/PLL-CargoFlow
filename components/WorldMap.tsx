@@ -30,8 +30,8 @@ export const WorldMap: React.FC<WorldMapProps> = ({ profiles, height = 400 }) =>
         const rect = containerRef.current.getBoundingClientRect();
         
         // Calculate relative position inside the container
-        let x = e.clientX - rect.left;
-        let y = e.clientY - rect.top;
+        const x = e.clientX - rect.left;
+        const y = e.clientY - rect.top;
 
         setTooltipPos({ x, y });
         setHoveredProfile(profileId);

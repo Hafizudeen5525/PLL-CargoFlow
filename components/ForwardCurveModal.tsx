@@ -57,30 +57,9 @@ export const ForwardCurveModal: React.FC<ForwardCurveModalProps> = ({ onClose, o
 
   const activeIndices = useMemo(() => activeColumns.slice(1), [activeColumns]);
 
-  useEffect(() => {
-    const dates = getAvailableCurveDates();
-    setAvailableDates(dates);
-    
-    const today = new Date().toISOString().split('T')[0];
-    const latest = dates.length > 0 ? dates[0] : today;
-    
-    loadCurveData(latest);
-    setHistoricalGrid(getHistoricalCurve());
-    
-    if (dates.length >= 1 && !compareDateA) setCompareDateA(dates[0]);
-    if (dates.length >= 2 && !compareDateB) setCompareDateB(dates[1]);
-  }, []);
-
-  const refreshDates = () => {
-    const dates = getAvailableCurveDates();
-    setAvailableDates(dates);
-    if (dates.length >= 1 && !compareDateA) setCompareDateA(dates[0]);
-    if (dates.length >= 2 && !compareDateB) setCompareDateB(dates[1]);
-  };
-
   const loadCurveData = (date: string) => {
       const data = getForwardCurve(date);
-      let targetGrid: ForwardCurveRow[] = [];
+      let targetGrid: ForwardCurveRow[];
       if (data.length === 0) {
           const skeleton: ForwardCurveRow[] = [];
           const start = new Date(date);
@@ -100,6 +79,20 @@ export const ForwardCurveModal: React.FC<ForwardCurveModalProps> = ({ onClose, o
       setHistoryPast([]);
       setHistoryFuture([]);
   };
+
+  useEffect(() => {
+    const dates = getAvailableCurveDates();
+    setAvailableDates(dates);
+    
+    const today = new Date().toISOString().split('T')[0];
+    const latest = dates.length > 0 ? dates[0] : today;
+    
+    loadCurveData(latest);
+    setHistoricalGrid(getHistoricalCurve());
+    
+    if (dates.length >= 1 && !compareDateA) setCompareDateA(dates[0]);
+    if (dates.length >= 2 && !compareDateB) setCompareDateB(dates[1]);
+  }, []);
 
   const currentGrid = activeTab === 'manage' ? manageGrid : historicalGrid;
   
@@ -137,7 +130,7 @@ export const ForwardCurveModal: React.FC<ForwardCurveModalProps> = ({ onClose, o
         jan: '01', feb: '02', mar: '03', apr: '04', may: '05', jun: '06',
         jul: '07', aug: '08', sep: '09', oct: '10', nov: '11', dec: '12'
     };
-    const mmmYy = str.match(/^([a-zA-Z]+)[\s\-\']+(\d{2,4})$/);
+    const mmmYy = str.match(/^([a-zA-Z]+)[\s\-']+(\d{2,4})$/);
     if (mmmYy) {
         const mStr = mmmYy[1].toLowerCase().slice(0, 3);
         const m = months[mStr];
@@ -336,7 +329,7 @@ export const ForwardCurveModal: React.FC<ForwardCurveModalProps> = ({ onClose, o
           const cMax = Math.max(selection.startCol, selection.endCol);
           let tsv = '';
           for (let r = rMin; r <= rMax; r++) {
-              let line = [];
+              const line = [];
               for (let c = cMin; c <= cMax; c++) {
                   const val = c === 0 ? currentGrid[r]?.month : currentGrid[r]?.prices[activeColumns[c]];
                   line.push(val ?? '');

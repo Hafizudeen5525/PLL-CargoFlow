@@ -141,7 +141,7 @@ export const BulkImportModal: React.FC<BulkImportModalProps> = ({ existingProfil
 
             let finalProfile: CargoProfile;
             let status: 'New' | 'Update' | 'No Change' = 'New';
-            let changes: Record<string, { old: any, new: any }> = {};
+            const changes: Record<string, { old: any, new: any }> = {};
 
             if (existingMatch) {
                 const merged = { ...existingMatch, ...parsedFields };

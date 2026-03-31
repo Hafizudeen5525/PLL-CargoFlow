@@ -182,6 +182,19 @@ const extractIndexFromRef = (ref: string): string => {
     return 'Other';
 };
 
+const getMonth = (dStr: string) => {
+    if (!dStr) return null;
+    const d = new Date(dStr);
+    return isNaN(d.getTime()) ? null : `${d.getUTCFullYear()}-${d.getUTCMonth()}`;
+};
+
+const getMonthStr = (dateStr: string) => {
+    if (!dateStr) return '';
+    const d = new Date(dateStr);
+    if (isNaN(d.getTime())) return '';
+    return `${d.getUTCFullYear()}-${String(d.getUTCMonth() + 1).padStart(2, '0')}`;
+};
+
 export const DiscrepancyCheck: React.FC<DiscrepancyCheckProps> = ({ 
   profiles, 
   trmsData, 
@@ -295,8 +308,8 @@ export const DiscrepancyCheck: React.FC<DiscrepancyCheckProps> = ({
 
   const [columnWidths, setColumnWidths] = useState<Record<string, number>>({
     'Strategy Name': 280,
-    'Loading Date': 200,
-    'Delivery Date': 200,
+    'Loading Month': 200,
+    'Delivery Month': 200,
     'Volume Type': 200,
     'Price Status': 200,
     'Purchase Price': 200,
@@ -514,7 +527,12 @@ export const DiscrepancyCheck: React.FC<DiscrepancyCheckProps> = ({
                 trmsSalesValue: trms?.trmsSalesValue || 0,
                 reconciledPurchaseCost: trms?.reconciledPurchaseCost || 0,
                 reconciledSalesRevenue: trms?.reconciledSalesRevenue || 0,
-                trmsRealized: trms ? (sellLegs.some(l => l.priceStatus === 'Fixed') && trmsVolType === 'Actual') : false,
+                trmsRealized: trms ? (
+                    buyLegs.length > 0 && sellLegs.length > 0 &&
+                    buyLegs.every(l => l.priceStatus === 'Fixed') &&
+                    sellLegs.every(l => l.priceStatus === 'Fixed') &&
+                    trmsVolType === 'Actual'
+                ) : false,
                 commWindowEndDate: trms?.commWindowEndDate || ''
             },
             discrepancies: new Set(),
@@ -522,12 +540,6 @@ export const DiscrepancyCheck: React.FC<DiscrepancyCheckProps> = ({
                 buyPrice: 100, sellPrice: 100, buyVol: 100, sellVol: 100, src: 100,
                 loadingDate: 100, deliveryDate: 100, purchaseCost: 100, salesRevenue: 100
             }
-        };
-
-        const getMonth = (dStr: string) => {
-            if (!dStr) return null;
-            const d = new Date(dStr);
-            return isNaN(d.getTime()) ? null : `${d.getUTCFullYear()}-${d.getUTCMonth()}`;
         };
 
         const calcError = (app: number, trmsVals: number[]) => {
@@ -561,13 +573,13 @@ export const DiscrepancyCheck: React.FC<DiscrepancyCheckProps> = ({
             }
 
             // Date Errors
+            const trmsMonth = getMonth(row.trms.commWindowEndDate);
+            
             const appLMonth = getMonth(row.app.loadingDate);
-            const trmsLMonths = row.trms.buyLegs.map(l => getMonth(l.startDate)).filter(m => m !== null);
-            row.errorPcts.loadingDate = trmsLMonths.some(m => m === appLMonth) ? 0 : 100;
+            row.errorPcts.loadingDate = (trmsMonth && appLMonth && trmsMonth === appLMonth) ? 0 : 100;
 
             const appDMonth = getMonth(row.app.deliveryDate);
-            const trmsDMonths = row.trms.sellLegs.map(l => getMonth(l.endDate)).filter(m => m !== null);
-            row.errorPcts.deliveryDate = trmsDMonths.some(m => m === appDMonth) ? 0 : 100;
+            row.errorPcts.deliveryDate = (trmsMonth && appDMonth && trmsMonth === appDMonth) ? 0 : 100;
 
             // Discrepancies based on error thresholds
             if (row.errorPcts.buyPrice > 0.01 && row.app.buyPrice > 0) row.discrepancies.add('Buy Price');
@@ -575,8 +587,8 @@ export const DiscrepancyCheck: React.FC<DiscrepancyCheckProps> = ({
             if (row.errorPcts.buyVol > 0.1 && row.app.buyVol > 0) row.discrepancies.add('Buy Vol');
             if (row.errorPcts.sellVol > 0.1 && row.app.sellVol > 0) row.discrepancies.add('Sell Vol');
             if (row.errorPcts.src > 0.1 && (row.app.src > 0 || row.trms.src > 0)) row.discrepancies.add('SRC Cost');
-            if (row.errorPcts.loadingDate > 0) row.discrepancies.add('Loading Date');
-            if (row.errorPcts.deliveryDate > 0) row.discrepancies.add('Delivery Date');
+            if (row.errorPcts.loadingDate > 0) row.discrepancies.add('Loading Month');
+            if (row.errorPcts.deliveryDate > 0) row.discrepancies.add('Delivery Month');
             
             // Realization Check
             if (row.trms.trmsRealized && p.pnlBucket !== PnLBucket.Realized) {
@@ -595,7 +607,7 @@ export const DiscrepancyCheck: React.FC<DiscrepancyCheckProps> = ({
   const headers = useMemo(() => {
     if (activeTab === 'reconcile') {
         return [
-            'Strategy Name', 'Loading Date', 'Delivery Date', 'Volume Type', 'Price Status', 'Purchase Price', 
+            'Strategy Name', 'Loading Month', 'Delivery Month', 'Volume Type', 'Price Status', 'Purchase Price', 
             'Purchase Volume', 'Sales Price', 'Sales Volume', 'SRC Components', 'Purchase Cost', 'Sales Revenue', 'Value Sync'
         ];
     }
@@ -634,8 +646,8 @@ export const DiscrepancyCheck: React.FC<DiscrepancyCheckProps> = ({
               let val: any;
               if (activeTab === 'reconcile') {
                   const rec = r as ReconciliationRow;
-                  if (header === 'Loading Date') val = rec.app.loadingDate;
-                  else if (header === 'Delivery Date') val = rec.app.deliveryDate;
+                  if (header === 'Loading Month') val = rec.app.loadingDate;
+                  else if (header === 'Delivery Month') val = rec.app.deliveryDate;
               } else val = r[header];
 
               if (!val) return;
@@ -672,8 +684,8 @@ export const DiscrepancyCheck: React.FC<DiscrepancyCheckProps> = ({
                   if (header === 'Sales Volume') return rec.app.sellVol;
                   if (header === 'Purchase Cost') return rec.trms.trmsPurchaseValue;
                   if (header === 'Sales Revenue') return rec.trms.trmsSalesValue;
-                  if (header === 'Loading Date') return rec.app.loadingDate;
-                  if (header === 'Delivery Date') return rec.app.deliveryDate;
+                  if (header === 'Loading Month') return rec.app.loadingDate;
+                  if (header === 'Delivery Month') return rec.app.deliveryDate;
                   if (header === 'Volume Type') return rec.trms.volumeType;
                   if (header === 'SRC Components') return rec.trms.src;
                   if (header === 'PnL Sync') return rec.discrepancies.size > 0 ? `${rec.discrepancies.size} Differences` : 'Perfect Sync';
@@ -715,8 +727,8 @@ export const DiscrepancyCheck: React.FC<DiscrepancyCheckProps> = ({
             else if (header === 'Sales Volume') val = r.app.sellVol;
             else if (header === 'Purchase Cost') val = r.trms.trmsPurchaseValue;
             else if (header === 'Sales Revenue') val = r.trms.trmsSalesValue;
-            else if (header === 'Loading Date') val = r.app.loadingDate;
-            else if (header === 'Delivery Date') val = r.app.deliveryDate;
+            else if (header === 'Loading Month') val = r.app.loadingDate;
+            else if (header === 'Delivery Month') val = r.app.deliveryDate;
             else if (header === 'Volume Type') val = r.trms.volumeType;
             else if (header === 'Price Status') val = r.trms.sellLegs.map(l => l.priceStatus).join(', ');
             else if (header === 'SRC Components') val = r.trms.src;
@@ -740,8 +752,8 @@ export const DiscrepancyCheck: React.FC<DiscrepancyCheckProps> = ({
             if (key === 'Sales Volume') return r.app.sellVol;
             if (key === 'Purchase Cost') return r.trms.trmsPurchaseValue;
             if (key === 'Sales Revenue') return r.trms.trmsSalesValue;
-            if (key === 'Loading Date') return r.app.loadingDate;
-            if (key === 'Delivery Date') return r.app.deliveryDate;
+            if (key === 'Loading Month') return r.app.loadingDate;
+            if (key === 'Delivery Month') return r.app.deliveryDate;
             if (key === 'Volume Type') return r.trms.volumeType;
             if (key === 'Price Status') return r.trms.sellLegs.map(l => l.priceStatus).join(', ');
             if (key === 'SRC Components') return r.trms.src;
@@ -827,6 +839,13 @@ export const DiscrepancyCheck: React.FC<DiscrepancyCheckProps> = ({
                 `).join('');
             };
 
+            const getMonthName = (dStr: string) => {
+                if (!dStr) return '-';
+                const d = new Date(dStr);
+                if (isNaN(d.getTime())) return '-';
+                return d.toLocaleString('default', { month: 'short', year: 'numeric' });
+            };
+
             return `
                 <tr style="font-family: monospace; background: ${!r.foundInTrms ? '#f8fafc' : 'white'};">
                     <td style="border: 1px solid #e2e8f0; padding: 12px 16px; font-size: 11px; font-weight: bold; color: #1e293b;">
@@ -836,16 +855,16 @@ export const DiscrepancyCheck: React.FC<DiscrepancyCheckProps> = ({
                         </div>
                     </td>
                     <td style="border: 1px solid #e2e8f0; padding: 12px 16px; font-size: 10px; background: ${r.foundInTrms ? (loadingMatch ? '#f0fdf4' : '#fef2f2') : 'transparent'};">
-                        <div style="color: #64748b; font-size: 8px; font-weight: bold; text-transform: uppercase;">App Loading</div>
-                        <div style="font-weight: bold; color: #1e293b;">${r.app.loadingDate || '-'}</div>
-                        <div style="margin-top: 8px; color: #64748b; font-size: 8px; font-weight: bold; text-transform: uppercase;">TRMS Window</div>
-                        <div style="font-weight: bold; color: #475569;">${r.trms.loadingDate || '-'}</div>
+                        <div style="color: #64748b; font-size: 8px; font-weight: bold; text-transform: uppercase;">App Month</div>
+                        <div style="font-weight: bold; color: #1e293b;">${getMonthName(r.app.loadingDate)}</div>
+                        <div style="margin-top: 8px; color: #64748b; font-size: 8px; font-weight: bold; text-transform: uppercase;">TRMS Month</div>
+                        <div style="font-weight: bold; color: #475569;">${getMonthName(r.trms.commWindowEndDate)}</div>
                     </td>
                     <td style="border: 1px solid #e2e8f0; padding: 12px 16px; font-size: 10px; background: ${r.foundInTrms ? (deliveryMatch ? '#f0fdf4' : '#fef2f2') : 'transparent'};">
-                        <div style="color: #64748b; font-size: 8px; font-weight: bold; text-transform: uppercase;">App Delivery</div>
-                        <div style="font-weight: bold; color: #1e293b;">${r.app.deliveryDate || '-'}</div>
-                        <div style="margin-top: 8px; color: #64748b; font-size: 8px; font-weight: bold; text-transform: uppercase;">TRMS Window</div>
-                        <div style="font-weight: bold; color: #475569;">${r.trms.deliveryDate || '-'}</div>
+                        <div style="color: #64748b; font-size: 8px; font-weight: bold; text-transform: uppercase;">App Month</div>
+                        <div style="font-weight: bold; color: #1e293b;">${getMonthName(r.app.deliveryDate)}</div>
+                        <div style="margin-top: 8px; color: #64748b; font-size: 8px; font-weight: bold; text-transform: uppercase;">TRMS Month</div>
+                        <div style="font-weight: bold; color: #475569;">${getMonthName(r.trms.commWindowEndDate)}</div>
                     </td>
                     <td style="border: 1px solid #e2e8f0; padding: 12px 16px; font-size: 10px;">
                         <div style="display: inline-block; padding: 2px 6px; border-radius: 4px; background: ${r.app.volumeType === 'Actual' ? '#2563eb' : '#f1f5f9'}; color: ${r.app.volumeType === 'Actual' ? 'white' : '#64748b'}; font-size: 9px; font-weight: bold;">${r.app.volumeType}</div>
@@ -916,22 +935,19 @@ export const DiscrepancyCheck: React.FC<DiscrepancyCheckProps> = ({
                 <div style="font-size: 32px; font-weight: 900; font-family: monospace;">${stats.totalDiscrepancies}</div>
                 <div style="font-size: 10px; color: #64748b; margin-top: 8px; font-weight: bold;">POINTS REQUIRING ATTENTION</div>
             </div>
-            <div style="background: #0f172a; color: white; padding: 20px; border-radius: 16px; border: 1px solid #1e293b; box-shadow: 0 4px 6px -1px rgba(0,0,0,0.1);">
-                <div style="font-size: 10px; text-transform: uppercase; color: #34d399; font-weight: 900; letter-spacing: 1px; margin-bottom: 8px;">Perfect Matches</div>
-                <div style="font-size: 32px; font-weight: 900; font-family: monospace;">${stats.matchedCount}</div>
-                <div style="font-size: 10px; color: #64748b; margin-top: 8px; font-weight: bold;">STRATEGIES IN FULL SYNC</div>
-            </div>
-            <div style="background: white; border: 1px solid #e2e8f0; padding: 20px; border-radius: 16px; grid-column: span 2; box-shadow: 0 1px 3px rgba(0,0,0,0.1);">
-                <div style="font-size: 10px; text-transform: uppercase; color: #94a3b8; font-weight: 900; letter-spacing: 1px; margin-bottom: 15px;">Average Error Summary</div>
-                <div style="display: grid; grid-template-columns: repeat(4, 1fr); gap: 15px;">
-                    <div><div style="font-size: 8px; color: #94a3b8; font-weight: bold; text-transform: uppercase;">Purc Price</div><div style="font-size: 14px; font-weight: 900; font-family: monospace; color: ${stats.avgErrors.buyPrice > 5 ? '#ef4444' : '#0f172a'}">${stats.avgErrors.buyPrice.toFixed(2)}%</div></div>
-                    <div><div style="font-size: 8px; color: #94a3b8; font-weight: bold; text-transform: uppercase;">Purc Vol</div><div style="font-size: 14px; font-weight: 900; font-family: monospace; color: ${stats.avgErrors.buyVol > 5 ? '#ef4444' : '#0f172a'}">${stats.avgErrors.buyVol.toFixed(2)}%</div></div>
-                    <div><div style="font-size: 8px; color: #94a3b8; font-weight: bold; text-transform: uppercase;">Sales Price</div><div style="font-size: 14px; font-weight: 900; font-family: monospace; color: ${stats.avgErrors.sellPrice > 5 ? '#ef4444' : '#0f172a'}">${stats.avgErrors.sellPrice.toFixed(2)}%</div></div>
-                    <div><div style="font-size: 8px; color: #94a3b8; font-weight: bold; text-transform: uppercase;">Sales Vol</div><div style="font-size: 14px; font-weight: 900; font-family: monospace; color: ${stats.avgErrors.sellVol > 5 ? '#ef4444' : '#0f172a'}">${stats.avgErrors.sellVol.toFixed(2)}%</div></div>
-                    <div><div style="font-size: 8px; color: #94a3b8; font-weight: bold; text-transform: uppercase;">SRC Cost</div><div style="font-size: 14px; font-weight: 900; font-family: monospace; color: ${stats.avgErrors.src > 5 ? '#ef4444' : '#0f172a'}">${stats.avgErrors.src.toFixed(2)}%</div></div>
-                    <div><div style="font-size: 8px; color: #94a3b8; font-weight: bold; text-transform: uppercase;">Purc Cost</div><div style="font-size: 14px; font-weight: 900; font-family: monospace; color: ${stats.avgErrors.purchaseCost > 5 ? '#ef4444' : '#0f172a'}">${stats.avgErrors.purchaseCost.toFixed(2)}%</div></div>
-                    <div><div style="font-size: 8px; color: #94a3b8; font-weight: bold; text-transform: uppercase;">Sales Rev</div><div style="font-size: 14px; font-weight: 900; font-family: monospace; color: ${stats.avgErrors.salesRevenue > 5 ? '#ef4444' : '#0f172a'}">${stats.avgErrors.salesRevenue.toFixed(2)}%</div></div>
-                    <div><div style="font-size: 8px; color: #94a3b8; font-weight: bold; text-transform: uppercase;">Critical</div><div style="font-size: 14px; font-weight: 900; font-family: monospace; color: ${stats.criticalErrorsCount > 0 ? '#ef4444' : '#10b981'}">${stats.criticalErrorsCount} SNs</div></div>
+            <div style="background: white; border: 1px solid #e2e8f0; padding: 20px; border-radius: 16px; grid-column: span 3; box-shadow: 0 1px 3px rgba(0,0,0,0.1);">
+                <div style="font-size: 10px; text-transform: uppercase; color: #94a3b8; font-weight: 900; letter-spacing: 1px; margin-bottom: 15px;">Error Report by Column</div>
+                <div style="display: grid; grid-template-columns: repeat(5, 1fr); gap: 15px;">
+                    <div><div style="font-size: 8px; color: #94a3b8; font-weight: bold; text-transform: uppercase;">Purc Price</div><div style="font-size: 14px; font-weight: 900; font-family: monospace; color: ${stats.errorCounts.buyPrice > 0 ? '#ef4444' : '#10b981'}">${stats.errorCounts.buyPrice}</div></div>
+                    <div><div style="font-size: 8px; color: #94a3b8; font-weight: bold; text-transform: uppercase;">Purc Vol</div><div style="font-size: 14px; font-weight: 900; font-family: monospace; color: ${stats.errorCounts.buyVol > 0 ? '#ef4444' : '#10b981'}">${stats.errorCounts.buyVol}</div></div>
+                    <div><div style="font-size: 8px; color: #94a3b8; font-weight: bold; text-transform: uppercase;">Sales Price</div><div style="font-size: 14px; font-weight: 900; font-family: monospace; color: ${stats.errorCounts.sellPrice > 0 ? '#ef4444' : '#10b981'}">${stats.errorCounts.sellPrice}</div></div>
+                    <div><div style="font-size: 8px; color: #94a3b8; font-weight: bold; text-transform: uppercase;">Sales Vol</div><div style="font-size: 14px; font-weight: 900; font-family: monospace; color: ${stats.errorCounts.sellVol > 0 ? '#ef4444' : '#10b981'}">${stats.errorCounts.sellVol}</div></div>
+                    <div><div style="font-size: 8px; color: #94a3b8; font-weight: bold; text-transform: uppercase;">SRC Cost</div><div style="font-size: 14px; font-weight: 900; font-family: monospace; color: ${stats.errorCounts.src > 0 ? '#ef4444' : '#10b981'}">${stats.errorCounts.src}</div></div>
+                    <div><div style="font-size: 8px; color: #94a3b8; font-weight: bold; text-transform: uppercase;">Purc Cost</div><div style="font-size: 14px; font-weight: 900; font-family: monospace; color: ${stats.errorCounts.purchaseCost > 0 ? '#ef4444' : '#10b981'}">${stats.errorCounts.purchaseCost}</div></div>
+                    <div><div style="font-size: 8px; color: #94a3b8; font-weight: bold; text-transform: uppercase;">Sales Rev</div><div style="font-size: 14px; font-weight: 900; font-family: monospace; color: ${stats.errorCounts.salesRevenue > 0 ? '#ef4444' : '#10b981'}">${stats.errorCounts.salesRevenue}</div></div>
+                    <div><div style="font-size: 8px; color: #94a3b8; font-weight: bold; text-transform: uppercase;">Load Month</div><div style="font-size: 14px; font-weight: 900; font-family: monospace; color: ${stats.errorCounts.loadingMonth > 0 ? '#ef4444' : '#10b981'}">${stats.errorCounts.loadingMonth}</div></div>
+                    <div><div style="font-size: 8px; color: #94a3b8; font-weight: bold; text-transform: uppercase;">Deliv Month</div><div style="font-size: 14px; font-weight: 900; font-family: monospace; color: ${stats.errorCounts.deliveryMonth > 0 ? '#ef4444' : '#10b981'}">${stats.errorCounts.deliveryMonth}</div></div>
+                    <div><div style="font-size: 8px; color: #94a3b8; font-weight: bold; text-transform: uppercase;">Critical</div><div style="font-size: 14px; font-weight: 900; font-family: monospace; color: ${stats.criticalErrorsCount > 0 ? '#ef4444' : '#10b981'}">${stats.criticalErrorsCount}</div></div>
                 </div>
             </div>
         </div>
@@ -1043,12 +1059,12 @@ export const DiscrepancyCheck: React.FC<DiscrepancyCheckProps> = ({
         return {
           'Strategy Name': r.strategyName,
           'Matched in TRMS': r.foundInTrms ? 'Yes' : 'No',
-          'App Loading Date': r.app.loadingDate,
-          'TRMS Loading Date': r.trms.loadingDate,
-          'Loading Date Error %': r.errorPcts.loadingDate,
-          'App Delivery Date': r.app.deliveryDate,
-          'TRMS Delivery Date': r.trms.deliveryDate,
-          'Delivery Date Error %': r.errorPcts.deliveryDate,
+          'App Loading Month': getMonthStr(r.app.loadingDate),
+          'TRMS Loading Month': getMonthStr(r.trms.commWindowEndDate),
+          'Loading Month Error %': r.errorPcts.loadingDate,
+          'App Delivery Month': getMonthStr(r.app.deliveryDate),
+          'TRMS Delivery Month': getMonthStr(r.trms.commWindowEndDate),
+          'Delivery Month Error %': r.errorPcts.deliveryDate,
           'App Volume Type': r.app.volumeType,
           'TRMS Volume Type': r.trms.volumeType,
           'App Price Status': r.app.priceStatus,
@@ -1093,7 +1109,6 @@ export const DiscrepancyCheck: React.FC<DiscrepancyCheckProps> = ({
 
   const stats = useMemo(() => {
     const totalDiscrepancies = reconciliationData.reduce((acc, r) => acc + r.discrepancies.size, 0);
-    const matchedCount = reconciliationData.filter(r => r.foundInTrms && r.discrepancies.size === 0).length;
     const totalSrcValue = Object.values(trmsData.trmsAgg).reduce((acc, curr) => acc + curr.srcValue, 0);
     const totalHedgingPnL = Object.values(trmsData.trmsAgg).reduce((acc, curr) => acc + curr.hedgingPnL, 0);
 
@@ -1120,6 +1135,18 @@ export const DiscrepancyCheck: React.FC<DiscrepancyCheckProps> = ({
         salesRevenue: foundRows.length ? foundRows.reduce((acc, r) => acc + r.errorPcts.salesRevenue, 0) / foundRows.length : 0,
     };
 
+    const errorCounts = {
+        buyPrice: foundRows.filter(r => r.errorPcts.buyPrice > 0.1).length,
+        sellPrice: foundRows.filter(r => r.errorPcts.sellPrice > 0.1).length,
+        buyVol: foundRows.filter(r => r.errorPcts.buyVol > 0.1).length,
+        sellVol: foundRows.filter(r => r.errorPcts.sellVol > 0.1).length,
+        src: foundRows.filter(r => r.errorPcts.src > 0.1).length,
+        loadingMonth: foundRows.filter(r => r.errorPcts.loadingDate > 0).length,
+        deliveryMonth: foundRows.filter(r => r.errorPcts.deliveryDate > 0).length,
+        purchaseCost: foundRows.filter(r => r.errorPcts.purchaseCost > 0.1).length,
+        salesRevenue: foundRows.filter(r => r.errorPcts.salesRevenue > 0.1).length,
+    };
+
     const criticalErrorsCount = foundRows.filter(r => 
         r.errorPcts.buyPrice > 5 || r.errorPcts.sellPrice > 5 || 
         r.errorPcts.buyVol > 5 || r.errorPcts.sellVol > 5 || 
@@ -1127,7 +1154,7 @@ export const DiscrepancyCheck: React.FC<DiscrepancyCheckProps> = ({
         r.errorPcts.salesRevenue > 5
     ).length;
 
-    return { totalDiscrepancies, matchedCount, totalSrcValue, totalHedgingPnL, avgErrors, totals, criticalErrorsCount };
+    return { totalDiscrepancies, totalSrcValue, totalHedgingPnL, avgErrors, totals, criticalErrorsCount, errorCounts };
   }, [reconciliationData, trmsData.trmsAgg]);
 
   const handleConfirmSync = () => {
@@ -1554,12 +1581,12 @@ export const DiscrepancyCheck: React.FC<DiscrepancyCheckProps> = ({
           
           <motion.div whileHover={{ scale: 1.02 }} className="bg-slate-900 p-4 rounded-2xl border border-slate-800 shadow-xl flex flex-col justify-between overflow-hidden relative group">
               <div className="absolute top-0 right-0 p-4 opacity-10 group-hover:opacity-30 transition-opacity">
-                  <svg className="w-16 h-16 text-white" fill="none" stroke="currentColor" viewBox="0 0 24 24"><path strokeLinecap="round" strokeLinejoin="round" strokeWidth={1} d="M9 12l2 2 4-4m6 2a9 9 0 11-18 0 9 9 0 0118 0z" /></svg>
+                  <svg className="w-16 h-16 text-white" fill="none" stroke="currentColor" viewBox="0 0 24 24"><path strokeLinecap="round" strokeLinejoin="round" strokeWidth={1} d="M12 9v2m0 4h.01m-6.938 4h13.856c1.54 0 2.502-1.667 1.732-3L13.732 4c-.77-1.333-2.694-1.333-3.464 0L3.34 16c-.77 1.333.192 3 1.732 3z" /></svg>
               </div>
               <div className="relative z-10">
-                  <span className="text-[10px] font-black text-emerald-400 uppercase tracking-widest block mb-1">Perfect Matches</span>
-                  <h3 className="text-3xl font-black text-white font-mono">{stats.matchedCount}</h3>
-                  <p className="text-[10px] text-slate-500 font-bold uppercase mt-2">Strategies in sync</p>
+                  <span className="text-[10px] font-black text-rose-400 uppercase tracking-widest block mb-1">Critical Errors</span>
+                  <h3 className="text-3xl font-black text-white font-mono">{stats.criticalErrorsCount}</h3>
+                  <p className="text-[10px] text-slate-500 font-bold uppercase mt-2">Errors exceeding 5%</p>
               </div>
           </motion.div>
 
@@ -1685,19 +1712,19 @@ const ReconciliationRowItem = memo(({ row, activeTab, columnWidths, handleRowEdi
 }) => {
   const r = row as ReconciliationRow;
 
-  const getMonthStr = (dateStr: string) => {
-      if (!dateStr) return '';
-      const d = new Date(dateStr);
-      if (isNaN(d.getTime())) return '';
-      return `${d.getUTCFullYear()}-${String(d.getUTCMonth() + 1).padStart(2, '0')}`;
-  };
-
   const commMonth = getMonthStr(r.trms.commWindowEndDate);
   const appLoadingMonth = getMonthStr(r.app.loadingDate);
   const appDeliveryMonth = getMonthStr(r.app.deliveryDate);
 
   const loadingMonthMatch = commMonth && appLoadingMonth && commMonth === appLoadingMonth;
   const deliveryMonthMatch = commMonth && appDeliveryMonth && commMonth === appDeliveryMonth;
+
+  const getMonthName = (dateStr: string) => {
+      if (!dateStr) return '-';
+      const d = new Date(dateStr);
+      if (isNaN(d.getTime())) return '-';
+      return d.toLocaleString('default', { month: 'short', year: 'numeric' });
+  };
 
   return (
     <div className={`flex border-b border-slate-100 transition-colors hover:bg-indigo-50/20 bg-white group ${activeTab === 'reconcile' && !r.foundInTrms ? 'bg-slate-50' : ''}`} style={{ height: rowHeight, contentVisibility: 'auto', containIntrinsicSize: `auto ${rowHeight}px` }}>
@@ -1710,39 +1737,39 @@ const ReconciliationRowItem = memo(({ row, activeTab, columnWidths, handleRowEdi
               </div>
           </div>
           
-          <div className={`px-4 py-2 shrink-0 flex flex-col justify-center border-r border-slate-50 overflow-hidden ${r.foundInTrms ? (loadingMonthMatch ? 'bg-emerald-50/50' : 'bg-rose-50/50') : ''}`} style={{ width: columnWidths['Loading Date'] || DEFAULT_COLUMN_WIDTH }}>
+          <div className={`px-4 py-2 shrink-0 flex flex-col justify-center border-r border-slate-50 overflow-hidden ${r.foundInTrms ? (loadingMonthMatch ? 'bg-emerald-50/50' : 'bg-rose-50/50') : ''}`} style={{ width: columnWidths['Loading Month'] || DEFAULT_COLUMN_WIDTH }}>
               <div className="flex flex-col mb-1 pb-1 border-b border-slate-50">
                   <div className="flex justify-between items-center">
-                    <span className="text-[8px] font-bold text-slate-400 uppercase tracking-tighter">App Loading</span>
+                    <span className="text-[8px] font-bold text-slate-400 uppercase tracking-tighter">App Month</span>
                     {r.foundInTrms && (
                         <span className={`text-[8px] font-black ${r.errorPcts.loadingDate > 0 ? 'text-rose-500' : 'text-emerald-500'}`}>
-                            {r.errorPcts.loadingDate > 0 ? 'Month Mismatch' : 'Month Match'}
+                            {r.errorPcts.loadingDate > 0 ? 'Mismatch' : 'Match'}
                         </span>
                     )}
                   </div>
-                  <span className="text-[10px] font-bold text-slate-700 font-mono">{r.app.loadingDate || '-'}</span>
+                  <span className="text-[10px] font-bold text-slate-700 font-mono">{getMonthName(r.app.loadingDate)}</span>
               </div>
               <div className="flex flex-col">
-                  <span className="text-[8px] font-bold text-slate-400 uppercase tracking-tighter">TRMS Window</span>
-                  <span className={`text-[10px] font-bold font-mono ${r.foundInTrms && r.app.loadingDate !== r.trms.loadingDate ? 'text-rose-500' : 'text-slate-500'}`}>{r.trms.loadingDate || 'N/A'}</span>
+                  <span className="text-[8px] font-bold text-slate-400 uppercase tracking-tighter">TRMS Month</span>
+                  <span className={`text-[10px] font-bold font-mono ${r.foundInTrms && !loadingMonthMatch ? 'text-rose-500' : 'text-slate-500'}`}>{getMonthName(r.trms.commWindowEndDate)}</span>
               </div>
           </div>
 
-          <div className={`px-4 py-2 shrink-0 flex flex-col justify-center border-r border-slate-50 overflow-hidden ${r.foundInTrms ? (deliveryMonthMatch ? 'bg-emerald-50/50' : 'bg-rose-50/50') : ''}`} style={{ width: columnWidths['Delivery Date'] || DEFAULT_COLUMN_WIDTH }}>
+          <div className={`px-4 py-2 shrink-0 flex flex-col justify-center border-r border-slate-50 overflow-hidden ${r.foundInTrms ? (deliveryMonthMatch ? 'bg-emerald-50/50' : 'bg-rose-50/50') : ''}`} style={{ width: columnWidths['Delivery Month'] || DEFAULT_COLUMN_WIDTH }}>
               <div className="flex flex-col mb-1 pb-1 border-b border-slate-50">
                   <div className="flex justify-between items-center">
-                    <span className="text-[8px] font-bold text-slate-400 uppercase tracking-tighter">App Delivery</span>
+                    <span className="text-[8px] font-bold text-slate-400 uppercase tracking-tighter">App Month</span>
                     {r.foundInTrms && (
                         <span className={`text-[8px] font-black ${r.errorPcts.deliveryDate > 0 ? 'text-rose-500' : 'text-emerald-500'}`}>
-                            {r.errorPcts.deliveryDate > 0 ? 'Month Mismatch' : 'Month Match'}
+                            {r.errorPcts.deliveryDate > 0 ? 'Mismatch' : 'Match'}
                         </span>
                     )}
                   </div>
-                  <span className="text-[10px] font-bold text-slate-700 font-mono">{r.app.deliveryDate || '-'}</span>
+                  <span className="text-[10px] font-bold text-slate-700 font-mono">{getMonthName(r.app.deliveryDate)}</span>
               </div>
               <div className="flex flex-col">
-                  <span className="text-[8px] font-bold text-slate-400 uppercase tracking-tighter">TRMS Window</span>
-                  <span className={`text-[10px] font-bold font-mono ${r.foundInTrms && r.app.deliveryDate !== r.trms.deliveryDate ? 'text-rose-500' : 'text-slate-500'}`}>{r.trms.deliveryDate || 'N/A'}</span>
+                  <span className="text-[8px] font-bold text-slate-400 uppercase tracking-tighter">TRMS Month</span>
+                  <span className={`text-[10px] font-bold font-mono ${r.foundInTrms && !deliveryMonthMatch ? 'text-rose-500' : 'text-slate-500'}`}>{getMonthName(r.trms.commWindowEndDate)}</span>
               </div>
           </div>
 

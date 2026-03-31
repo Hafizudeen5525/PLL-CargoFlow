@@ -152,7 +152,7 @@ export const isBusinessDay = (date: Date, holidayMap?: Record<string, string>): 
 };
 
 export const getOffsetBusinessDay = (baseDate: Date, offset: number, holidayMap?: Record<string, string>): Date => {
-    let d = new Date(baseDate);
+    const d = new Date(baseDate);
     let count = 0;
     const step = offset > 0 ? 1 : -1;
     const target = Math.abs(offset);
@@ -164,7 +164,7 @@ export const getOffsetBusinessDay = (baseDate: Date, offset: number, holidayMap?
 };
 
 const getLastBusinessDayOfMonth = (year: number, month: number, holidayMap?: Record<string, string>): Date => {
-    let d = new Date(Date.UTC(year, month + 1, 0));
+    const d = new Date(Date.UTC(year, month + 1, 0));
     while (!isBusinessDay(d, holidayMap)) {
         d.setUTCDate(d.getUTCDate() - 1);
     }
@@ -190,7 +190,7 @@ export const getFixationDate = (index: string, pricingMonthStr: string, holidayM
     }
     
     if (idx === 'JKM') {
-        let d = new Date(Date.UTC(y, pricingMonthIndex - 1, 15));
+        const d = new Date(Date.UTC(y, pricingMonthIndex - 1, 15));
         while (!isBusinessDay(d, holidayMap)) {
             d.setUTCDate(d.getUTCDate() - 1);
         }
@@ -247,7 +247,7 @@ export const getExposureMultiplier = (index: string, pricingMonthStr: string, si
     let totalBusDays = 0;
     let busDaysRemaining = 0;
     
-    let curr = new Date(startOfMonth);
+    const curr = new Date(startOfMonth);
     while (curr <= endOfMonth) {
         if (isBusinessDay(curr, holidays)) {
             totalBusDays++;
@@ -296,7 +296,7 @@ export function getIndexPrice(index: string, refDateStr: string, monthDef: strin
     const d = new Date(baseDate.getFullYear(), baseDate.getMonth(), 15);
     
     const targetMonths: string[] = [];
-    let label = monthDef || 'n';
+    const label = monthDef || 'n';
     const cleanDef = (monthDef || 'n').toLowerCase().replace(/\s/g, '');
     
     const avgMatch = cleanDef.match(/\(?(\d+),(\d+),(\d+)\)?/);

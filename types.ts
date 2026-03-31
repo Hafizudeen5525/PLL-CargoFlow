@@ -204,3 +204,15 @@ export const EmptyCargoProfile: Omit<CargoProfile, 'id'> = {
   tier2BuyPriceRounding: 3,
   isTier2BuyPriceManual: false
 };
+
+export interface YearlyReportData {
+  year: string;
+  inceptionValue: number;
+  pnlLimit: number;
+  mdd: number;
+  mddLimit: number;
+  var: number;
+  varLimit: number;
+  cvar: number;
+  cvarLimit: number;
+}

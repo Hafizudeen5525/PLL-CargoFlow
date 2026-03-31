@@ -229,11 +229,11 @@ export const CargoList: React.FC<CargoListProps> = ({
                             const stratName = row[stratIdx];
                             if (!stratName || String(stratName).trim() === '') return;
                             
-                            let cleanStratName = String(stratName).trim();
+                            const cleanStratName = String(stratName).trim();
                             const count = (seenInSheetCount.get(cleanStratName) || 0) + 1;
                             seenInSheetCount.set(cleanStratName, count);
 
-                            let isTier2Leg = count > 1 || cleanStratName.includes('t(') || cleanStratName.endsWith('t');
+                            const isTier2Leg = count > 1 || cleanStratName.includes('t(') || cleanStratName.endsWith('t');
                             const lookupName = cleanStratName.replace('t(', '(').replace(/t$/, '');
 
                             if (!mergedData[lookupName]) mergedData[lookupName] = { ...EmptyCargoProfile, strategyName: lookupName };
@@ -445,7 +445,7 @@ export const CargoList: React.FC<CargoListProps> = ({
             const existingMatch = profiles.find((p: CargoProfile) => p.strategyName?.toLowerCase() === parsedFields.strategyName?.toLowerCase());
             let finalProfile: CargoProfile;
             let status: 'New' | 'Update' | 'No Change';
-            let changes: Record<string, { old: any, new: any }> = {};
+            const changes: Record<string, { old: any, new: any }> = {};
 
             if (existingMatch) {
                 const merged = { ...existingMatch, ...parsedFields };

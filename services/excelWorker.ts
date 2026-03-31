@@ -44,7 +44,7 @@ self.onmessage = (e: MessageEvent) => {
 
     rawData.forEach((row: any) => {
       const rawY = findValue(row, ['Plsb Year Bucket', 'Year', 'Year Bucket']);
-      let y = typeof rawY === 'number' ? rawY : parseInt(String(rawY || '').replace(/[^0-9]/g, ''));
+      const y = typeof rawY === 'number' ? rawY : parseInt(String(rawY || '').replace(/[^0-9]/g, ''));
       if (isNaN(y) || y < 2024) return;
       
       if (portfolioYear === 'Unknown') portfolioYear = String(y);
@@ -100,16 +100,6 @@ self.onmessage = (e: MessageEvent) => {
       if (recPurchase > 0) trmsAgg[sName].reconciledPurchaseCost = recPurchase;
       if (recSales > 0) trmsAgg[sName].reconciledSalesRevenue = recSales;
 
-      const rowVolType = String(row['Volume Type'] || 'Estimate');
-      if (rowVolType === 'Actual') {
-          trmsAgg[sName].volumeType = 'Actual';
-      }
-
-      const rowPriceStatus = String(row['Price Status'] || 'Estimate');
-      if (rowPriceStatus === 'Fixed') {
-          trmsAgg[sName].priceStatus = 'Fixed';
-      }
-      
       const rowSettlementType = String(row['Settlement Type'] || '').trim();
 
       const getRowValue = (keys: string[]) => {
@@ -144,6 +134,11 @@ self.onmessage = (e: MessageEvent) => {
 
       const sDate = formatDate(row['Start Date'] || row['Comm Window Start Date']);
       const eDate = formatDate(row['End Date'] || row['Comm Window End Date']);
+      const commWindowEndDate = formatDate(row['Comm Window End Date']);
+      
+      if (commWindowEndDate) {
+          trmsAgg[sName].commWindowEndDate = commWindowEndDate;
+      }
       
       if (cTypeLower.includes("src") || cTypeLower.includes("shipping")) {
           const absVal = Math.abs(valUSD);
@@ -155,6 +150,7 @@ self.onmessage = (e: MessageEvent) => {
       } else if (cTypeLower === "commodity" || cTypeLower === "physical") {
           const buySell = String(row['Buy_Sell'] || '').trim();
           const priceStatus = String(row['Price Status'] || 'Unknown');
+          const volumeType = String(row['Volume Type'] || 'Estimate');
           trmsAgg[sName].commodityLegs.push({ 
               price: Number(row['Price'] || 0), 
               vol: Math.abs(Number(row['Volume'] || 0)), 
@@ -162,6 +158,7 @@ self.onmessage = (e: MessageEvent) => {
               startDate: sDate,
               endDate: eDate,
               priceStatus,
+              volumeType,
               settlementType: rowSettlementType,
               valueUSD: valUSD
           });
@@ -194,6 +191,44 @@ self.onmessage = (e: MessageEvent) => {
       if (cType === "SRC- Shipping Related Cost") srcRows.push(cleanRow);
       if (iPort === "Hedging LNG") hedgingRows.push(cleanRow);
       if (iPort === "DH LNG" || iPort === "DFT LNG") paperRows.push(cleanRow);
+    });
+
+    // Post-process trmsAgg to set final volumeType and priceStatus based on both legs
+    Object.keys(trmsAgg).forEach(sName => {
+        const agg = trmsAgg[sName];
+        const buyLegs = agg.commodityLegs.filter((l: any) => l.buySell === 'Buy');
+        const sellLegs = agg.commodityLegs.filter((l: any) => l.buySell === 'Sell');
+
+        const hasBuy = buyLegs.length > 0;
+        const hasSell = sellLegs.length > 0;
+
+        // Volume Type: Actual only if both exist and all are Actual
+        const allBuyActual = hasBuy && buyLegs.every((l: any) => l.volumeType === 'Actual');
+        const allSellActual = hasSell && sellLegs.every((l: any) => l.volumeType === 'Actual');
+        
+        if (hasBuy && hasSell) {
+            agg.volumeType = (allBuyActual && allSellActual) ? 'Actual' : 'Estimate';
+        } else if (hasBuy) {
+            agg.volumeType = allBuyActual ? 'Actual' : 'Estimate';
+        } else if (hasSell) {
+            agg.volumeType = allSellActual ? 'Actual' : 'Estimate';
+        } else {
+            agg.volumeType = 'Estimate';
+        }
+
+        // Price Status: Fixed only if both exist and all are Fixed
+        const allBuyFixed = hasBuy && buyLegs.every((l: any) => l.priceStatus === 'Fixed');
+        const allSellFixed = hasSell && sellLegs.every((l: any) => l.priceStatus === 'Fixed');
+
+        if (hasBuy && hasSell) {
+            agg.priceStatus = (allBuyFixed && allSellFixed) ? 'Fixed' : 'Estimate';
+        } else if (hasBuy) {
+            agg.priceStatus = allBuyFixed ? 'Fixed' : 'Estimate';
+        } else if (hasSell) {
+            agg.priceStatus = allSellFixed ? 'Fixed' : 'Estimate';
+        } else {
+            agg.priceStatus = 'Estimate';
+        }
     });
 
     // Extract Forward Curve if exists
