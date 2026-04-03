@@ -641,8 +641,10 @@ export const DiscrepancyCheck: React.FC<DiscrepancyCheckProps> = ({
   const headers = useMemo(() => {
     if (activeTab === 'reconcile') {
         return [
-            'Strategy Name', 'Loading Month', 'Delivery Month', 'Volume Type', 'Price Status', 'Purchase Price', 
-            'Purchase Volume', 'Sales Price', 'Sales Volume', 'SRC Components', 'Purchase Cost', 'Sales Revenue', 'Value Sync'
+            'Strategy Name', 'Loading Month', 'Delivery Month', 'Volume Type', 'Price Status', 
+            'Purchase Price', 'Purchase Volume', 'Purchase Cost', 
+            'Sales Price', 'Sales Volume', 'Sales Revenue', 
+            'SRC Components', 'Value Sync'
         ];
     }
     if (!currentRawData || currentRawData.length === 0) return [];
@@ -933,6 +935,11 @@ export const DiscrepancyCheck: React.FC<DiscrepancyCheckProps> = ({
                         `}
                         <div style="margin-top: 4px; font-size: 9px; color: ${getErrorColor(r.errorPcts.buyVol)}; font-weight: bold;">Err: ${r.errorPcts.buyVol.toFixed(2)}%</div>
                     </td>
+                    <td style="border: 1px solid #e2e8f0; padding: 12px 16px; font-size: 10px; background: ${getBgColor(r.errorPcts.purchaseCost)};">
+                        <div style="color: #64748b; font-size: 8px; font-weight: bold; text-transform: uppercase;">Purchase Cost</div>
+                        <div style="font-weight: bold; color: #1e293b;">${formatUSD(r.app.reconciledPurchaseCost || r.app.buyPrice * r.app.buyVol)}</div>
+                        <div style="margin-top: 4px; font-size: 9px; color: ${getErrorColor(r.errorPcts.purchaseCost)}; font-weight: bold;">Err: ${r.errorPcts.purchaseCost.toFixed(2)}%</div>
+                    </td>
                     <td style="border: 1px solid #e2e8f0; padding: 12px 16px; font-size: 10px; background: ${getBgColor(r.errorPcts.sellPrice)};">
                         <div style="color: #64748b; font-size: 8px; font-weight: bold; text-transform: uppercase;">App Sales Price</div>
                         ${r.app.isTiered ? `
@@ -957,22 +964,17 @@ export const DiscrepancyCheck: React.FC<DiscrepancyCheckProps> = ({
                         `}
                         <div style="margin-top: 4px; font-size: 9px; color: ${getErrorColor(r.errorPcts.sellVol)}; font-weight: bold;">Err: ${r.errorPcts.sellVol.toFixed(2)}%</div>
                     </td>
+                    <td style="border: 1px solid #e2e8f0; padding: 12px 16px; font-size: 10px; background: ${getBgColor(r.errorPcts.salesRevenue)};">
+                        <div style="color: #64748b; font-size: 8px; font-weight: bold; text-transform: uppercase;">Sales Revenue</div>
+                        <div style="font-weight: bold; color: #1e293b;">${formatUSD(r.app.reconciledSalesRevenue || r.app.sellPrice * r.app.sellVol)}</div>
+                        <div style="margin-top: 4px; font-size: 9px; color: ${getErrorColor(r.errorPcts.salesRevenue)}; font-weight: bold;">Err: ${r.errorPcts.salesRevenue.toFixed(2)}%</div>
+                    </td>
                     <td style="border: 1px solid #e2e8f0; padding: 12px 16px; font-size: 10px; background: ${getBgColor(r.errorPcts.src)};">
                         <div style="color: #64748b; font-size: 8px; font-weight: bold; text-transform: uppercase;">App SRC</div>
                         <div style="font-weight: bold; color: #1e293b;">${formatUSD(r.app.src)}</div>
                         <div style="margin-top: 4px; font-size: 9px; color: ${getErrorColor(r.errorPcts.src)}; font-weight: bold;">Err: ${r.errorPcts.src.toFixed(2)}%</div>
                         <div style="margin-top: 8px; color: #64748b; font-size: 8px; font-weight: bold; text-transform: uppercase;">TRMS Breakdown</div>
                         ${renderSrcLegs(r.trms.srcLegs)}
-                    </td>
-                    <td style="border: 1px solid #e2e8f0; padding: 12px 16px; font-size: 10px; background: ${getBgColor(r.errorPcts.purchaseCost)};">
-                        <div style="color: #64748b; font-size: 8px; font-weight: bold; text-transform: uppercase;">App Cost</div>
-                        <div style="font-weight: bold; color: #1e293b;">${formatUSD(r.app.reconciledPurchaseCost || r.app.buyPrice * r.app.buyVol)}</div>
-                        <div style="margin-top: 4px; font-size: 9px; color: ${getErrorColor(r.errorPcts.purchaseCost)}; font-weight: bold;">Err: ${r.errorPcts.purchaseCost.toFixed(2)}%</div>
-                    </td>
-                    <td style="border: 1px solid #e2e8f0; padding: 12px 16px; font-size: 10px; background: ${getBgColor(r.errorPcts.salesRevenue)};">
-                        <div style="color: #64748b; font-size: 8px; font-weight: bold; text-transform: uppercase;">App Revenue</div>
-                        <div style="font-weight: bold; color: #1e293b;">${formatUSD(r.app.reconciledSalesRevenue || r.app.sellPrice * r.app.sellVol)}</div>
-                        <div style="margin-top: 4px; font-size: 9px; color: ${getErrorColor(r.errorPcts.salesRevenue)}; font-weight: bold;">Err: ${r.errorPcts.salesRevenue.toFixed(2)}%</div>
                     </td>
                     <td style="border: 1px solid #e2e8f0; padding: 12px 16px; font-size: 10px;">
                         <div style="color: #64748b; font-size: 8px; font-weight: bold; text-transform: uppercase;">App P&L</div>
@@ -1138,6 +1140,9 @@ export const DiscrepancyCheck: React.FC<DiscrepancyCheckProps> = ({
           'App Total Purchase Volume': r.app.buyVol + (r.app.tier2BuyVol || 0),
           'TRMS Purchase Volume (Best Match)': r.trms.buyLegs.length > 0 ? r.trms.buyLegs.reduce((prev, curr) => Math.abs(curr.vol - r.app.buyVol) < Math.abs(prev.vol - r.app.buyVol) ? curr : prev).vol : 0,
           'Purchase Volume Error %': r.errorPcts.buyVol,
+          'App Purchase Cost': r.app.reconciledPurchaseCost > 0 ? r.app.reconciledPurchaseCost : r.app.buyPrice * r.app.buyVol,
+          'TRMS Purchase Value (Best Match)': r.trms.buyLegs.length > 0 ? r.trms.buyLegs.reduce((prev, curr) => Math.abs(Math.abs(curr.valueUSD) - (r.app.reconciledPurchaseCost > 0 ? r.app.reconciledPurchaseCost : r.app.buyPrice * r.app.buyVol)) < Math.abs(Math.abs(prev.valueUSD) - (r.app.reconciledPurchaseCost > 0 ? r.app.reconciledPurchaseCost : r.app.buyPrice * r.app.buyVol)) ? curr : prev).valueUSD : 0,
+          'Purchase Cost Error %': r.errorPcts.purchaseCost,
           'App Sales Price': r.app.sellPrice,
           'App Sales Price Tier 2': r.app.tier2SellPrice || 0,
           'App Effective Sales Price': r.app.effectiveSellPrice || r.app.sellPrice,
@@ -1148,9 +1153,6 @@ export const DiscrepancyCheck: React.FC<DiscrepancyCheckProps> = ({
           'App Total Sales Volume': r.app.sellVol + (r.app.tier2SellVol || 0),
           'TRMS Sales Volume (Best Match)': r.trms.sellLegs.length > 0 ? r.trms.sellLegs.reduce((prev, curr) => Math.abs(curr.vol - r.app.sellVol) < Math.abs(prev.vol - r.app.sellVol) ? curr : prev).vol : 0,
           'Sales Volume Error %': r.errorPcts.sellVol,
-          'App Purchase Cost': r.app.reconciledPurchaseCost > 0 ? r.app.reconciledPurchaseCost : r.app.buyPrice * r.app.buyVol,
-          'TRMS Purchase Value (Best Match)': r.trms.buyLegs.length > 0 ? r.trms.buyLegs.reduce((prev, curr) => Math.abs(Math.abs(curr.valueUSD) - (r.app.reconciledPurchaseCost > 0 ? r.app.reconciledPurchaseCost : r.app.buyPrice * r.app.buyVol)) < Math.abs(Math.abs(prev.valueUSD) - (r.app.reconciledPurchaseCost > 0 ? r.app.reconciledPurchaseCost : r.app.buyPrice * r.app.buyVol)) ? curr : prev).valueUSD : 0,
-          'Purchase Cost Error %': r.errorPcts.purchaseCost,
           'App Sales Revenue': r.app.reconciledSalesRevenue > 0 ? r.app.reconciledSalesRevenue : r.app.sellPrice * r.app.sellVol,
           'TRMS Sales Value (Best Match)': r.trms.sellLegs.length > 0 ? r.trms.sellLegs.reduce((prev, curr) => Math.abs(Math.abs(curr.valueUSD) - (r.app.reconciledSalesRevenue > 0 ? r.app.reconciledSalesRevenue : r.app.sellPrice * r.app.sellVol)) < Math.abs(Math.abs(prev.valueUSD) - (r.app.reconciledSalesRevenue > 0 ? r.app.reconciledSalesRevenue : r.app.sellPrice * r.app.sellVol)) ? curr : prev).valueUSD : 0,
           'Sales Revenue Error %': r.errorPcts.salesRevenue,
@@ -1748,7 +1750,8 @@ const AlignedSplitCell = ({
     tier1Val,
     tier2Val,
     effectiveVal,
-    totalVol
+    totalVol,
+    label
 }: { 
     type: 'price' | 'vol' | 'value', 
     appVal: number, 
@@ -1761,13 +1764,14 @@ const AlignedSplitCell = ({
     tier1Val?: number,
     tier2Val?: number,
     effectiveVal?: number,
-    totalVol?: number
+    totalVol?: number,
+    label?: string
 }) => (
     <div className="px-4 py-2 shrink-0 flex flex-col justify-center border-r border-slate-50 overflow-hidden" style={{ width }}>
         <div className="flex flex-col mb-2 pb-1 border-b border-slate-50">
             <div className="flex justify-between items-center">
                 <span className="text-[8px] font-bold text-slate-400 uppercase tracking-tighter">
-                    App {type === 'price' ? 'Price' : type === 'vol' ? 'Vol' : 'Value'}
+                    {label || `App ${type === 'price' ? 'Price' : type === 'vol' ? 'Vol' : 'Value'}`}
                     {isTiered && type !== 'value' && <span className="ml-1 text-indigo-500">(Tiered)</span>}
                 </span>
                 {found && errorPct > 0 && (
@@ -1954,6 +1958,16 @@ const ReconciliationRowItem = memo(({ row, activeTab, columnWidths, handleRowEdi
             totalVol={r.app.buyVol + (r.app.tier2BuyVol || 0)}
           />
           <AlignedSplitCell 
+            type="value" 
+            appVal={r.app.reconciledPurchaseCost > 0 ? r.app.reconciledPurchaseCost : r.app.buyPrice * r.app.buyVol} 
+            trmsLegs={r.trms.buyLegs} 
+            found={r.foundInTrms} 
+            width={columnWidths['Purchase Cost'] || DEFAULT_COLUMN_WIDTH} 
+            formatUSD={formatUSD} 
+            errorPct={r.errorPcts.purchaseCost}
+            label="Purchase Cost"
+          />
+          <AlignedSplitCell 
             type="price" 
             appVal={r.app.sellPrice} 
             trmsLegs={r.trms.sellLegs} 
@@ -1978,6 +1992,16 @@ const ReconciliationRowItem = memo(({ row, activeTab, columnWidths, handleRowEdi
             tier1Val={r.app.tier1SellVol}
             tier2Val={r.app.tier2SellVol}
             totalVol={r.app.sellVol + (r.app.tier2SellVol || 0)}
+          />
+          <AlignedSplitCell 
+            type="value" 
+            appVal={r.app.reconciledSalesRevenue > 0 ? r.app.reconciledSalesRevenue : r.app.sellPrice * r.app.sellVol} 
+            trmsLegs={r.trms.sellLegs} 
+            found={r.foundInTrms} 
+            width={columnWidths['Sales Revenue'] || DEFAULT_COLUMN_WIDTH} 
+            formatUSD={formatUSD} 
+            errorPct={r.errorPcts.salesRevenue}
+            label="Sales Revenue"
           />
           
           <div className="px-4 py-2 shrink-0 flex flex-col justify-center border-r border-slate-50 overflow-hidden" style={{ width: columnWidths['SRC Components'] || DEFAULT_COLUMN_WIDTH }}>
@@ -2015,26 +2039,6 @@ const ReconciliationRowItem = memo(({ row, activeTab, columnWidths, handleRowEdi
                     )}
                 </div>
           </div>
-
-          <AlignedSplitCell 
-            type="value" 
-            appVal={r.app.reconciledPurchaseCost > 0 ? r.app.reconciledPurchaseCost : r.app.buyPrice * r.app.buyVol} 
-            trmsLegs={r.trms.buyLegs} 
-            found={r.foundInTrms} 
-            width={columnWidths['Purchase Cost'] || DEFAULT_COLUMN_WIDTH} 
-            formatUSD={formatUSD} 
-            errorPct={r.errorPcts.purchaseCost}
-          />
-
-          <AlignedSplitCell 
-            type="value" 
-            appVal={r.app.reconciledSalesRevenue > 0 ? r.app.reconciledSalesRevenue : r.app.sellPrice * r.app.sellVol} 
-            trmsLegs={r.trms.sellLegs} 
-            found={r.foundInTrms} 
-            width={columnWidths['Sales Revenue'] || DEFAULT_COLUMN_WIDTH} 
-            formatUSD={formatUSD} 
-            errorPct={r.errorPcts.salesRevenue}
-          />
 
           <div className="px-4 py-2 shrink-0 flex flex-col justify-center border-r border-slate-50 overflow-hidden" style={{ width: columnWidths['Value Sync'] || DEFAULT_COLUMN_WIDTH }}>
               <div className="flex flex-col mb-1 pb-1 border-b border-slate-50">
