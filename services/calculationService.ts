@@ -132,13 +132,12 @@ export function getGroupName(strategyName: string = ''): string {
  */
 
 export const isBusinessDay = (date: Date, holidayMap?: Record<string, string>): boolean => {
-    let holidays: string[] = [];
-    if (holidayMap) {
-        holidays = Object.keys(holidayMap);
-    } else {
-        const holidaysRaw = localStorage.getItem('exposure_holidays_named');
-        holidays = holidaysRaw ? Object.keys(JSON.parse(holidaysRaw)) : [];
-    }
+    const holidays = holidayMap 
+        ? Object.keys(holidayMap)
+        : (() => {
+            const holidaysRaw = localStorage.getItem('exposure_holidays_named');
+            return holidaysRaw ? Object.keys(JSON.parse(holidaysRaw)) : [];
+        })();
     
     const day = date.getUTCDay();
     if (day === 0 || day === 6) return false;

@@ -22,33 +22,58 @@ interface Selection {
 
 export const ForwardCurveModal: React.FC<ForwardCurveModalProps> = ({ onClose, onSave }) => {
   const [activeTab, setActiveTab] = useState<'manage' | 'analyze' | 'evolution' | 'historical'>('manage');
-  const [curveDate, setCurveDate] = useState<string>(new Date().toISOString().split('T')[0]);
-  const [availableDates, setAvailableDates] = useState<string[]>([]);
-  
-  const [manageGrid, setManageGrid] = useState<ForwardCurveRow[]>([]);
-  const [historicalGrid, setHistoricalGrid] = useState<ForwardCurveRow[]>([]);
-
-  // Internal History for Undo/Redo
-  const [historyPast, setHistoryPast] = useState<ForwardCurveRow[][]>([]);
-  const [historyFuture, setHistoryFuture] = useState<ForwardCurveRow[][]>([]);
-
-  // Refs for focus management
-  const containerRef = useRef<HTMLDivElement>(null);
-
-  // Excel Interaction State
-  const [selection, setSelection] = useState<Selection | null>(null);
-  const [isSelecting, setIsSelecting] = useState(false);
-  const [editingCell, setEditingCell] = useState<{ r: number, c: number } | null>(null);
-  const [editValue, setEditValue] = useState('');
-
-  // Comparison State
-  const [compareDateA, setCompareDateA] = useState<string>('');
-  const [compareDateB, setCompareDateB] = useState<string>('');
+  const [availableDates, setAvailableDates] = useState<string[]>(() => getAvailableCurveDates());
+  const [curveDate, setCurveDate] = useState<string>(() => {
+      const dates = getAvailableCurveDates();
+      return dates.length > 0 ? dates[0] : new Date().toISOString().split('T')[0];
+  });
+  const [compareDateA, setCompareDateA] = useState<string>(() => {
+      const dates = getAvailableCurveDates();
+      return dates.length >= 1 ? dates[0] : '';
+  });
+  const [compareDateB, setCompareDateB] = useState<string>(() => {
+      const dates = getAvailableCurveDates();
+      return dates.length >= 2 ? dates[1] : '';
+  });
   const [selectedAnalysisIndex, setSelectedAnalysisIndex] = useState('TTF');
 
   // Evolution State
   const [evolutionIndex, setEvolutionIndex] = useState('TTF');
   const [evolutionContract, setEvolutionContract] = useState<string>('');
+
+  // Grid State
+  const [manageGrid, setManageGrid] = useState<ForwardCurveRow[]>(() => {
+      const dates = getAvailableCurveDates();
+      const today = new Date().toISOString().split('T')[0];
+      const latest = dates.length > 0 ? dates[0] : today;
+      const data = getForwardCurve(latest);
+      if (data.length === 0) {
+          const skeleton: ForwardCurveRow[] = [];
+          const start = new Date(latest);
+          for (let i = 0; i < 12; i++) {
+              const d = new Date(start.getFullYear(), start.getMonth() + i, 1);
+              const mKey = `${d.getFullYear()}-${String(d.getMonth() + 1).padStart(2, '0')}`;
+              skeleton.push({ month: mKey, prices: {} });
+          }
+          return skeleton;
+      }
+      return data;
+  });
+  const [historicalGrid, setHistoricalGrid] = useState<ForwardCurveRow[]>(() => getHistoricalCurve());
+  const [historyPast, setHistoryPast] = useState<ForwardCurveRow[][]>([]);
+  const [historyFuture, setHistoryFuture] = useState<ForwardCurveRow[][]>([]);
+  
+  // Interaction State
+  const [selection, setSelection] = useState<Selection | null>(null);
+  const [editingCell, setEditingCell] = useState<{ r: number; c: number } | null>(null);
+  const [editValue, setEditValue] = useState<string>('');
+  const [isSelecting, setIsSelecting] = useState(false);
+  
+  const containerRef = useRef<HTMLDivElement>(null);
+
+  const refreshDates = useCallback(() => {
+      setAvailableDates(getAvailableCurveDates());
+  }, []);
 
   // Current active columns based on tab
   const activeColumns = useMemo(() => {
@@ -57,7 +82,7 @@ export const ForwardCurveModal: React.FC<ForwardCurveModalProps> = ({ onClose, o
 
   const activeIndices = useMemo(() => activeColumns.slice(1), [activeColumns]);
 
-  const loadCurveData = (date: string) => {
+  const loadCurveData = useCallback((date: string) => {
       const data = getForwardCurve(date);
       let targetGrid: ForwardCurveRow[];
       if (data.length === 0) {
@@ -78,30 +103,16 @@ export const ForwardCurveModal: React.FC<ForwardCurveModalProps> = ({ onClose, o
       setEditingCell(null);
       setHistoryPast([]);
       setHistoryFuture([]);
-  };
-
-  useEffect(() => {
-    const dates = getAvailableCurveDates();
-    setAvailableDates(dates);
-    
-    const today = new Date().toISOString().split('T')[0];
-    const latest = dates.length > 0 ? dates[0] : today;
-    
-    loadCurveData(latest);
-    setHistoricalGrid(getHistoricalCurve());
-    
-    if (dates.length >= 1 && !compareDateA) setCompareDateA(dates[0]);
-    if (dates.length >= 2 && !compareDateB) setCompareDateB(dates[1]);
   }, []);
 
   const currentGrid = activeTab === 'manage' ? manageGrid : historicalGrid;
   
-  const updateGridWithHistory = (next: ForwardCurveRow[]) => {
+  const updateGridWithHistory = useCallback((next: ForwardCurveRow[]) => {
       setHistoryPast(prev => [...prev, JSON.parse(JSON.stringify(currentGrid))].slice(-50));
       setHistoryFuture([]);
       if (activeTab === 'manage') setManageGrid(next);
       else setHistoricalGrid(next);
-  };
+  }, [currentGrid, activeTab]);
 
   const undo = useCallback(() => {
       if (historyPast.length === 0) return;
@@ -190,13 +201,13 @@ export const ForwardCurveModal: React.FC<ForwardCurveModalProps> = ({ onClose, o
       }
   };
 
-  const handleCellDoubleClick = (r: number, c: number) => {
+  const handleCellDoubleClick = useCallback((r: number, c: number) => {
       setEditingCell({ r, c });
       const val = c === 0 ? currentGrid[r]?.month : currentGrid[r]?.prices[activeColumns[c]];
       setEditValue(String(val ?? ''));
-  };
+  }, [currentGrid, activeColumns]);
 
-  const finishEditing = () => {
+  const finishEditing = useCallback(() => {
       if (!editingCell) return;
       const { r, c } = editingCell;
       const next = JSON.parse(JSON.stringify(currentGrid));
@@ -208,7 +219,7 @@ export const ForwardCurveModal: React.FC<ForwardCurveModalProps> = ({ onClose, o
       }
       updateGridWithHistory(next);
       setEditingCell(null);
-  };
+  }, [editingCell, currentGrid, editValue, activeColumns, updateGridWithHistory]);
 
   const isSelected = (r: number, c: number) => {
       if (!selection) return false;
@@ -360,7 +371,7 @@ export const ForwardCurveModal: React.FC<ForwardCurveModalProps> = ({ onClose, o
               setSelection({ startRow: endRow, startCol: nextC, endRow: endRow, endCol: nextC });
           }
       }
-  }, [selection, editingCell, currentGrid, editValue, undo, redo, activeColumns]);
+  }, [selection, editingCell, currentGrid, activeColumns, undo, redo, finishEditing, handleCellDoubleClick, updateGridWithHistory]);
 
   const handlePaste = (e: React.ClipboardEvent) => {
       const text = e.clipboardData.getData('Text');

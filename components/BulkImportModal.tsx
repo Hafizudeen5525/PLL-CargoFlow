@@ -14,8 +14,8 @@ const COLUMN_MAPPING: Record<string, string[]> = {
   strategyName: ['strategy', 'name', 'deal', 'id', 'ref'],
   source: ['source', 'origin', 'load port', 'loading port'],
   buyer: ['buyer', 'customer', 'client', 'destination', 'disport'],
-  deliveryDate: ['delivery date', 'arrival', 'end date', 'del date'],
-  loadingDate: ['loading date', 'load date', 'bl date'],
+  deliveryDate: ['delivery date', 'arrival', 'end date', 'del date', 'delivery'],
+  loadingDate: ['loading date', 'load date', 'bl date', 'loading'],
   deliveredVolume: ['volume', 'vol', 'quantity', 'qty', 'mmbtu', 'bbl', 'delivered volume'],
   loadedVolume: ['loaded volume', 'load vol'],
   sellFormula: ['sell formula', 'sales formula'],
@@ -84,8 +84,26 @@ export const BulkImportModal: React.FC<BulkImportModalProps> = ({ existingProfil
 
   const parseDate = (raw: string): string => {
     if (!raw) return '';
+    
+    // Try to match YYYY-MM-DD (ISO) first to avoid UTC shift
+    const isoMatch = raw.match(/^(\d{4})-(\d{2})-(\d{2})/);
+    if (isoMatch) return `${isoMatch[1]}-${isoMatch[2]}-${isoMatch[3]}`;
+
+    // Handle Excel date codes if they happen to be pasted as numbers
+    const num = parseFloat(raw);
+    if (!isNaN(num) && num > 30000 && num < 60000) {
+        const d2 = new Date((num - 25569) * 86400 * 1000);
+        if (!isNaN(d2.getTime())) return d2.toISOString().split('T')[0];
+    }
+
     const d = new Date(raw);
-    if (!isNaN(d.getTime())) return d.toISOString().split('T')[0];
+    if (!isNaN(d.getTime())) {
+        // Use local methods to format back to YYYY-MM-DD for other formats
+        const y = d.getFullYear();
+        const m = String(d.getMonth() + 1).padStart(2, '0');
+        const day = String(d.getDate()).padStart(2, '0');
+        return `${y}-${m}-${day}`;
+    }
     return '';
   };
 
@@ -300,8 +318,12 @@ export const BulkImportModal: React.FC<BulkImportModalProps> = ({ existingProfil
                                         <span className={`px-2 py-0.5 rounded text-[9px] font-black uppercase border ${row._status === 'Update' ? 'bg-blue-50 text-blue-700 border-blue-100' : 'bg-emerald-50 text-emerald-700 border-emerald-100'}`}>{row._status}</span>
                                     </td>
                                     <td className="px-6 py-3 font-bold text-slate-700">{row.strategyName}</td>
-                                    <td className="px-4 py-3 font-mono">{row.loadingDate}</td>
-                                    <td className="px-4 py-3 font-mono">{row.deliveryDate}</td>
+                                    <td className="px-4 py-3 font-mono">
+                                        <DiffCell row={row} rowIndex={i} field="loadingDate" isIgnored={ignoredChanges[i]?.has("loadingDate")} onToggle={(idx, f) => { const s = new Set(ignoredChanges[idx] || []); if (s.has(f)) s.delete(f); else s.add(f); setIgnoredChanges({ ...ignoredChanges, [idx]: s }); }} className="font-mono" />
+                                    </td>
+                                    <td className="px-4 py-3 font-mono">
+                                        <DiffCell row={row} rowIndex={i} field="deliveryDate" isIgnored={ignoredChanges[i]?.has("deliveryDate")} onToggle={(idx, f) => { const s = new Set(ignoredChanges[idx] || []); if (s.has(f)) s.delete(f); else s.add(f); setIgnoredChanges({ ...ignoredChanges, [idx]: s }); }} className="font-mono" />
+                                    </td>
                                     <td className="px-4 py-3 text-right">
                                         <div className="flex flex-col gap-1">
                                             <DiffCell row={row} rowIndex={i} field="totalLoadedVolume" format={(v) => v?.toLocaleString()} isIgnored={ignoredChanges[i]?.has("totalLoadedVolume")} onToggle={(idx, f) => { const s = new Set(ignoredChanges[idx] || []); if (s.has(f)) s.delete(f); else s.add(f); setIgnoredChanges({ ...ignoredChanges, [idx]: s }); }} className="font-mono" />

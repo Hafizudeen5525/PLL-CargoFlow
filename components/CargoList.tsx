@@ -74,12 +74,12 @@ export const CargoList: React.FC<CargoListProps> = ({
     return () => document.removeEventListener('mousedown', handleClickOutside);
   }, []);
 
-  const headerKeys = [
+  const headerKeys = useMemo(() => [
     'strategyName', 'buyer', 'source', 'deliveryDate', 'loadingDate', 
     'absoluteBuyPrice', 'loadedVolume', 'purchaseCost', 
     'absoluteSellPrice', 'deliveredVolume', 'salesRevenue', 
     'reconciledSrcCost', 'trmsHedging', 'finalTotalPnL', 'pnlBucket'
-  ];
+  ], []);
 
   const processedProfiles = useMemo(() => {
     let result = [...profiles];
@@ -196,6 +196,32 @@ export const CargoList: React.FC<CargoListProps> = ({
         return isNaN(num) ? 0 : num;
     };
 
+    const normalizeDate = (val: any): string => {
+        if (!val) return '';
+        
+        // If it's already a Date object (likely from XLSX), use UTC methods
+        if (val instanceof Date) {
+            const y = val.getUTCFullYear();
+            const m = String(val.getUTCMonth() + 1).padStart(2, '0');
+            const d = String(val.getUTCDate()).padStart(2, '0');
+            return `${y}-${m}-${d}`;
+        }
+
+        // If it's a string, try to match YYYY-MM-DD (ISO) first
+        const isoMatch = String(val).match(/^(\d{4})-(\d{2})-(\d{2})/);
+        if (isoMatch) return `${isoMatch[1]}-${isoMatch[2]}-${isoMatch[3]}`;
+
+        const d = new Date(val);
+        if (!isNaN(d.getTime())) {
+            // Use local methods for other string formats
+            const y = d.getFullYear();
+            const m = String(d.getMonth() + 1).padStart(2, '0');
+            const day = String(d.getDate()).padStart(2, '0');
+            return `${y}-${m}-${day}`;
+        }
+        return '';
+    };
+
     const processFile = (file: File): Promise<void> => {
         return new Promise((resolve, reject) => {
             const reader = new FileReader();
@@ -207,7 +233,7 @@ export const CargoList: React.FC<CargoListProps> = ({
                     const extractSheetData = (sheetName: string, mapping: Record<string, string>) => {
                         const sheet = workbook.Sheets[sheetName];
                         if (!sheet) return;
-                        const json: any[][] = XLSX.utils.sheet_to_json(sheet, { header: 1, defval: '' });
+                        const json: any[][] = XLSX.utils.sheet_to_json(sheet, { header: 1, defval: '', cellDates: true });
                         if (json.length === 0) return;
                         
                         let headerRowIndex = -1;
@@ -254,6 +280,10 @@ export const CargoList: React.FC<CargoListProps> = ({
                                         ['source', 'buyer', 'strategyName', 'manualGroup', 'deliveryDate', 'loadingDate', 'incoterms', 'pnlBucket'].includes(profileKey);
 
                                     let val = isStringData ? String(rawVal).trim() : cleanNumeric(rawVal);
+                                    
+                                    if (profileKey === 'loadingDate' || profileKey === 'deliveryDate') {
+                                        val = normalizeDate(rawVal);
+                                    }
 
                                     // Special handling for P&L Bucket
                                     if (profileKey === 'pnlBucket') {
@@ -449,6 +479,35 @@ export const CargoList: React.FC<CargoListProps> = ({
 
             if (existingMatch) {
                 const merged = { ...existingMatch, ...parsedFields };
+                
+                // --- Robust Tiered Volume Splitting Logic (Sync with BulkImportModal) ---
+                if (existingMatch.isTieredPricing) {
+                    // Purchase Volume Split
+                    if (parsedFields.loadedVolume !== undefined) {
+                        const incomingTotal = parsedFields.loadedVolume;
+                        const t1Threshold = existingMatch.loadedVolume || 0;
+                        if (t1Threshold > 0 && incomingTotal > t1Threshold) {
+                            merged.loadedVolume = t1Threshold;
+                            merged.tier2LoadedVolume = incomingTotal - t1Threshold;
+                        } else {
+                            merged.loadedVolume = incomingTotal;
+                            merged.tier2LoadedVolume = 0;
+                        }
+                    }
+                    // Sales Volume Split
+                    if (parsedFields.deliveredVolume !== undefined) {
+                        const incomingTotal = parsedFields.deliveredVolume;
+                        const t1Threshold = existingMatch.deliveredVolume || 0;
+                        if (t1Threshold > 0 && incomingTotal > t1Threshold) {
+                            merged.deliveredVolume = t1Threshold;
+                            merged.tier2DeliveredVolume = incomingTotal - t1Threshold;
+                        } else {
+                            merged.deliveredVolume = incomingTotal;
+                            merged.tier2DeliveredVolume = 0;
+                        }
+                    }
+                }
+
                 finalProfile = recalculateProfile(merged, true) as CargoProfile;
                 status = 'Update';
 
@@ -462,13 +521,32 @@ export const CargoList: React.FC<CargoListProps> = ({
                         changes[key] = { old: oldVal, new: newVal };
                     }
                 });
+
+                // Add virtual "Total Volume" tracking for visual feedback in the preview table
+                const oldTotalDel = (existingMatch.deliveredVolume || 0) + (existingMatch.tier2DeliveredVolume || 0);
+                const newTotalDel = (finalProfile.deliveredVolume || 0) + (finalProfile.tier2DeliveredVolume || 0);
+                if (Math.abs(oldTotalDel - newTotalDel) > 0.1) {
+                    changes['totalDeliveredVolume'] = { old: oldTotalDel, new: newTotalDel };
+                }
+                const oldTotalLoad = (existingMatch.loadedVolume || 0) + (existingMatch.tier2LoadedVolume || 0);
+                const newTotalLoad = (finalProfile.loadedVolume || 0) + (finalProfile.tier2LoadedVolume || 0);
+                if (Math.abs(oldTotalLoad - newTotalLoad) > 0.1) {
+                    changes['totalLoadedVolume'] = { old: oldTotalLoad, new: newTotalLoad };
+                }
+
                 if (Object.keys(changes).length === 0) status = 'No Change';
             } else {
                 const baseProfile = { ...EmptyCargoProfile, id: Date.now().toString() + Math.random().toString().slice(2, 6), ...parsedFields };
                 finalProfile = recalculateProfile(baseProfile, true) as CargoProfile;
                 status = 'New';
             }
-            return { ...finalProfile, _status: status, _changes: changes };
+            return { 
+                ...finalProfile, 
+                _status: status, 
+                _changes: changes,
+                totalLoadedVolume: (finalProfile.loadedVolume || 0) + (finalProfile.tier2LoadedVolume || 0),
+                totalDeliveredVolume: (finalProfile.deliveredVolume || 0) + (finalProfile.tier2DeliveredVolume || 0)
+            };
         });
 
         setPendingJarvisRows(processedJarvisRows);

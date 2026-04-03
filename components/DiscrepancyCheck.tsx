@@ -38,6 +38,18 @@ export interface ReconciliationRow {
         priceStatus: string;
         reconciledPurchaseCost: number;
         reconciledSalesRevenue: number;
+        // Tiered Support
+        isTiered?: boolean;
+        tier1BuyPrice?: number;
+        tier1BuyVol?: number;
+        tier2BuyPrice?: number;
+        tier2BuyVol?: number;
+        tier1SellPrice?: number;
+        tier1SellVol?: number;
+        tier2SellPrice?: number;
+        tier2SellVol?: number;
+        effectiveBuyPrice?: number;
+        effectiveSellPrice?: number;
     };
     trms: {
         buyLegs: TRMSCommodityLeg[];
@@ -494,6 +506,17 @@ export const DiscrepancyCheck: React.FC<DiscrepancyCheckProps> = ({
         const isAppRealized = p.pnlBucket === PnLBucket.Realized;
         const trmsVolType = trms?.volumeType || 'N/A';
         const trmsPriceStatus = trms?.priceStatus || 'N/A';
+
+        const totalBuyVol = (p.loadedVolume || 0) + (p.tier2LoadedVolume || 0);
+        const totalSellVol = (p.deliveredVolume || 0) + (p.tier2DeliveredVolume || 0);
+        
+        const effectiveBuyPrice = totalBuyVol > 0 
+            ? ((p.absoluteBuyPrice || 0) * (p.loadedVolume || 0) + (p.absoluteTier2BuyPrice || 0) * (p.tier2LoadedVolume || 0)) / totalBuyVol
+            : (p.absoluteBuyPrice || 0);
+            
+        const effectiveSellPrice = totalSellVol > 0
+            ? ((p.absoluteSellPrice || 0) * (p.deliveredVolume || 0) + (p.absoluteTier2SellPrice || 0) * (p.tier2DeliveredVolume || 0)) / totalSellVol
+            : (p.absoluteSellPrice || 0);
         
         // Recalculate commodity value if filtered
         const trmsCommodityValue = trms ? [...buyLegs, ...sellLegs].reduce((acc, l) => acc + l.valueUSD, 0) : 0;
@@ -511,7 +534,18 @@ export const DiscrepancyCheck: React.FC<DiscrepancyCheckProps> = ({
                 volumeType: isAppRealized ? 'Actual' : 'Estimate',
                 priceStatus: isAppRealized ? 'Fixed' : 'Estimate',
                 reconciledPurchaseCost: p.reconciledPurchaseCost || 0,
-                reconciledSalesRevenue: p.reconciledSalesRevenue || 0
+                reconciledSalesRevenue: p.reconciledSalesRevenue || 0,
+                isTiered: p.isTieredPricing,
+                tier1BuyPrice: p.absoluteBuyPrice || 0,
+                tier1BuyVol: p.loadedVolume || 0,
+                tier2BuyPrice: p.absoluteTier2BuyPrice || 0,
+                tier2BuyVol: p.tier2LoadedVolume || 0,
+                tier1SellPrice: p.absoluteSellPrice || 0,
+                tier1SellVol: p.deliveredVolume || 0,
+                tier2SellPrice: p.absoluteTier2SellPrice || 0,
+                tier2SellVol: p.tier2DeliveredVolume || 0,
+                effectiveBuyPrice,
+                effectiveSellPrice
             },
             trms: { 
                 buyLegs, 
@@ -654,8 +688,9 @@ export const DiscrepancyCheck: React.FC<DiscrepancyCheckProps> = ({
               const d = new Date(val);
               if (isNaN(d.getTime())) return;
 
-              const year = d.getFullYear().toString();
-              const month = d.toLocaleString('default', { month: 'long' });
+              const year = d.getUTCFullYear().toString();
+              const monthNames = ['January', 'February', 'March', 'April', 'May', 'June', 'July', 'August', 'September', 'October', 'November', 'December'];
+              const month = monthNames[d.getUTCMonth()];
               const day = val; // Keep original string as the leaf value
 
               if (!hierarchy[year]) hierarchy[year] = {};
@@ -767,7 +802,7 @@ export const DiscrepancyCheck: React.FC<DiscrepancyCheckProps> = ({
       });
     }
     return result;
-  }, [currentRawData, debouncedSearch, activeFilters, sortConfig, activeTab, reconciliationData]);
+  }, [currentRawData, debouncedSearch, activeFilters, sortConfig, activeTab]);
 
   const toggleValueFilter = (header: string, value: any) => {
     setActiveFilters(prev => {
@@ -875,27 +910,51 @@ export const DiscrepancyCheck: React.FC<DiscrepancyCheckProps> = ({
                         <div style="margin-top: 4px; font-size: 9px; color: #94a3b8;">TRMS: ${r.trms.priceStatus}</div>
                     </td>
                     <td style="border: 1px solid #e2e8f0; padding: 12px 16px; font-size: 10px; background: ${getBgColor(r.errorPcts.buyPrice)};">
-                        <div style="color: #64748b; font-size: 8px; font-weight: bold; text-transform: uppercase;">App Price</div>
-                        <div style="font-weight: bold; color: #1e293b;">$${r.app.buyPrice.toFixed(3)}</div>
+                        <div style="color: #64748b; font-size: 8px; font-weight: bold; text-transform: uppercase;">App Purchase Price</div>
+                        ${r.app.isTiered ? `
+                            <div style="font-size: 9px; color: #1e293b;">T1: $${r.app.tier1BuyPrice?.toFixed(3)}</div>
+                            <div style="font-size: 9px; color: #1e293b;">T2: $${r.app.tier2BuyPrice?.toFixed(3)}</div>
+                            <div style="font-weight: bold; color: #6366f1; margin-top: 2px;">Eff: $${r.app.effectiveBuyPrice?.toFixed(3)}</div>
+                        ` : `
+                            <div style="font-weight: bold; color: #1e293b;">$${r.app.buyPrice.toFixed(3)}</div>
+                        `}
                         <div style="margin-top: 4px; font-size: 9px; color: ${getErrorColor(r.errorPcts.buyPrice)}; font-weight: bold;">Err: ${r.errorPcts.buyPrice.toFixed(2)}%</div>
                         <div style="margin-top: 8px; color: #64748b; font-size: 8px; font-weight: bold; text-transform: uppercase;">TRMS Legs</div>
                         ${renderLegs(r.trms.buyLegs)}
                     </td>
                     <td style="border: 1px solid #e2e8f0; padding: 12px 16px; font-size: 10px; background: ${getBgColor(r.errorPcts.buyVol)};">
-                        <div style="color: #64748b; font-size: 8px; font-weight: bold; text-transform: uppercase;">App Vol</div>
-                        <div style="font-weight: bold; color: #1e293b;">${r.app.buyVol.toLocaleString()}</div>
+                        <div style="color: #64748b; font-size: 8px; font-weight: bold; text-transform: uppercase;">App Purchase Vol</div>
+                        ${r.app.isTiered ? `
+                            <div style="font-size: 9px; color: #1e293b;">T1: ${r.app.tier1BuyVol?.toLocaleString()}</div>
+                            <div style="font-size: 9px; color: #1e293b;">T2: ${r.app.tier2BuyVol?.toLocaleString()}</div>
+                            <div style="font-weight: bold; color: #6366f1; margin-top: 2px;">Total: ${(r.app.buyVol + (r.app.tier2BuyVol || 0)).toLocaleString()}</div>
+                        ` : `
+                            <div style="font-weight: bold; color: #1e293b;">${r.app.buyVol.toLocaleString()}</div>
+                        `}
                         <div style="margin-top: 4px; font-size: 9px; color: ${getErrorColor(r.errorPcts.buyVol)}; font-weight: bold;">Err: ${r.errorPcts.buyVol.toFixed(2)}%</div>
                     </td>
                     <td style="border: 1px solid #e2e8f0; padding: 12px 16px; font-size: 10px; background: ${getBgColor(r.errorPcts.sellPrice)};">
-                        <div style="color: #64748b; font-size: 8px; font-weight: bold; text-transform: uppercase;">App Price</div>
-                        <div style="font-weight: bold; color: #1e293b;">$${r.app.sellPrice.toFixed(3)}</div>
+                        <div style="color: #64748b; font-size: 8px; font-weight: bold; text-transform: uppercase;">App Sales Price</div>
+                        ${r.app.isTiered ? `
+                            <div style="font-size: 9px; color: #1e293b;">T1: $${r.app.tier1SellPrice?.toFixed(3)}</div>
+                            <div style="font-size: 9px; color: #1e293b;">T2: $${r.app.tier2SellPrice?.toFixed(3)}</div>
+                            <div style="font-weight: bold; color: #6366f1; margin-top: 2px;">Eff: $${r.app.effectiveSellPrice?.toFixed(3)}</div>
+                        ` : `
+                            <div style="font-weight: bold; color: #1e293b;">$${r.app.sellPrice.toFixed(3)}</div>
+                        `}
                         <div style="margin-top: 4px; font-size: 9px; color: ${getErrorColor(r.errorPcts.sellPrice)}; font-weight: bold;">Err: ${r.errorPcts.sellPrice.toFixed(2)}%</div>
                         <div style="margin-top: 8px; color: #64748b; font-size: 8px; font-weight: bold; text-transform: uppercase;">TRMS Legs</div>
                         ${renderLegs(r.trms.sellLegs)}
                     </td>
                     <td style="border: 1px solid #e2e8f0; padding: 12px 16px; font-size: 10px; background: ${getBgColor(r.errorPcts.sellVol)};">
-                        <div style="color: #64748b; font-size: 8px; font-weight: bold; text-transform: uppercase;">App Vol</div>
-                        <div style="font-weight: bold; color: #1e293b;">${r.app.sellVol.toLocaleString()}</div>
+                        <div style="color: #64748b; font-size: 8px; font-weight: bold; text-transform: uppercase;">App Sales Vol</div>
+                        ${r.app.isTiered ? `
+                            <div style="font-size: 9px; color: #1e293b;">T1: ${r.app.tier1SellVol?.toLocaleString()}</div>
+                            <div style="font-size: 9px; color: #1e293b;">T2: ${r.app.tier2SellVol?.toLocaleString()}</div>
+                            <div style="font-weight: bold; color: #6366f1; margin-top: 2px;">Total: ${(r.app.sellVol + (r.app.tier2SellVol || 0)).toLocaleString()}</div>
+                        ` : `
+                            <div style="font-weight: bold; color: #1e293b;">${r.app.sellVol.toLocaleString()}</div>
+                        `}
                         <div style="margin-top: 4px; font-size: 9px; color: ${getErrorColor(r.errorPcts.sellVol)}; font-weight: bold;">Err: ${r.errorPcts.sellVol.toFixed(2)}%</div>
                     </td>
                     <td style="border: 1px solid #e2e8f0; padding: 12px 16px; font-size: 10px; background: ${getBgColor(r.errorPcts.src)};">
@@ -1070,15 +1129,23 @@ export const DiscrepancyCheck: React.FC<DiscrepancyCheckProps> = ({
           'App Price Status': r.app.priceStatus,
           'TRMS Price Status': r.trms.priceStatus,
           'App Purchase Price': r.app.buyPrice,
+          'App Purchase Price Tier 2': r.app.tier2BuyPrice || 0,
+          'App Effective Purchase Price': r.app.effectiveBuyPrice || r.app.buyPrice,
           'TRMS Purchase Price (Best Match)': r.trms.buyLegs.length > 0 ? r.trms.buyLegs.reduce((prev, curr) => Math.abs(curr.price - r.app.buyPrice) < Math.abs(prev.price - r.app.buyPrice) ? curr : prev).price : 0,
           'Purchase Price Error %': r.errorPcts.buyPrice,
           'App Purchase Volume': r.app.buyVol,
+          'App Purchase Volume Tier 2': r.app.tier2BuyVol || 0,
+          'App Total Purchase Volume': r.app.buyVol + (r.app.tier2BuyVol || 0),
           'TRMS Purchase Volume (Best Match)': r.trms.buyLegs.length > 0 ? r.trms.buyLegs.reduce((prev, curr) => Math.abs(curr.vol - r.app.buyVol) < Math.abs(prev.vol - r.app.buyVol) ? curr : prev).vol : 0,
           'Purchase Volume Error %': r.errorPcts.buyVol,
           'App Sales Price': r.app.sellPrice,
+          'App Sales Price Tier 2': r.app.tier2SellPrice || 0,
+          'App Effective Sales Price': r.app.effectiveSellPrice || r.app.sellPrice,
           'TRMS Sales Price (Best Match)': r.trms.sellLegs.length > 0 ? r.trms.sellLegs.reduce((prev, curr) => Math.abs(curr.price - r.app.sellPrice) < Math.abs(prev.price - r.app.sellPrice) ? curr : prev).price : 0,
           'Sales Price Error %': r.errorPcts.sellPrice,
           'App Sales Volume': r.app.sellVol,
+          'App Sales Volume Tier 2': r.app.tier2SellVol || 0,
+          'App Total Sales Volume': r.app.sellVol + (r.app.tier2SellVol || 0),
           'TRMS Sales Volume (Best Match)': r.trms.sellLegs.length > 0 ? r.trms.sellLegs.reduce((prev, curr) => Math.abs(curr.vol - r.app.sellVol) < Math.abs(prev.vol - r.app.sellVol) ? curr : prev).vol : 0,
           'Sales Volume Error %': r.errorPcts.sellVol,
           'App Purchase Cost': r.app.reconciledPurchaseCost > 0 ? r.app.reconciledPurchaseCost : r.app.buyPrice * r.app.buyVol,
@@ -1669,20 +1736,73 @@ export const DiscrepancyCheck: React.FC<DiscrepancyCheckProps> = ({
   );
 };
 
-const AlignedSplitCell = ({ type, appVal, trmsLegs, found, width, formatUSD, errorPct }: { type: 'price' | 'vol' | 'value', appVal: number, trmsLegs: TRMSCommodityLeg[], found: boolean, width: number, formatUSD: (v: number) => string, errorPct: number }) => (
+const AlignedSplitCell = ({ 
+    type, 
+    appVal, 
+    trmsLegs, 
+    found, 
+    width, 
+    formatUSD, 
+    errorPct,
+    isTiered,
+    tier1Val,
+    tier2Val,
+    effectiveVal,
+    totalVol
+}: { 
+    type: 'price' | 'vol' | 'value', 
+    appVal: number, 
+    trmsLegs: TRMSCommodityLeg[], 
+    found: boolean, 
+    width: number, 
+    formatUSD: (v: number) => string, 
+    errorPct: number,
+    isTiered?: boolean,
+    tier1Val?: number,
+    tier2Val?: number,
+    effectiveVal?: number,
+    totalVol?: number
+}) => (
     <div className="px-4 py-2 shrink-0 flex flex-col justify-center border-r border-slate-50 overflow-hidden" style={{ width }}>
         <div className="flex flex-col mb-2 pb-1 border-b border-slate-50">
             <div className="flex justify-between items-center">
-                <span className="text-[8px] font-bold text-slate-400 uppercase tracking-tighter">App {type === 'price' ? 'Price' : type === 'vol' ? 'Vol' : 'Value'}</span>
+                <span className="text-[8px] font-bold text-slate-400 uppercase tracking-tighter">
+                    App {type === 'price' ? 'Price' : type === 'vol' ? 'Vol' : 'Value'}
+                    {isTiered && type !== 'value' && <span className="ml-1 text-indigo-500">(Tiered)</span>}
+                </span>
                 {found && errorPct > 0 && (
                     <span className={`text-[8px] font-black ${errorPct > 5 ? 'text-rose-500' : 'text-amber-500'}`}>
                         Err: {errorPct.toFixed(1)}%
                     </span>
                 )}
             </div>
-            <AutoScalingText maxFontSize={10} minFontSize={7} className="font-bold text-slate-700 font-mono">
-                {type === 'price' ? `$${appVal.toFixed(3)}` : type === 'vol' ? appVal.toLocaleString() : formatUSD(appVal)}
-            </AutoScalingText>
+            
+            {isTiered && type !== 'value' ? (
+                <div className="space-y-0.5">
+                    <div className="flex justify-between items-center">
+                        <span className="text-[7px] text-slate-400 uppercase">T1</span>
+                        <span className="font-bold text-slate-700 font-mono text-[9px]">
+                            {type === 'price' ? `$${tier1Val?.toFixed(3)}` : tier1Val?.toLocaleString()}
+                        </span>
+                    </div>
+                    <div className="flex justify-between items-center">
+                        <span className="text-[7px] text-slate-400 uppercase">T2</span>
+                        <span className="font-bold text-slate-700 font-mono text-[9px]">
+                            {type === 'price' ? `$${tier2Val?.toFixed(3)}` : tier2Val?.toLocaleString()}
+                        </span>
+                    </div>
+                    <div className="flex justify-between items-center pt-0.5 border-t border-slate-100">
+                        <span className="text-[7px] font-bold text-indigo-500 uppercase">{type === 'price' ? 'Eff' : 'Total'}</span>
+                        <span className="font-black text-indigo-600 font-mono text-[10px]">
+                            {type === 'price' ? `$${effectiveVal?.toFixed(3)}` : totalVol?.toLocaleString()}
+                        </span>
+                    </div>
+                </div>
+            ) : (
+                <AutoScalingText maxFontSize={10} minFontSize={7} className="font-bold text-slate-700 font-mono">
+                    {type === 'price' ? `$${appVal.toFixed(3)}` : type === 'vol' ? appVal.toLocaleString() : formatUSD(appVal)}
+                </AutoScalingText>
+            )}
         </div>
         <div className="flex-1 overflow-y-auto custom-scrollbar flex flex-col space-y-1">
             {!found ? <span className="text-[10px] text-slate-300 italic">Not found</span> : trmsLegs.length === 0 ? <span className="text-[10px] text-rose-500 italic">No Commodity Data</span> : (
@@ -1807,10 +1927,58 @@ const ReconciliationRowItem = memo(({ row, activeTab, columnWidths, handleRowEdi
               </div>
           </div>
 
-          <AlignedSplitCell type="price" appVal={r.app.buyPrice} trmsLegs={r.trms.buyLegs} found={r.foundInTrms} width={columnWidths['Purchase Price'] || DEFAULT_COLUMN_WIDTH} formatUSD={formatUSD} errorPct={r.errorPcts.buyPrice} />
-          <AlignedSplitCell type="vol" appVal={r.app.buyVol} trmsLegs={r.trms.buyLegs} found={r.foundInTrms} width={columnWidths['Purchase Volume'] || DEFAULT_COLUMN_WIDTH} formatUSD={formatUSD} errorPct={r.errorPcts.buyVol} />
-          <AlignedSplitCell type="price" appVal={r.app.sellPrice} trmsLegs={r.trms.sellLegs} found={r.foundInTrms} width={columnWidths['Sales Price'] || DEFAULT_COLUMN_WIDTH} formatUSD={formatUSD} errorPct={r.errorPcts.sellPrice} />
-          <AlignedSplitCell type="vol" appVal={r.app.sellVol} trmsLegs={r.trms.sellLegs} found={r.foundInTrms} width={columnWidths['Sales Volume'] || DEFAULT_COLUMN_WIDTH} formatUSD={formatUSD} errorPct={r.errorPcts.sellVol} />
+          <AlignedSplitCell 
+            type="price" 
+            appVal={r.app.buyPrice} 
+            trmsLegs={r.trms.buyLegs} 
+            found={r.foundInTrms} 
+            width={columnWidths['Purchase Price'] || DEFAULT_COLUMN_WIDTH} 
+            formatUSD={formatUSD} 
+            errorPct={r.errorPcts.buyPrice} 
+            isTiered={r.app.isTiered}
+            tier1Val={r.app.tier1BuyPrice}
+            tier2Val={r.app.tier2BuyPrice}
+            effectiveVal={r.app.effectiveBuyPrice}
+          />
+          <AlignedSplitCell 
+            type="vol" 
+            appVal={r.app.buyVol} 
+            trmsLegs={r.trms.buyLegs} 
+            found={r.foundInTrms} 
+            width={columnWidths['Purchase Volume'] || DEFAULT_COLUMN_WIDTH} 
+            formatUSD={formatUSD} 
+            errorPct={r.errorPcts.buyVol} 
+            isTiered={r.app.isTiered}
+            tier1Val={r.app.tier1BuyVol}
+            tier2Val={r.app.tier2BuyVol}
+            totalVol={r.app.buyVol + (r.app.tier2BuyVol || 0)}
+          />
+          <AlignedSplitCell 
+            type="price" 
+            appVal={r.app.sellPrice} 
+            trmsLegs={r.trms.sellLegs} 
+            found={r.foundInTrms} 
+            width={columnWidths['Sales Price'] || DEFAULT_COLUMN_WIDTH} 
+            formatUSD={formatUSD} 
+            errorPct={r.errorPcts.sellPrice} 
+            isTiered={r.app.isTiered}
+            tier1Val={r.app.tier1SellPrice}
+            tier2Val={r.app.tier2SellPrice}
+            effectiveVal={r.app.effectiveSellPrice}
+          />
+          <AlignedSplitCell 
+            type="vol" 
+            appVal={r.app.sellVol} 
+            trmsLegs={r.trms.sellLegs} 
+            found={r.foundInTrms} 
+            width={columnWidths['Sales Volume'] || DEFAULT_COLUMN_WIDTH} 
+            formatUSD={formatUSD} 
+            errorPct={r.errorPcts.sellVol} 
+            isTiered={r.app.isTiered}
+            tier1Val={r.app.tier1SellVol}
+            tier2Val={r.app.tier2SellVol}
+            totalVol={r.app.sellVol + (r.app.tier2SellVol || 0)}
+          />
           
           <div className="px-4 py-2 shrink-0 flex flex-col justify-center border-r border-slate-50 overflow-hidden" style={{ width: columnWidths['SRC Components'] || DEFAULT_COLUMN_WIDTH }}>
                 <div className="flex flex-col mb-2 pb-1 border-b border-slate-50">

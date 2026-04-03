@@ -1,4 +1,4 @@
-import React, { useMemo, useState, useEffect } from 'react';
+import React, { useMemo, useState, useEffect, useCallback } from 'react';
 import { CargoProfile, PnLBucket } from '../types';
 import { ForwardCurveRow, detectUnit, getExposureChartData, getPortfolioYear, recalculateProfile, getAvailableCurveDates, getPricesSnapshot, getForwardCurve, explainPricing, analyzeFormulaStructure, evaluateFormula, findDataGaps, DataGap, getGroupName, GROUPS } from '../services/calculationService';
 import { BarChart, Bar, XAxis, YAxis, CartesianGrid, Tooltip, ResponsiveContainer, Cell, PieChart, Pie, LineChart, Line, Legend } from 'recharts';
@@ -58,33 +58,26 @@ export const Dashboard: React.FC<DashboardProps> = ({ profiles, marketData, forw
   const [curveView, setCurveView] = useState<'gas' | 'oil'>('gas');
   const [groupFilter, setGroupFilter] = useState<string>('All');
   
-  const [targetDate, setTargetDate] = useState<string>('');
-  const [baselineDate, setBaselineDate] = useState<string>('');
+  const [targetDate, setTargetDate] = useState<string>(() => {
+      const dates = getAvailableCurveDates();
+      return dates.length > 0 ? dates[0] : '';
+  });
+  const [baselineDate, setBaselineDate] = useState<string>(() => {
+      const dates = getAvailableCurveDates();
+      return dates.length > 1 ? dates[1] : (dates[0] || '');
+  });
   
   const [activeDrillDown, setActiveDrillDown] = useState<DrillDownConfig | null>(null);
 
   const [debugMode, setDebugMode] = useState<'single' | 'health' | 'tester' | 'gaps' | 'variance'>('health');
-  const [baselineSnapshot, setBaselineSnapshot] = useState<{ profiles: CargoProfile[], date: string } | null>(null);
+  const [baselineSnapshot, setBaselineSnapshot] = useState<{ profiles: CargoProfile[], date: string } | null>(() => {
+    const saved = localStorage.getItem('pnl_baseline_snapshot');
+    return saved ? JSON.parse(saved) : null;
+  });
 
   const [testFormula, setTestFormula] = useState('');
 
-  const availableDates = useMemo(() => getAvailableCurveDates(), [forwardCurve]);
-
-  useEffect(() => {
-    const saved = localStorage.getItem('pnl_baseline_snapshot');
-    if (saved) setBaselineSnapshot(JSON.parse(saved));
-  }, []);
-
-  useEffect(() => {
-      if (availableDates.length > 0) {
-          if (!targetDate || !availableDates.includes(targetDate)) {
-              setTargetDate(availableDates[0]);
-          }
-          if (!baselineDate || !availableDates.includes(baselineDate)) {
-              setBaselineDate(availableDates.length > 1 ? availableDates[1] : availableDates[0]);
-          }
-      }
-  }, [availableDates]);
+  const availableDates = useMemo(() => getAvailableCurveDates(), []);
 
   const handleSaveBaseline = () => {
     const snapshot = { profiles: JSON.parse(JSON.stringify(profiles)), date: targetDate };
@@ -200,7 +193,7 @@ export const Dashboard: React.FC<DashboardProps> = ({ profiles, marketData, forw
       return acc;
   }, [viewProfiles]);
 
-  const getStatsSnapshot = (dateStr: string) => {
+  const getStatsSnapshot = useCallback((dateStr: string) => {
     const initStats = () => ({ pnl: 0, revenue: 0, purchase: 0, other: 0, vol: 0, count: 0 });
     const acc = {
         total: initStats(),
@@ -253,9 +246,9 @@ export const Dashboard: React.FC<DashboardProps> = ({ profiles, marketData, forw
     });
 
     return acc;
-  };
+  }, [profiles, groupFilter]);
 
-  const baselineStats = useMemo(() => getStatsSnapshot(baselineDate), [profiles, groupFilter, baselineDate]);
+  const baselineStats = useMemo(() => getStatsSnapshot(baselineDate), [getStatsSnapshot, baselineDate]);
 
   const timelineEvents = useMemo(() => {
       const today = new Date();

@@ -74,23 +74,29 @@ export const JarvisPreviewModal: React.FC<JarvisPreviewModalProps> = ({ existing
       parsedRows.forEach((row, idx) => {
           if (!selectedIndices.has(idx)) return;
           
-          if (row._status === 'New' || row._status === 'No Change') {
-              const { _status, _changes, ...rest } = row;
-              finalImports.push(rest as CargoProfile);
-          } else {
+          if (row._status === 'Update') {
               const ignoredFields = ignoredChanges[idx] || new Set();
-              if (ignoredFields.size === 0) {
-                  const { _status, _changes, ...rest } = row;
-                  finalImports.push(rest as CargoProfile);
-              } else {
-                  const original = existingProfiles.find(p => p.strategyName === row.strategyName);
-                  if (!original) return;
+              const original = existingProfiles.find(p => p.strategyName === row.strategyName);
+              if (original && ignoredFields.size > 0) {
                   const mixed: any = { ...row };
-                  ignoredFields.forEach(field => mixed[field] = (original as any)[field]);
-                  const { _status, _changes, ...cleanMixed } = mixed;
+                  ignoredFields.forEach((field: string) => {
+                      if (field === 'totalDeliveredVolume') {
+                          mixed.deliveredVolume = original.deliveredVolume;
+                          mixed.tier2DeliveredVolume = original.tier2DeliveredVolume;
+                      } else if (field === 'totalLoadedVolume') {
+                          mixed.loadedVolume = original.loadedVolume;
+                          mixed.tier2LoadedVolume = original.tier2LoadedVolume;
+                      } else {
+                          mixed[field] = (original as any)[field];
+                      }
+                  });
+                  const { _status, _changes, totalLoadedVolume, totalDeliveredVolume, ...cleanMixed } = mixed;
                   finalImports.push(recalculateProfile(cleanMixed, true) as CargoProfile);
+                  return;
               }
           }
+          const { _status, _changes, totalLoadedVolume, totalDeliveredVolume, ...rest } = row;
+          finalImports.push(rest as CargoProfile);
       });
       onImport(finalImports);
   };
@@ -138,7 +144,7 @@ export const JarvisPreviewModal: React.FC<JarvisPreviewModalProps> = ({ existing
                             <th className="px-4 py-4">Buyer/Source</th>
                             <th className="px-4 py-4">Loading Date</th>
                             <th className="px-4 py-4">Delivery Date</th>
-                            <th className="px-4 py-4 text-right">Vol (MT/U)</th>
+                            <th className="px-4 py-4 text-right">Total Vol (MT/U)</th>
                             <th className="px-4 py-4">Formula</th>
                             <th className="px-4 py-4 text-right">Price</th>
                             <th className="px-4 py-4">P&L Bucket</th>
@@ -173,9 +179,9 @@ export const JarvisPreviewModal: React.FC<JarvisPreviewModalProps> = ({ existing
                                 <td className="px-4 py-3"><DiffCell row={row} rowIndex={i} field="deliveryDate" isIgnored={ignoredChanges[i]?.has("deliveryDate")} onToggle={toggleFieldChange} className="font-mono" /></td>
                                 <td className="px-4 py-3 text-right">
                                     <div className="flex flex-col gap-1">
-                                        <DiffCell row={row} rowIndex={i} field="loadedVolume" format={(v) => v?.toLocaleString()} isIgnored={ignoredChanges[i]?.has("loadedVolume")} onToggle={toggleFieldChange} className="font-mono" />
+                                        <DiffCell row={row} rowIndex={i} field="totalLoadedVolume" format={(v) => v?.toLocaleString()} isIgnored={ignoredChanges[i]?.has("totalLoadedVolume")} onToggle={toggleFieldChange} className="font-mono" />
                                         <div className="h-px bg-slate-100 my-0.5" />
-                                        <DiffCell row={row} rowIndex={i} field="deliveredVolume" format={(v) => v?.toLocaleString()} isIgnored={ignoredChanges[i]?.has("deliveredVolume")} onToggle={toggleFieldChange} className="font-mono" />
+                                        <DiffCell row={row} rowIndex={i} field="totalDeliveredVolume" format={(v) => v?.toLocaleString()} isIgnored={ignoredChanges[i]?.has("totalDeliveredVolume")} onToggle={toggleFieldChange} className="font-mono" />
                                     </div>
                                 </td>
                                 <td className="px-4 py-3">

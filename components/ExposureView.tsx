@@ -70,9 +70,9 @@ export const ExposureView: React.FC<ExposureViewProps> = ({ profiles, onCargoCli
                 if (!formula || vol <= 0) return;
                 const index = getIndexType(formula);
                 const refDate = isBuy ? p.loadingDate : p.deliveryDate;
-                let mDef = 'n';
-                if (!isTier2) mDef = isBuy ? (p.buyPrice1MonthDef || 'n') : (p.sellPrice1MonthDef || 'n');
-                else mDef = isBuy ? (p.tier2BuyPrice1MonthDef || 'n') : (p.tier2SellPrice1MonthDef || 'n');
+                const mDef = !isTier2 
+                    ? (isBuy ? (p.buyPrice1MonthDef || 'n') : (p.sellPrice1MonthDef || 'n'))
+                    : (isBuy ? (p.tier2BuyPrice1MonthDef || 'n') : (p.tier2SellPrice1MonthDef || 'n'));
                 const pricingMonths = getPricingMonths(refDate, mDef);
                 const volPerMonth = vol / pricingMonths.length;
                 pricingMonths.forEach((m: string) => {
@@ -288,10 +288,9 @@ export const ExposureView: React.FC<ExposureViewProps> = ({ profiles, onCargoCli
                                                     const hasValue = Math.abs(cell.base) > 0.1;
                                                     const isFixed = Math.abs(cell.floating) < 0.1;
                                                     
-                                                    let colorClass = 'text-slate-900';
-                                                    if (isFixed) colorClass = cell.base < 0 ? 'text-rose-200' : 'text-slate-200';
-                                                    else if (cell.floating < 0) colorClass = 'text-rose-600 font-bold';
-                                                    else colorClass = 'text-indigo-600 font-bold';
+                                                    const colorClass = isFixed 
+                                                        ? (cell.base < 0 ? 'text-rose-200' : 'text-slate-200')
+                                                        : (cell.floating < 0 ? 'text-rose-600 font-bold' : 'text-indigo-600 font-bold');
 
                                                     const displayVal = showGross ? cell.base : cell.floating;
 
@@ -529,9 +528,9 @@ const DrillDownModal = ({ cell, onClose, profiles, simDate, onCargoClick, holida
                 if (!formula || vol <= 0) return;
                 if (getIndexType(formula) !== index) return;
                 const refD = type === 'Buy' ? p.loadingDate : p.deliveryDate;
-                let mDef = 'n';
-                if (!isTier2) mDef = type === 'Buy' ? (p.buyPrice1MonthDef || 'n') : (p.sellPrice1MonthDef || 'n');
-                else mDef = type === 'Buy' ? (p.tier2BuyPrice1MonthDef || 'n') : (p.tier2SellPrice1MonthDef || 'n');
+                const mDef = !isTier2 
+                    ? (type === 'Buy' ? (p.buyPrice1MonthDef || 'n') : (p.sellPrice1MonthDef || 'n'))
+                    : (type === 'Buy' ? (p.tier2BuyPrice1MonthDef || 'n') : (p.tier2SellPrice1MonthDef || 'n'));
 
                 const pMonths = getPricingMonths(refD, mDef);
                 if (pMonths.includes(month)) {

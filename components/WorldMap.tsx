@@ -62,12 +62,6 @@ export const WorldMap: React.FC<WorldMapProps> = ({ profiles, height = 400 }) =>
         setIsDragging(false);
     };
 
-    // Reset view when toggling expand
-    useEffect(() => {
-        setScale(1);
-        setTranslate({ x: 0, y: 0 });
-    }, [isExpanded]);
-
     const activeProfiles = profiles; // Can filter here if needed
 
     return (
@@ -87,7 +81,11 @@ export const WorldMap: React.FC<WorldMapProps> = ({ profiles, height = 400 }) =>
             {/* Controls */}
             <div className="absolute top-4 right-4 flex flex-col gap-2 z-20">
                 <button 
-                    onClick={() => setIsExpanded(!isExpanded)}
+                    onClick={() => {
+                        setIsExpanded(!isExpanded);
+                        setScale(1);
+                        setTranslate({ x: 0, y: 0 });
+                    }}
                     className="p-2 bg-white rounded-lg shadow-md border border-slate-200 text-slate-600 hover:text-indigo-600 hover:border-indigo-200"
                     title={isExpanded ? "Minimize" : "Maximize"}
                 >
