@@ -34,6 +34,8 @@ export interface CargoProfile {
   finalTotalPnL: number;
   volumeUnit?: string;
   pricingEndDate?: string;
+  totalLoadedVolume?: number;
+  totalDeliveredVolume?: number;
   
   // Manual Overrides & Rounding
   isBuyPriceManual?: boolean;
@@ -186,6 +188,8 @@ export const EmptyCargoProfile: Omit<CargoProfile, 'id'> = {
   loadingWindowEnd: '',
   deliveryWindowStart: '',
   deliveryWindowEnd: '',
+  totalLoadedVolume: 0,
+  totalDeliveredVolume: 0,
   isBuyPriceManual: false,
   isSellPriceManual: false,
   buyPriceRounding: 3,

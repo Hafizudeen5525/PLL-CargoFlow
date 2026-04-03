@@ -48,6 +48,25 @@ const App: React.FC = () => {
     summary: { total: 0, src: 0, hedging: 0, paper: 0 }
   });
 
+  // History Helper
+  const updateProfiles = useCallback((newProfiles: CargoProfile[] | ((prev: CargoProfile[]) => CargoProfile[])) => {
+    setProfiles((prev: CargoProfile[]) => {
+      const next = typeof newProfiles === 'function' ? newProfiles(prev) : newProfiles;
+      if (JSON.stringify(next) === JSON.stringify(prev)) return prev;
+      setPast(history => [...history, prev].slice(-MAX_HISTORY));
+      setFuture([]); 
+      return next;
+    });
+  }, []);
+
+  const handleMarketRefresh = useCallback(() => {
+    setMarketData(getMarketData());
+    setForwardCurve(getForwardCurve());
+    updateProfiles((prev: CargoProfile[]) => prev.map((p: CargoProfile) => 
+      recalculateProfile(p, true) as CargoProfile
+    ));
+  }, [updateProfiles]);
+
   // Modals
   const [isEditing, setIsEditing] = useState(false);
   const [editingProfile, setEditingProfile] = useState<CargoProfile | undefined>(undefined);
@@ -169,7 +188,7 @@ const App: React.FC = () => {
         toast.success('Forward Curves populated from Jarvis data', { icon: '📈' });
       }
     }
-  }, [trmsData.forwardCurves]);
+  }, [trmsData.forwardCurves, handleMarketRefresh]);
 
   // Auto-sync from Jarvis based on options
   useEffect(() => {
@@ -244,18 +263,7 @@ const App: React.FC = () => {
         toast.success(msg, { icon: '💰' });
       }
     }
-  }, [trmsData.trmsAgg, trmsData.syncOptions]);
-
-  // History Helper
-  const updateProfiles = useCallback((newProfiles: CargoProfile[] | ((prev: CargoProfile[]) => CargoProfile[])) => {
-    setProfiles((prev: CargoProfile[]) => {
-      const next = typeof newProfiles === 'function' ? newProfiles(prev) : newProfiles;
-      if (JSON.stringify(next) === JSON.stringify(prev)) return prev;
-      setPast(history => [...history, prev].slice(-MAX_HISTORY));
-      setFuture([]); 
-      return next;
-    });
-  }, []);
+  }, [trmsData.trmsAgg, trmsData.syncOptions, updateProfiles]);
 
   const undo = useCallback(() => {
     if (past.length === 0) return;
@@ -346,14 +354,6 @@ const App: React.FC = () => {
         });
         return Array.from(existingMap.values());
     });
-  };
-
-  const handleMarketRefresh = () => {
-    setMarketData(getMarketData());
-    setForwardCurve(getForwardCurve());
-    updateProfiles((prev: CargoProfile[]) => prev.map((p: CargoProfile) => 
-      recalculateProfile(p, true) as CargoProfile
-    ));
   };
 
   const handleEdit = (p?: CargoProfile, source: 'dashboard' | 'list' = 'list') => {

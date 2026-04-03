@@ -233,7 +233,7 @@ export const CargoList: React.FC<CargoListProps> = ({
                     const extractSheetData = (sheetName: string, mapping: Record<string, string>) => {
                         const sheet = workbook.Sheets[sheetName];
                         if (!sheet) return;
-                        const json: any[][] = XLSX.utils.sheet_to_json(sheet, { header: 1, defval: '', cellDates: true });
+                        const json: any[][] = XLSX.utils.sheet_to_json(sheet, { header: 1, defval: '' });
                         if (json.length === 0) return;
                         
                         let headerRowIndex = -1;
