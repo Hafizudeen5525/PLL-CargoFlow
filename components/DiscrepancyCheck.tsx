@@ -15,11 +15,13 @@ export interface TRMSCommodityLeg {
     priceStatus: string;
     settlementType: string;
     valueUSD: number;
+    rawRow?: any;
 }
 
 export interface TRMSSrcLeg {
     value: number;
     description: string;
+    rawRow?: any;
 }
 
 export interface ReconciliationRow {
@@ -1834,7 +1836,8 @@ const AlignedSplitCell = ({
     tier2Val,
     effectiveVal,
     totalVol,
-    label
+    label,
+    onDeepDive
 }: { 
     type: 'price' | 'vol' | 'value', 
     appVal: number, 
@@ -1848,14 +1851,27 @@ const AlignedSplitCell = ({
     tier2Val?: number,
     effectiveVal?: number,
     totalVol?: number,
-    label?: string
+    label?: string,
+    onDeepDive?: (rows: any[]) => void
 }) => (
     <div className="px-4 py-2 shrink-0 flex flex-col justify-center border-r border-slate-50 overflow-hidden" style={{ width }}>
-        <div className="flex flex-col mb-2 pb-1 border-b border-slate-50">
+        <div className="flex flex-col mb-2 pb-1 border-b border-slate-50 group/app">
             <div className="flex justify-between items-center">
-                <span className="text-[8px] font-bold text-slate-400 uppercase tracking-tighter">
+                <span className="text-[8px] font-bold text-slate-400 uppercase tracking-tighter flex items-center gap-1">
                     {label || `App ${type === 'price' ? 'Price' : type === 'vol' ? 'Vol' : 'Value'}`}
                     {isTiered && type !== 'value' && <span className="ml-1 text-indigo-500">(Tiered)</span>}
+                    {found && trmsLegs.length > 0 && onDeepDive && (
+                        <button 
+                            onClick={() => onDeepDive(trmsLegs.map(l => l.rawRow).filter(Boolean))}
+                            className="opacity-0 group-hover/app:opacity-100 p-0.5 text-indigo-400 hover:text-indigo-600 transition-all"
+                            title="Deep Dive all relevant TRMS rows"
+                        >
+                            <svg className="w-2.5 h-2.5" fill="none" viewBox="0 0 24 24" stroke="currentColor">
+                                <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M15 12a3 3 0 11-6 0 3 3 0 016 0z" />
+                                <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M2.458 12C3.732 7.943 7.523 5 12 5c4.478 0 8.268 2.943 9.542 7-1.274 4.057-5.064 7-9.542 7-4.477 0-8.268-2.943-9.542-7z" />
+                            </svg>
+                        </button>
+                    )}
                 </span>
                 {found && errorPct > 0 && (
                     <span className={`text-[8px] font-black ${errorPct > 5 ? 'text-rose-500' : 'text-amber-500'}`}>
@@ -1897,9 +1913,18 @@ const AlignedSplitCell = ({
                     const val = type === 'price' ? leg.price : type === 'vol' ? leg.vol : Math.abs(leg.valueUSD);
                     const isM = type === 'price' ? Math.abs(val - appVal) < 0.0051 : (type === 'vol' ? Math.abs(val - appVal) < 1.1 : Math.abs(val - appVal) < 100);
                     return (
-                        <div key={idx} className={`h-5 flex items-center justify-between px-1.5 rounded font-mono text-[9px] border ${isM ? 'bg-emerald-50 text-emerald-700 font-bold border-emerald-100' : 'text-slate-500 opacity-80 border-transparent'}`}>
+                        <div 
+                            key={idx} 
+                            onClick={() => leg.rawRow && onDeepDive?.([leg.rawRow])}
+                            className={`h-5 flex items-center justify-between px-1.5 rounded font-mono text-[9px] border cursor-pointer transition-all hover:scale-[1.02] active:scale-[0.98] group ${isM ? 'bg-emerald-50 text-emerald-700 font-bold border-emerald-100 shadow-sm' : 'text-slate-500 opacity-80 border-transparent hover:bg-slate-50'}`}
+                            title="Click to Deep Dive this specific row"
+                        >
                             <span className="truncate pr-1">LEG {idx + 1}</span>
                             <span className="font-bold">{type === 'price' ? `$${val.toFixed(3)}` : type === 'vol' ? val.toLocaleString() : formatUSD(val)}</span>
+                            <svg className="w-2 h-2 ml-1 opacity-0 group-hover:opacity-100" fill="none" viewBox="0 0 24 24" stroke="currentColor">
+                                <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M15 12a3 3 0 11-6 0 3 3 0 016 0z" />
+                                <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M2.458 12C3.732 7.943 7.523 5 12 5c4.478 0 8.268 2.943 9.542 7-1.274 4.057-5.064 7-9.542 7-4.477 0-8.268-2.943-9.542-7z" />
+                            </svg>
                         </div>
                     );
                 })
@@ -2039,6 +2064,7 @@ const ReconciliationRowItem = memo(({ row, activeTab, columnWidths, handleRowEdi
             tier1Val={r.app.tier1BuyPrice}
             tier2Val={r.app.tier2BuyPrice}
             effectiveVal={r.app.effectiveBuyPrice}
+            onDeepDive={(rows) => onViewRawData(r.strategyName, rows)}
           />
           <AlignedSplitCell 
             type="vol" 
@@ -2052,6 +2078,7 @@ const ReconciliationRowItem = memo(({ row, activeTab, columnWidths, handleRowEdi
             tier1Val={r.app.tier1BuyVol}
             tier2Val={r.app.tier2BuyVol}
             totalVol={r.app.buyVol + (r.app.tier2BuyVol || 0)}
+            onDeepDive={(rows) => onViewRawData(r.strategyName, rows)}
           />
           <AlignedSplitCell 
             type="value" 
@@ -2062,6 +2089,7 @@ const ReconciliationRowItem = memo(({ row, activeTab, columnWidths, handleRowEdi
             formatUSD={formatUSD} 
             errorPct={r.errorPcts.purchaseCost}
             label="Purchase Cost"
+            onDeepDive={(rows) => onViewRawData(r.strategyName, rows)}
           />
           <AlignedSplitCell 
             type="price" 
@@ -2075,6 +2103,7 @@ const ReconciliationRowItem = memo(({ row, activeTab, columnWidths, handleRowEdi
             tier1Val={r.app.tier1SellPrice}
             tier2Val={r.app.tier2SellPrice}
             effectiveVal={r.app.effectiveSellPrice}
+            onDeepDive={(rows) => onViewRawData(r.strategyName, rows)}
           />
           <AlignedSplitCell 
             type="vol" 
@@ -2088,6 +2117,7 @@ const ReconciliationRowItem = memo(({ row, activeTab, columnWidths, handleRowEdi
             tier1Val={r.app.tier1SellVol}
             tier2Val={r.app.tier2SellVol}
             totalVol={r.app.sellVol + (r.app.tier2SellVol || 0)}
+            onDeepDive={(rows) => onViewRawData(r.strategyName, rows)}
           />
           <AlignedSplitCell 
             type="value" 
@@ -2098,12 +2128,27 @@ const ReconciliationRowItem = memo(({ row, activeTab, columnWidths, handleRowEdi
             formatUSD={formatUSD} 
             errorPct={r.errorPcts.salesRevenue}
             label="Sales Revenue"
+            onDeepDive={(rows) => onViewRawData(r.strategyName, rows)}
           />
           
           <div className="px-4 py-2 shrink-0 flex flex-col justify-center border-r border-slate-50 overflow-hidden" style={{ width: columnWidths['SRC Components'] || DEFAULT_COLUMN_WIDTH }}>
-                <div className="flex flex-col mb-2 pb-1 border-b border-slate-50">
+                <div className="flex flex-col mb-2 pb-1 border-b border-slate-50 group/app">
                     <div className="flex justify-between items-center">
-                        <span className="text-[8px] font-bold text-slate-400 uppercase tracking-tighter">App Reconciled SRC</span>
+                        <span className="text-[8px] font-bold text-slate-400 uppercase tracking-tighter flex items-center gap-1">
+                            App Reconciled SRC
+                            {r.foundInTrms && r.trms.srcLegs.length > 0 && (
+                                <button 
+                                    onClick={() => onViewRawData(r.strategyName, r.trms.srcLegs.map(l => l.rawRow).filter(Boolean))}
+                                    className="opacity-0 group-hover/app:opacity-100 p-0.5 text-indigo-400 hover:text-indigo-600 transition-all"
+                                    title="Deep Dive all relevant TRMS rows"
+                                >
+                                    <svg className="w-2.5 h-2.5" fill="none" viewBox="0 0 24 24" stroke="currentColor">
+                                        <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M15 12a3 3 0 11-6 0 3 3 0 016 0z" />
+                                        <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M2.458 12C3.732 7.943 7.523 5 12 5c4.478 0 8.268 2.943 9.542 7-1.274 4.057-5.064 7-9.542 7-4.477 0-8.268-2.943-9.542-7z" />
+                                    </svg>
+                                </button>
+                            )}
+                        </span>
                         {r.foundInTrms && r.errorPcts.src > 0 && (
                             <span className={`text-[8px] font-black ${r.errorPcts.src > 5 ? 'text-rose-500' : 'text-amber-500'}`}>
                                 Err: {r.errorPcts.src.toFixed(1)}%
@@ -2125,9 +2170,18 @@ const ReconciliationRowItem = memo(({ row, activeTab, columnWidths, handleRowEdi
                             {r.trms.srcLegs.map((leg, idx) => {
                                 const isM = Math.abs(r.trms.src - r.app.src) < 100;
                                 return (
-                                    <div key={idx} className={`h-5 flex items-center justify-between px-1.5 rounded font-mono text-[9px] border ${isM ? 'bg-emerald-50 text-emerald-700 border-emerald-100' : 'bg-slate-50 text-slate-500 border-slate-100'}`}>
+                                    <div 
+                                        key={idx} 
+                                        onClick={() => leg.rawRow && onViewRawData(r.strategyName, [leg.rawRow])}
+                                        className={`h-5 flex items-center justify-between px-1.5 rounded font-mono text-[9px] border cursor-pointer transition-all hover:scale-[1.02] active:scale-[0.98] group ${isM ? 'bg-emerald-50 text-emerald-700 font-bold border-emerald-100 shadow-sm' : 'bg-slate-50 text-slate-500 border-slate-100 hover:bg-slate-100'}`}
+                                        title="Click to Deep Dive this specific row"
+                                    >
                                         <span className="truncate pr-1">LEG {idx + 1}</span>
                                         <span className="font-bold">{formatUSD(leg.value)}</span>
+                                        <svg className="w-2 h-2 ml-1 opacity-0 group-hover:opacity-100" fill="none" viewBox="0 0 24 24" stroke="currentColor">
+                                            <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M15 12a3 3 0 11-6 0 3 3 0 016 0z" />
+                                            <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M2.458 12C3.732 7.943 7.523 5 12 5c4.478 0 8.268 2.943 9.542 7-1.274 4.057-5.064 7-9.542 7-4.477 0-8.268-2.943-9.542-7z" />
+                                        </svg>
                                     </div>
                                 );
                             })}

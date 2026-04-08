@@ -149,7 +149,8 @@ self.onmessage = (e: MessageEvent) => {
           trmsAgg[sName].srcValue += absVal;
           trmsAgg[sName].srcLegs.push({ 
               value: absVal, 
-              description: String(row['Cflow Type'] || 'SRC') 
+              description: String(row['Cflow Type'] || 'SRC'),
+              rawRow: row
           });
       } else if (cTypeLower === "commodity" || cTypeLower === "physical") {
           const buySell = String(row['Buy_Sell'] || '').trim();
@@ -164,7 +165,8 @@ self.onmessage = (e: MessageEvent) => {
               priceStatus,
               volumeType,
               settlementType: rowSettlementType,
-              valueUSD: valUSD
+              valueUSD: valUSD,
+              rawRow: row
           });
           if (buySell === 'Buy' && sDate) trmsAgg[sName].loadingDate = sDate;
           if (buySell === 'Sell' && eDate) {
