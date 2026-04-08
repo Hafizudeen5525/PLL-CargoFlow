@@ -193,9 +193,9 @@ export const JarvisPreviewModal: React.FC<JarvisPreviewModalProps> = ({ existing
                                 </td>
                                 <td className="px-4 py-3 text-right">
                                     <div className="flex flex-col gap-1">
-                                        <DiffCell row={row} rowIndex={i} field="absoluteBuyPrice" format={(v) => Number(v || 0).toFixed(3)} isIgnored={ignoredChanges[i]?.has("absoluteBuyPrice")} onToggle={toggleFieldChange} className="font-mono" />
+                                        <DiffCell row={row} rowIndex={i} field="absoluteBuyPrice" format={(v) => Number(v || 0).toFixed(row.buyPriceRounding || 3)} isIgnored={ignoredChanges[i]?.has("absoluteBuyPrice")} onToggle={toggleFieldChange} className="font-mono" />
                                         <div className="h-px bg-slate-100 my-0.5" />
-                                        <DiffCell row={row} rowIndex={i} field="absoluteSellPrice" format={(v) => Number(v || 0).toFixed(3)} isIgnored={ignoredChanges[i]?.has("absoluteSellPrice")} onToggle={toggleFieldChange} className="font-mono" />
+                                        <DiffCell row={row} rowIndex={i} field="absoluteSellPrice" format={(v) => Number(v || 0).toFixed(row.sellPriceRounding || 3)} isIgnored={ignoredChanges[i]?.has("absoluteSellPrice")} onToggle={toggleFieldChange} className="font-mono" />
                                     </div>
                                 </td>
                                 <td className="px-4 py-3">

@@ -671,8 +671,8 @@ export const CargoList: React.FC<CargoListProps> = ({
   const formatCurrency = (val: number) => 
     new Intl.NumberFormat('en-US', { style: 'currency', currency: 'USD', maximumFractionDigits: 0 }).format(val);
 
-  const formatPrice = (val: number) => 
-    new Intl.NumberFormat('en-US', { style: 'currency', currency: 'USD', minimumFractionDigits: 3, maximumFractionDigits: 3 }).format(val);
+  const formatPrice = (val: number, decimals: number = 3) => 
+    new Intl.NumberFormat('en-US', { style: 'currency', currency: 'USD', minimumFractionDigits: decimals, maximumFractionDigits: decimals }).format(val);
 
   return (
     <div className="flex-1 flex flex-col min-h-0 bg-white rounded-xl shadow-sm border border-slate-200 overflow-hidden">
@@ -895,7 +895,7 @@ export const CargoList: React.FC<CargoListProps> = ({
                                           <div className="px-4 py-3 shrink-0 truncate text-[11px] text-slate-600 border-r border-slate-50" style={{ width: COLUMN_WIDTH }}>{p.deliveryDate || '-'}</div>
                                           <div className="px-4 py-3 shrink-0 truncate text-[11px] text-slate-600 border-r border-slate-50" style={{ width: COLUMN_WIDTH }}>{p.loadingDate || '-'}</div>
                                           
-                                          <div className="px-4 py-3 shrink-0 truncate text-[11px] text-slate-600 border-r border-slate-50 text-right font-mono" style={{ width: COLUMN_WIDTH }}>{formatPrice(p.absoluteBuyPrice)}</div>
+                                          <div className="px-4 py-3 shrink-0 truncate text-[11px] text-slate-600 border-r border-slate-50 text-right font-mono" style={{ width: COLUMN_WIDTH }}>{formatPrice(p.absoluteBuyPrice, p.buyPriceRounding)}</div>
                                           <div className="px-4 py-3 shrink-0 truncate text-[11px] text-slate-600 border-r border-slate-50 text-right font-mono" style={{ width: COLUMN_WIDTH }}>{p.loadedVolume?.toLocaleString()}</div>
                                           
                                           <div className="px-4 py-3 shrink-0 border-r border-slate-50 text-right font-mono flex flex-col justify-center" style={{ width: COLUMN_WIDTH }}>
@@ -908,7 +908,7 @@ export const CargoList: React.FC<CargoListProps> = ({
                                               <span className="text-[11px] font-bold text-slate-700">{formatCurrency(totalPurchase)}</span>
                                           </div>
 
-                                          <div className="px-4 py-3 shrink-0 truncate text-[11px] text-slate-600 border-r border-slate-50 text-right font-mono" style={{ width: COLUMN_WIDTH }}>{formatPrice(p.absoluteSellPrice)}</div>
+                                          <div className="px-4 py-3 shrink-0 truncate text-[11px] text-slate-600 border-r border-slate-50 text-right font-mono" style={{ width: COLUMN_WIDTH }}>{formatPrice(p.absoluteSellPrice, p.sellPriceRounding)}</div>
                                           <div className="px-4 py-3 shrink-0 truncate text-[11px] text-slate-600 border-r border-slate-50 text-right font-mono" style={{ width: COLUMN_WIDTH }}>{p.deliveredVolume?.toLocaleString()}</div>
                                           
                                           <div className="px-4 py-3 shrink-0 border-r border-slate-50 text-right font-mono flex flex-col justify-center" style={{ width: COLUMN_WIDTH }}>
