@@ -50,7 +50,7 @@ self.onmessage = (e: MessageEvent) => {
       if (portfolioYear === 'Unknown') portfolioYear = String(y);
       
       const sName = String(findValue(row, ['Strategy Name', 'Strategy', 'Deal Name']) || '').trim();
-      if (!sName || sName.includes("GLNG") || sName.includes("CSPA")) return;
+      if (!sName || sName.includes("GLNG") || (sName.includes("CSPA") && !sName.includes("CSPA Opt"))) return;
       
       const iPort = String(row['Internal Portfolio'] || '').trim();
       if (portfolioName === 'Unknown' && iPort && iPort !== 'Hedging LNG' && iPort !== 'DH LNG' && iPort !== 'DFT LNG') {

@@ -21,6 +21,7 @@ export const MARKET_INTELLIGENCE = {
         'JKM': 0.038,
         'AECO': 0.045,
         'STN 2': 0.048,
+        'Fix and Firm': 0,
         'Other': 0.030
     } as Record<string, number>,
     
@@ -286,6 +287,7 @@ function toMonthKey(date: Date): string {
 }
 
 export function getIndexPrice(index: string, refDateStr: string, monthDef: string, curveDate?: string): { price: number, details: string, monthUsed: string } {
+    if (index === 'Fix and Firm') return { price: 0, details: 'Fixed Price', monthUsed: '' };
     const curve = getForwardCurve(curveDate);
     const historical = getHistoricalCurve();
     
