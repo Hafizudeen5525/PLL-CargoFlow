@@ -42,6 +42,13 @@ self.onmessage = (e: MessageEvent) => {
         return 'Other';
     };
 
+    const stringCache = new Map<string, string>();
+    const intern = (val: any) => {
+        if (typeof val !== 'string') return val;
+        if (!stringCache.has(val)) stringCache.set(val, val);
+        return stringCache.get(val);
+    };
+
     rawData.forEach((row: any) => {
       const rawY = findValue(row, ['Plsb Year Bucket', 'Year', 'Year Bucket']);
       const y = typeof rawY === 'number' ? rawY : parseInt(String(rawY || '').replace(/[^0-9]/g, ''));
@@ -49,13 +56,26 @@ self.onmessage = (e: MessageEvent) => {
       
       if (portfolioYear === 'Unknown') portfolioYear = String(y);
       
-      const sName = String(findValue(row, ['Strategy Name', 'Strategy', 'Deal Name']) || '').trim();
+      const sName = intern(String(findValue(row, ['Strategy Name', 'Strategy', 'Deal Name']) || '').trim());
       if (!sName || sName.includes("GLNG") || (sName.includes("CSPA") && !sName.includes("CSPA Opt"))) return;
       
-      const iPort = String(row['Internal Portfolio'] || '').trim();
+      const iPort = intern(String(row['Internal Portfolio'] || '').trim());
       if (portfolioName === 'Unknown' && iPort && iPort !== 'Hedging LNG' && iPort !== 'DH LNG' && iPort !== 'DFT LNG') {
           portfolioName = iPort;
       }
+
+      // Create whitelisted row immediately to save memory (discard unused columns)
+      const cleanRow: any = {};
+      whitelistColumns.forEach((col: string) => {
+        if (row[col] !== undefined) {
+          if (row[col] instanceof Date) { 
+              const d = row[col]; 
+              cleanRow[col] = intern(`${d.getUTCFullYear()}-${String(d.getUTCMonth()+1).padStart(2,'0')}-${String(d.getUTCDate()).padStart(2,'0')}`); 
+          } else {
+              cleanRow[col] = intern(row[col]);
+          }
+        }
+      });
 
       if (!trmsAgg[sName]) {
           trmsAgg[sName] = { 
@@ -79,8 +99,8 @@ self.onmessage = (e: MessageEvent) => {
           };
       }
       
-      // Store raw row for deep dive
-      trmsAgg[sName].rawRows.push(row);
+      // Store whitelisted row for deep dive
+      trmsAgg[sName].rawRows.push(cleanRow);
 
       // Extract reconciled values if present (Jarvis Master Sheet)
       const recPurchaseRaw = findValue(row, [
@@ -104,7 +124,7 @@ self.onmessage = (e: MessageEvent) => {
       if (recPurchase > 0) trmsAgg[sName].reconciledPurchaseCost = recPurchase;
       if (recSales > 0) trmsAgg[sName].reconciledSalesRevenue = recSales;
 
-      const rowSettlementType = String(row['Settlement Type'] || '').trim();
+      const rowSettlementType = intern(String(row['Settlement Type'] || '').trim());
 
       const getRowValue = (keys: string[]) => {
           for (const k of keys) {
@@ -118,22 +138,22 @@ self.onmessage = (e: MessageEvent) => {
           return 0;
       };
 
-      const cType = String(row['Cflow Type'] || '').trim();
+      const cType = intern(String(row['Cflow Type'] || '').trim());
       const cTypeLower = cType.toLowerCase();
       const valUSD = getRowValue(['Base_Total_Value_USD', 'Base Total Value USD', 'Total_Value_USD', 'Total Value USD', 'Base_Total_Value', 'Total_Value']);
       
       if (cTypeLower === "commodity" || cTypeLower === "physical" || cTypeLower === "base value" || cTypeLower === "cargo value") {
           trmsAgg[sName].commodityValue += valUSD;
-          const buySell = String(row['Buy_Sell'] || '').trim();
+          const buySell = intern(String(row['Buy_Sell'] || '').trim());
           if (buySell === 'Buy') trmsAgg[sName].trmsPurchaseValue += Math.abs(valUSD);
           if (buySell === 'Sell') trmsAgg[sName].trmsSalesValue += Math.abs(valUSD);
       }
       const pnlChange = Number(row['Change_in_Total_PnL'] || 0);
-      const ref = String(row['Reference'] || '');
+      const ref = intern(String(row['Reference'] || ''));
 
       const formatDate = (val: any) => {
-          if (val instanceof Date) return val.toISOString().split('T')[0];
-          return String(val || '');
+          if (val instanceof Date) return intern(val.toISOString().split('T')[0]);
+          return intern(String(val || ''));
       };
 
       const sDate = formatDate(row['Start Date'] || row['Comm Window Start Date']);
@@ -149,13 +169,13 @@ self.onmessage = (e: MessageEvent) => {
           trmsAgg[sName].srcValue += absVal;
           trmsAgg[sName].srcLegs.push({ 
               value: absVal, 
-              description: String(row['Cflow Type'] || 'SRC'),
-              rawRow: row
+              description: intern(String(row['Cflow Type'] || 'SRC')),
+              rawRow: cleanRow
           });
       } else if (cTypeLower === "commodity" || cTypeLower === "physical") {
-          const buySell = String(row['Buy_Sell'] || '').trim();
-          const priceStatus = String(row['Price Status'] || 'Unknown');
-          const volumeType = String(row['Volume Type'] || 'Estimate');
+          const buySell = intern(String(row['Buy_Sell'] || '').trim());
+          const priceStatus = intern(String(row['Price Status'] || 'Unknown'));
+          const volumeType = intern(String(row['Volume Type'] || 'Estimate'));
           trmsAgg[sName].commodityLegs.push({ 
               price: Number(row['Price'] || 0), 
               vol: Math.abs(Number(row['Volume'] || 0)), 
@@ -166,7 +186,7 @@ self.onmessage = (e: MessageEvent) => {
               volumeType,
               settlementType: rowSettlementType,
               valueUSD: valUSD,
-              rawRow: row
+              rawRow: cleanRow
           });
           if (buySell === 'Buy' && sDate) trmsAgg[sName].loadingDate = sDate;
           if (buySell === 'Sell' && eDate) {
@@ -178,21 +198,11 @@ self.onmessage = (e: MessageEvent) => {
       if (iPort === "Hedging LNG") {
           trmsAgg[sName].hedgingPnL += pnlChange;
           trmsAgg[sName].hedgingTrades += 1;
-          const idx = extractIndexFromRef(ref);
+          const idx = intern(extractIndexFromRef(ref));
           if (!trmsAgg[sName].hedgingIndices.includes(idx)) {
               trmsAgg[sName].hedgingIndices.push(idx);
           }
       }
-      
-      const cleanRow: any = {};
-      whitelistColumns.forEach((col: string) => {
-        if (row[col] !== undefined) {
-          if (row[col] instanceof Date) { 
-              const d = row[col]; 
-              cleanRow[col] = `${d.getUTCFullYear()}-${String(d.getUTCMonth()+1).padStart(2,'0')}-${String(d.getUTCDate()).padStart(2,'0')}`; 
-          } else cleanRow[col] = row[col];
-        }
-      });
       
       if (cType === "SRC- Shipping Related Cost") srcRows.push(cleanRow);
       if (iPort === "Hedging LNG") hedgingRows.push(cleanRow);
