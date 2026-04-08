@@ -74,9 +74,13 @@ self.onmessage = (e: MessageEvent) => {
               trmsSalesValue: 0,
               reconciledPurchaseCost: 0,
               reconciledSalesRevenue: 0,
-              commWindowEndDate: ''
+              commWindowEndDate: '',
+              rawRows: []
           };
       }
+      
+      // Store raw row for deep dive
+      trmsAgg[sName].rawRows.push(row);
 
       // Extract reconciled values if present (Jarvis Master Sheet)
       const recPurchaseRaw = findValue(row, [

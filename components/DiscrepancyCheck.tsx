@@ -67,6 +67,7 @@ export interface ReconciliationRow {
         reconciledSalesRevenue: number;
         trmsRealized: boolean;
         commWindowEndDate: string;
+        rawRows?: any[];
     };
     discrepancies: Set<string>;
     errorPcts: {
@@ -100,6 +101,7 @@ export interface TRMSAggregation {
         reconciledPurchaseCost: number;
         reconciledSalesRevenue: number;
         commWindowEndDate: string;
+        rawRows?: any[];
     }
 }
 
@@ -232,6 +234,8 @@ export const DiscrepancyCheck: React.FC<DiscrepancyCheckProps> = ({
   const [activeFilters, setActiveFilters] = useState<Record<string, Set<any>>>({});
   const [openFilterMenu, setOpenFilterMenu] = useState<string | null>(null);
   const [showReportPreview, setShowReportPreview] = useState(false);
+  const [viewingRawData, setViewingRawData] = useState<any[] | null>(null);
+  const [viewingSN, setViewingSN] = useState<string>('');
   const [filterSearch, setFilterSearch] = useState('');
   const filterMenuRef = useRef<HTMLDivElement>(null);
   const [expandedNodes, setExpandedNodes] = useState<Set<string>>(new Set());
@@ -567,7 +571,8 @@ export const DiscrepancyCheck: React.FC<DiscrepancyCheckProps> = ({
                     sellLegs.every(l => l.priceStatus === 'Fixed') &&
                     trmsVolType === 'Actual'
                 ) : false,
-                commWindowEndDate: trms?.commWindowEndDate || ''
+                commWindowEndDate: trms?.commWindowEndDate || '',
+                rawRows: trms?.rawRows || []
             },
             discrepancies: new Set(),
             errorPcts: {
@@ -1605,6 +1610,10 @@ export const DiscrepancyCheck: React.FC<DiscrepancyCheckProps> = ({
                           activeTab={activeTab}
                           columnWidths={columnWidths}
                           handleRowEdit={handleRowEdit}
+                          onViewRawData={(sn, rows) => {
+                              setViewingSN(sn);
+                              setViewingRawData(rows);
+                          }}
                           formatUSD={formatUSD}
                           headers={headers}
                           rowHeight={currentRowHeight}
@@ -1733,6 +1742,80 @@ export const DiscrepancyCheck: React.FC<DiscrepancyCheckProps> = ({
           </div>
         )}
       </AnimatePresence>
+      <AnimatePresence>
+        {viewingRawData && (
+          <div className="fixed inset-0 z-[100] flex items-center justify-center p-4 bg-slate-900/60 backdrop-blur-sm">
+            <motion.div 
+              initial={{ opacity: 0, scale: 0.95, y: 20 }}
+              animate={{ opacity: 1, scale: 1, y: 0 }}
+              exit={{ opacity: 0, scale: 0.95, y: 20 }}
+              className="bg-white rounded-3xl shadow-2xl w-full max-w-7xl max-h-[90vh] flex flex-col overflow-hidden border border-slate-200"
+            >
+              <div className="px-6 py-4 border-b border-slate-100 flex justify-between items-center bg-slate-50/50">
+                <div>
+                  <h3 className="text-lg font-black text-slate-800 flex items-center gap-2">
+                    <div className="w-8 h-8 rounded-lg bg-indigo-600 flex items-center justify-center text-white">
+                      <svg className="w-4 h-4" fill="none" viewBox="0 0 24 24" stroke="currentColor">
+                        <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M15 12a3 3 0 11-6 0 3 3 0 016 0z" />
+                        <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M2.458 12C3.732 7.943 7.523 5 12 5c4.478 0 8.268 2.943 9.542 7-1.274 4.057-5.064 7-9.542 7-4.477 0-8.268-2.943-9.542-7z" />
+                      </svg>
+                    </div>
+                    TRMS Deep Dive: <span className="text-indigo-600">{viewingSN}</span>
+                  </h3>
+                  <p className="text-[10px] text-slate-500 font-bold uppercase tracking-widest mt-0.5">Raw data rows extracted from TRMS for this strategy</p>
+                </div>
+                <button 
+                  onClick={() => setViewingRawData(null)}
+                  className="p-2 text-slate-400 hover:text-slate-600 hover:bg-slate-100 rounded-full transition-all"
+                >
+                  <svg className="w-6 h-6" fill="none" stroke="currentColor" viewBox="0 0 24 24">
+                    <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M6 18L18 6M6 6l12 12" />
+                  </svg>
+                </button>
+              </div>
+
+              <div className="flex-1 overflow-auto p-6 bg-slate-50/30">
+                <div className="bg-white rounded-2xl border border-slate-200 shadow-sm overflow-hidden">
+                  <table className="w-full text-left border-collapse">
+                    <thead>
+                      <tr className="bg-slate-50 border-b border-slate-200">
+                        {Object.keys(viewingRawData[0] || {}).map(key => (
+                          <th key={key} className="px-4 py-3 text-[10px] font-black text-slate-500 uppercase tracking-wider border-r border-slate-200 last:border-r-0 whitespace-nowrap">
+                            {key}
+                          </th>
+                        ))}
+                      </tr>
+                    </thead>
+                    <tbody>
+                      {viewingRawData.map((row, i) => (
+                        <tr key={i} className="border-b border-slate-100 last:border-b-0 hover:bg-slate-50/50 transition-colors">
+                          {Object.values(row).map((val: any, j) => (
+                            <td key={j} className="px-4 py-3 text-[11px] text-slate-600 border-r border-slate-100 last:border-r-0 font-mono whitespace-nowrap">
+                              {val instanceof Date ? val.toLocaleDateString() : String(val ?? '-')}
+                            </td>
+                          ))}
+                        </tr>
+                      ))}
+                    </tbody>
+                  </table>
+                </div>
+              </div>
+
+              <div className="px-6 py-4 border-t border-slate-100 bg-slate-50/50 flex justify-between items-center">
+                <div className="text-[10px] font-bold text-slate-400 uppercase tracking-widest">
+                  Showing {viewingRawData.length} raw rows
+                </div>
+                <button 
+                  onClick={() => setViewingRawData(null)}
+                  className="px-6 py-2 bg-slate-800 text-white text-xs font-black rounded-xl hover:bg-slate-900 transition-all shadow-lg shadow-slate-200"
+                >
+                  Close Deep Dive
+                </button>
+              </div>
+            </motion.div>
+          </div>
+        )}
+      </AnimatePresence>
     </div>
   </div>
   );
@@ -1825,11 +1908,12 @@ const AlignedSplitCell = ({
     </div>
 );
 
-const ReconciliationRowItem = memo(({ row, activeTab, columnWidths, handleRowEdit, formatUSD, headers, rowHeight }: { 
+const ReconciliationRowItem = memo(({ row, activeTab, columnWidths, handleRowEdit, onViewRawData, formatUSD, headers, rowHeight }: { 
   row: any, 
   activeTab: string, 
   columnWidths: Record<string, number>, 
   handleRowEdit: (id: string) => void, 
+  onViewRawData: (sn: string, rows: any[]) => void,
   formatUSD: (val: number) => string,
   headers: string[],
   rowHeight: number
@@ -1855,10 +1939,22 @@ const ReconciliationRowItem = memo(({ row, activeTab, columnWidths, handleRowEdi
       {activeTab === 'reconcile' ? (
         <>
           <div className={`px-4 py-2 shrink-0 sticky left-0 z-20 border-r border-slate-50 flex items-center transition-colors group-hover:bg-indigo-50/20 ${!r.foundInTrms ? 'bg-slate-100' : 'bg-white'}`} style={{ width: columnWidths['Strategy Name'] || 280 }}>
-              <div className="min-w-0">
+              <div className="min-w-0 flex-1">
                   <div className="text-[11px] font-bold text-slate-800 truncate">{r.strategyName}</div>
                   <div className={`text-[9px] font-bold uppercase tracking-wider ${r.foundInTrms ? 'text-emerald-500' : 'text-slate-400'}`}>{r.foundInTrms ? 'Matched in TRMS' : 'Missing from TRMS'}</div>
               </div>
+              {r.foundInTrms && r.trms.rawRows && r.trms.rawRows.length > 0 && (
+                  <button 
+                    onClick={() => onViewRawData(r.strategyName, r.trms.rawRows!)}
+                    className="ml-2 p-1.5 text-slate-400 hover:text-indigo-600 hover:bg-indigo-50 rounded-md transition-all group/btn"
+                    title="Deep Dive TRMS Rows"
+                  >
+                    <svg className="w-3.5 h-3.5" fill="none" viewBox="0 0 24 24" stroke="currentColor">
+                        <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M15 12a3 3 0 11-6 0 3 3 0 016 0z" />
+                        <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M2.458 12C3.732 7.943 7.523 5 12 5c4.478 0 8.268 2.943 9.542 7-1.274 4.057-5.064 7-9.542 7-4.477 0-8.268-2.943-9.542-7z" />
+                    </svg>
+                  </button>
+              )}
           </div>
           
           <div className={`px-4 py-2 shrink-0 flex flex-col justify-center border-r border-slate-50 overflow-hidden ${r.foundInTrms ? (loadingMonthMatch ? 'bg-emerald-50/50' : 'bg-rose-50/50') : ''}`} style={{ width: columnWidths['Loading Month'] || DEFAULT_COLUMN_WIDTH }}>
