@@ -593,12 +593,54 @@ export const DiscrepancyCheck: React.FC<DiscrepancyCheckProps> = ({
             return (Math.abs(app - best) / Math.abs(app)) * 100;
         };
 
+        const checkTieredMatch = (
+            appV1: number, appV2: number, appP1: number, appP2: number,
+            trmsLegs: TRMSCommodityLeg[],
+            type: 'vol' | 'price'
+        ) => {
+            if (trmsLegs.length === 0) return 100;
+
+            // 1. Total Volume Match (Sum of tiered volumes matches sum of TRMS volumes)
+            if (type === 'vol') {
+                const totalAppVol = appV1 + (appV2 || 0);
+                const totalTrmsVol = trmsLegs.reduce((acc, l) => acc + l.vol, 0);
+                if (Math.abs(totalAppVol - totalTrmsVol) < 1.1) return 0;
+            }
+
+            // 2. Split Match (App T1/T2 matches TRMS Leg 1/2)
+            if (trmsLegs.length === 2) {
+                const [l1, l2] = trmsLegs;
+                const match1 = (Math.abs(l1.vol - appV1) < 1.1 && Math.abs(l1.price - appP1) < 0.0051) &&
+                               (Math.abs(l2.vol - appV2) < 1.1 && Math.abs(l2.price - appP2) < 0.0051);
+                const match2 = (Math.abs(l1.vol - appV2) < 1.1 && Math.abs(l1.price - appP2) < 0.0051) &&
+                               (Math.abs(l2.vol - appV1) < 1.1 && Math.abs(l2.price - appP1) < 0.0051);
+                
+                if (match1 || match2) return 0;
+            }
+
+            return -1; // No specific tiered match found
+        };
+
         if (trms) {
             // Price/Vol Errors
-            row.errorPcts.buyPrice = calcError(row.app.buyPrice, row.trms.buyLegs.map(l => l.price));
-            row.errorPcts.sellPrice = calcError(row.app.sellPrice, row.trms.sellLegs.map(l => l.price));
-            row.errorPcts.buyVol = calcError(row.app.buyVol, row.trms.buyLegs.map(l => l.vol));
-            row.errorPcts.sellVol = calcError(row.app.sellVol, row.trms.sellLegs.map(l => l.vol));
+            if (row.app.isTiered) {
+                const buyVolTiered = checkTieredMatch(row.app.tier1BuyVol || 0, row.app.tier2BuyVol || 0, row.app.tier1BuyPrice || 0, row.app.tier2BuyPrice || 0, row.trms.buyLegs, 'vol');
+                row.errorPcts.buyVol = buyVolTiered === 0 ? 0 : calcError(row.app.buyVol, row.trms.buyLegs.map(l => l.vol));
+
+                const buyPriceTiered = checkTieredMatch(row.app.tier1BuyVol || 0, row.app.tier2BuyVol || 0, row.app.tier1BuyPrice || 0, row.app.tier2BuyPrice || 0, row.trms.buyLegs, 'price');
+                row.errorPcts.buyPrice = buyPriceTiered === 0 ? 0 : calcError(row.app.buyPrice, row.trms.buyLegs.map(l => l.price));
+
+                const sellVolTiered = checkTieredMatch(row.app.tier1SellVol || 0, row.app.tier2SellVol || 0, row.app.tier1SellPrice || 0, row.app.tier2SellPrice || 0, row.trms.sellLegs, 'vol');
+                row.errorPcts.sellVol = sellVolTiered === 0 ? 0 : calcError(row.app.sellVol, row.trms.sellLegs.map(l => l.vol));
+
+                const sellPriceTiered = checkTieredMatch(row.app.tier1SellVol || 0, row.app.tier2SellVol || 0, row.app.tier1SellPrice || 0, row.app.tier2SellPrice || 0, row.trms.sellLegs, 'price');
+                row.errorPcts.sellPrice = sellPriceTiered === 0 ? 0 : calcError(row.app.sellPrice, row.trms.sellLegs.map(l => l.price));
+            } else {
+                row.errorPcts.buyPrice = calcError(row.app.buyPrice, row.trms.buyLegs.map(l => l.price));
+                row.errorPcts.sellPrice = calcError(row.app.sellPrice, row.trms.sellLegs.map(l => l.price));
+                row.errorPcts.buyVol = calcError(row.app.buyVol, row.trms.buyLegs.map(l => l.vol));
+                row.errorPcts.sellVol = calcError(row.app.sellVol, row.trms.sellLegs.map(l => l.vol));
+            }
             
             // Cost/Revenue Errors
             const appPurc = row.app.reconciledPurchaseCost > 0 ? row.app.reconciledPurchaseCost : row.app.buyPrice * row.app.buyVol;
@@ -1777,8 +1819,8 @@ export const DiscrepancyCheck: React.FC<DiscrepancyCheckProps> = ({
               </div>
 
               <div className="flex-1 overflow-auto p-6 bg-slate-50/30">
-                <div className="bg-white rounded-2xl border border-slate-200 shadow-sm overflow-hidden">
-                  <table className="w-full text-left border-collapse">
+                <div className="bg-white rounded-2xl border border-slate-200 shadow-sm overflow-x-auto custom-scrollbar">
+                  <table className="w-full text-left border-collapse min-w-max">
                     <thead>
                       <tr className="bg-slate-50 border-b border-slate-200">
                         {Object.keys(viewingRawData[0] || {}).map(key => (
