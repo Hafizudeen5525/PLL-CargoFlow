@@ -11,6 +11,7 @@ import { ExposureView } from './components/ExposureView';
 import { DiscrepancyCheck, ReconciliationData } from './components/DiscrepancyCheck';
 import { CargoProfile, PnLBucket, ForwardCurveData, ForwardCurve, ForwardCurvePoint } from './types';
 import { getMarketData, getForwardCurve, recalculateProfile, getPortfolioYear, saveForwardCurve } from './services/calculationService';
+import { saveToDB, getFromDB } from './services/db';
 
 // Navigation Items
 const NAV_ITEMS = [
@@ -74,47 +75,73 @@ const App: React.FC = () => {
 
   // Load initial data
   useEffect(() => {
-    const savedProfiles = localStorage.getItem('cargo_profiles');
-    if (savedProfiles) {
-      setProfiles(JSON.parse(savedProfiles));
-    }
+    const loadInitialData = async () => {
+      // 1. Try IndexedDB first
+      let savedProfiles = await getFromDB('cargo_profiles');
+      let savedTrms = await getFromDB('trms_data');
+      let isLite = await getFromDB('trms_data_is_lite');
 
-    const savedTrms = localStorage.getItem('trms_data');
-    if (savedTrms) {
-      try {
-        const parsed = JSON.parse(savedTrms);
-        // Ensure all required fields exist for backward compatibility
-        const merged = {
-          src: [],
-          hedging: [],
-          paper: [],
-          trmsAgg: {},
-          forwardCurves: [],
-          uniqueValues: { src: {}, hedging: {}, paper: {} },
-          summary: { total: 0, src: 0, hedging: 0, paper: 0 },
-          ...parsed
-        };
-        // Restore Sets from Arrays in trmsAgg
-        if (merged.trmsAgg) {
-          Object.keys(merged.trmsAgg).forEach(key => {
-            if (merged.trmsAgg[key] && Array.isArray(merged.trmsAgg[key].hedgingIndices)) {
-              merged.trmsAgg[key].hedgingIndices = new Set(merged.trmsAgg[key].hedgingIndices);
-            }
-          });
+      // 2. Migration from localStorage if IndexedDB is empty
+      if (!savedProfiles) {
+        const localProfiles = localStorage.getItem('cargo_profiles');
+        if (localProfiles) {
+          savedProfiles = JSON.parse(localProfiles);
+          await saveToDB('cargo_profiles', savedProfiles);
         }
-        setTrmsData(merged as ReconciliationData);
-        if (localStorage.getItem('trms_data_is_lite') === 'true') {
-          toast('TRMS raw lines were not saved due to size limits. Aggregated data is available.', { icon: 'ℹ️', duration: 4000 });
-        }
-      } catch (e) {
-        console.error("Failed to load TRMS data from storage", e);
       }
-    }
+
+      if (!savedTrms) {
+        const localTrms = localStorage.getItem('trms_data');
+        if (localTrms) {
+          savedTrms = JSON.parse(localTrms);
+          await saveToDB('trms_data', savedTrms);
+          isLite = localStorage.getItem('trms_data_is_lite') === 'true';
+          await saveToDB('trms_data_is_lite', isLite);
+        }
+      }
+
+      if (savedProfiles) {
+        setProfiles(savedProfiles);
+      }
+
+      if (savedTrms) {
+        try {
+          const parsed = savedTrms;
+          // Ensure all required fields exist for backward compatibility
+          const merged = {
+            src: [],
+            hedging: [],
+            paper: [],
+            trmsAgg: {},
+            forwardCurves: [],
+            uniqueValues: { src: {}, hedging: {}, paper: {} },
+            summary: { total: 0, src: 0, hedging: 0, paper: 0 },
+            ...parsed
+          };
+          // Restore Sets from Arrays in trmsAgg
+          if (merged.trmsAgg) {
+            Object.keys(merged.trmsAgg).forEach(key => {
+              if (merged.trmsAgg[key] && Array.isArray(merged.trmsAgg[key].hedgingIndices)) {
+                merged.trmsAgg[key].hedgingIndices = new Set(merged.trmsAgg[key].hedgingIndices);
+              }
+            });
+          }
+          setTrmsData(merged as ReconciliationData);
+          if (isLite === true) {
+            toast('TRMS raw lines were not saved due to size limits. Aggregated data is available.', { icon: 'ℹ️', duration: 4000 });
+          }
+        } catch (e) {
+          console.error("Failed to load TRMS data from storage", e);
+        }
+      }
+    };
+
+    loadInitialData();
   }, []);
 
   // Save profiles on change
   useEffect(() => {
-    localStorage.setItem('cargo_profiles', JSON.stringify(profiles));
+    saveToDB('cargo_profiles', profiles);
   }, [profiles]);
 
   // Save TRMS data on change
@@ -136,25 +163,28 @@ const App: React.FC = () => {
           };
         });
         toSave.trmsAgg = trmsAggClone;
-        return JSON.stringify(toSave);
+        return toSave;
       };
 
-      try {
-        // Attempt 1: Full Save
-        localStorage.setItem('trms_data', serializeTrms(trmsData, true));
-        localStorage.removeItem('trms_data_is_lite');
-      } catch (e) {
-        console.warn("Full TRMS data too large for localStorage, attempting lite save...", e);
+      const saveTrms = async () => {
         try {
-          // Attempt 2: Lite Save (Summary & Aggregated only)
-          localStorage.setItem('trms_data', serializeTrms(trmsData, false));
-          localStorage.setItem('trms_data_is_lite', 'true');
-          toast.success('TRMS data saved (Summary only due to size)', { icon: '⚠️', duration: 3000 });
-        } catch (e2) {
-          console.error("TRMS data even in lite mode exceeds localStorage quota", e2);
-          toast.error('TRMS data too large to persist. It will be lost on refresh.', { duration: 5000 });
+          // With IndexedDB, we can almost always save the full data
+          await saveToDB('trms_data', serializeTrms(trmsData, true));
+          await saveToDB('trms_data_is_lite', false);
+        } catch (e) {
+          console.warn("TRMS data too large even for IndexedDB, attempting lite save...", e);
+          try {
+            await saveToDB('trms_data', serializeTrms(trmsData, false));
+            await saveToDB('trms_data_is_lite', true);
+            toast.success('TRMS data saved (Summary only)', { icon: '⚠️', duration: 3000 });
+          } catch (e2) {
+            console.error("TRMS data exceeds storage quota", e2);
+            toast.error('Storage quota exceeded. Some data may not be saved.', { duration: 5000 });
+          }
         }
-      }
+      };
+      
+      saveTrms();
     }
   }, [trmsData]);
 

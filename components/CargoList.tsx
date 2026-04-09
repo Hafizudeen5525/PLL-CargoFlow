@@ -262,7 +262,7 @@ export const CargoList: React.FC<CargoListProps> = ({
                             const isTier2Leg = count > 1 || cleanStratName.includes('t(') || cleanStratName.endsWith('t');
                             const lookupName = cleanStratName.replace('t(', '(').replace(/t$/, '');
 
-                            if (!mergedData[lookupName]) mergedData[lookupName] = { ...EmptyCargoProfile, strategyName: lookupName };
+                            if (!mergedData[lookupName]) mergedData[lookupName] = { strategyName: lookupName };
                             
                             if (isTier2Leg) {
                                 mergedData[lookupName].isTieredPricing = true;
