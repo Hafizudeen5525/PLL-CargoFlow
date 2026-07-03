@@ -1,6 +1,6 @@
 import React, { useMemo, useState, useEffect, useCallback } from 'react';
 import { CargoProfile, PnLBucket } from '../types';
-import { ForwardCurveRow, detectUnit, getExposureChartData, getPortfolioYear, recalculateProfile, getAvailableCurveDates, getPricesSnapshot, getForwardCurve, explainPricing, analyzeFormulaStructure, evaluateFormula, findDataGaps, DataGap, getGroupName, GROUPS } from '../services/calculationService';
+import { ForwardCurveRow, detectUnit, getExposureChartData, getPortfolioYear, recalculateProfile, getAvailableCurveDates, getPricesSnapshot, getForwardCurve, explainPricing, analyzeFormulaStructure, evaluateFormula, findDataGaps, DataGap, getGroupName, GROUPS, getPricingMonths, formatCurrency, formatPrice } from '../services/calculationService';
 import { BarChart, Bar, XAxis, YAxis, CartesianGrid, Tooltip, ResponsiveContainer, Cell, PieChart, Pie, LineChart, Line, Legend } from 'recharts';
 import { motion, AnimatePresence } from 'framer-motion';
 import { PnLBreakdown } from './PnLBreakdown';
@@ -17,6 +17,7 @@ interface DashboardProps {
   onCargoClick?: (profile: CargoProfile) => void;
   portfolioYear?: string;
   editingProfileId?: string;
+  userRole?: 'admin' | 'trader' | 'viewer';
 }
 
 const COLORS = ['#0088FE', '#00C49F', '#FFBB28', '#FF8042', '#8884d8', '#ec4899', '#6366f1'];
@@ -54,30 +55,38 @@ interface DrillDownConfig {
     metric: 'PnL' | 'Revenue' | 'Purchase' | 'Other' | 'Volume';
 }
 
-export const Dashboard: React.FC<DashboardProps> = ({ profiles, marketData, forwardCurve, onRefreshMarket, onCargoClick, portfolioYear = 'All', editingProfileId }) => {
+export const Dashboard: React.FC<DashboardProps> = ({ profiles, marketData, forwardCurve, onRefreshMarket, onCargoClick, portfolioYear = 'All', editingProfileId, userRole }) => {
   const [curveView, setCurveView] = useState<'gas' | 'oil'>('gas');
   const [groupFilter, setGroupFilter] = useState<string>('All');
   
-  const [targetDate, setTargetDate] = useState<string>(() => {
-      const dates = getAvailableCurveDates();
-      return dates.length > 0 ? dates[0] : '';
-  });
-  const [baselineDate, setBaselineDate] = useState<string>(() => {
-      const dates = getAvailableCurveDates();
-      return dates.length > 1 ? dates[1] : (dates[0] || '');
-  });
+  const [targetDate, setTargetDate] = useState<string>('');
+  const [baselineDate, setBaselineDate] = useState<string>('');
   
   const [activeDrillDown, setActiveDrillDown] = useState<DrillDownConfig | null>(null);
 
   const [debugMode, setDebugMode] = useState<'single' | 'health' | 'tester' | 'gaps' | 'variance'>('health');
   const [baselineSnapshot, setBaselineSnapshot] = useState<{ profiles: CargoProfile[], date: string } | null>(() => {
+    if (typeof window === 'undefined') return null;
     const saved = localStorage.getItem('pnl_baseline_snapshot');
     return saved ? JSON.parse(saved) : null;
   });
 
   const [testFormula, setTestFormula] = useState('');
 
-  const availableDates = useMemo(() => getAvailableCurveDates(), []);
+  const [availableDates, setAvailableDates] = useState<string[]>([]);
+
+  useEffect(() => {
+    const initDates = async () => {
+      const dates = await getAvailableCurveDates();
+      setAvailableDates(dates);
+      if (dates.length > 0) {
+        setTargetDate(dates[0]);
+        if (dates.length > 1) setBaselineDate(dates[1]);
+        else setBaselineDate(dates[0]);
+      }
+    };
+    initDates();
+  }, []);
 
   const handleSaveBaseline = () => {
     const snapshot = { profiles: JSON.parse(JSON.stringify(profiles)), date: targetDate };
@@ -281,8 +290,6 @@ export const Dashboard: React.FC<DashboardProps> = ({ profiles, marketData, forw
       return events.sort((a: any, b: any) => a.date.getTime() - b.date.getTime()).slice(0, 10);
   }, [viewProfiles]);
 
-  const formatCurrency = (val: number) => new Intl.NumberFormat('en-US', { style: 'currency', currency: 'USD', maximumFractionDigits: 0 }).format(val);
-
   const containerVariants = { hidden: { opacity: 0 }, visible: { opacity: 1, transition: { staggerChildren: 0.1 } } };
   const itemVariants = { hidden: { opacity: 0, y: 20 }, visible: { opacity: 1, y: 0 } };
 
@@ -295,9 +302,42 @@ export const Dashboard: React.FC<DashboardProps> = ({ profiles, marketData, forw
                   {availableGroups.map((g: string) => <option key={g} value={g}>{g === 'All' ? 'All (Auto-mapped)' : g}</option>)}
               </select>
               {dataGaps.length > 0 && (
-                  <button onClick={() => setDebugMode('gaps')} className="flex items-center justify-center gap-2 px-3 py-2 bg-rose-50 text-rose-600 border border-rose-200 rounded-lg text-xs font-bold animate-pulse">
+                  <button 
+                    onClick={() => {
+                        setDebugMode('gaps');
+                        const el = document.getElementById('portfolio-integrity-section');
+                        if (el) el.scrollIntoView({ behavior: 'smooth' });
+                    }}
+                    className="flex items-center justify-center gap-2 px-3 py-2 bg-rose-50 text-rose-600 border border-rose-200 rounded-lg text-xs font-bold animate-pulse"
+                  >
                       <svg className="w-4 h-4" fill="none" stroke="currentColor" viewBox="0 0 24 24"><path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M12 9v2m0 4h.01m-6.938 4h13.856c1.54 0 2.502-1.667 1.732-3L13.732 4c-.77-1.333-2.694-1.333-3.464 0L3.34 16c-.77 1.333.192 3 1.732 3z" /></svg>
                       {dataGaps.length} Gaps
+                  </button>
+              )}
+              {healthReport.errors.length > 0 && (
+                  <button 
+                    onClick={() => {
+                        setDebugMode('health');
+                        const el = document.getElementById('portfolio-integrity-section');
+                        if (el) el.scrollIntoView({ behavior: 'smooth' });
+                    }}
+                    className="flex items-center justify-center gap-2 px-3 py-2 bg-rose-100 text-rose-700 border border-rose-300 rounded-lg text-xs font-bold"
+                  >
+                      <svg className="w-4 h-4" fill="none" stroke="currentColor" viewBox="0 0 24 24"><path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M12 8v4m0 4h.01M21 12a9 9 0 11-18 0 9 9 0 0118 0z" /></svg>
+                      {healthReport.errors.length} Issues
+                  </button>
+              )}
+              {healthReport.warnings.length > 0 && (
+                  <button 
+                    onClick={() => {
+                        setDebugMode('health');
+                        const el = document.getElementById('portfolio-integrity-section');
+                        if (el) el.scrollIntoView({ behavior: 'smooth' });
+                    }}
+                    className="flex items-center justify-center gap-2 px-3 py-2 bg-amber-50 text-amber-600 border border-amber-200 rounded-lg text-xs font-bold"
+                  >
+                      <svg className="w-4 h-4" fill="none" stroke="currentColor" viewBox="0 0 24 24"><path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M12 9v2m0 4h.01m-6.938 4h13.856c1.54 0 2.502-1.667 1.732-3L13.732 4c-.77-1.333-2.694-1.333-3.464 0L3.34 16c-.77 1.333.192 3 1.732 3z" /></svg>
+                      {healthReport.warnings.length} Warnings
                   </button>
               )}
           </div>
@@ -446,7 +486,7 @@ export const Dashboard: React.FC<DashboardProps> = ({ profiles, marketData, forw
           />
       </motion.div>
 
-      <motion.div variants={itemVariants} className="bg-white p-4 sm:p-6 rounded-xl shadow-sm border border-slate-200 h-[500px] sm:h-[600px] flex flex-col">
+      <motion.div id="portfolio-integrity-section" variants={itemVariants} className="bg-white p-4 sm:p-6 rounded-xl shadow-sm border border-slate-200 h-[500px] sm:h-[600px] flex flex-col">
           <div className="flex flex-col sm:flex-row justify-between items-start sm:items-center mb-6 shrink-0 gap-4">
               <h3 className="text-base sm:text-lg font-bold text-slate-800 flex items-center gap-2">
                   <svg className="w-5 h-5 text-indigo-600" fill="none" stroke="currentColor" viewBox="0 0 24 24"><path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M10 20l4-16m4 4l4 4-4 4M6 16l-4-4 4-4" /></svg>
@@ -514,7 +554,9 @@ export const Dashboard: React.FC<DashboardProps> = ({ profiles, marketData, forw
                     {testFormula && (
                         <div className="bg-white border border-slate-200 rounded-xl p-4">
                             <p className="text-[10px] sm:text-xs font-bold text-slate-400 mb-2">Evaluation Result ({targetDate}):</p>
-                            <div className="text-lg sm:text-xl font-mono font-bold text-blue-600">${evaluateFormula(testFormula, undefined, targetDate)?.toFixed(3) ?? 'Error'}</div>
+                            <div className="text-lg sm:text-xl font-mono font-bold text-blue-600">
+                                <FormulaEvaluator formula={testFormula} date={targetDate} />
+                            </div>
                         </div>
                     )}
                 </div>
@@ -546,6 +588,18 @@ export const Dashboard: React.FC<DashboardProps> = ({ profiles, marketData, forw
       </AnimatePresence>
     </motion.div>
   );
+};
+
+const FormulaEvaluator = ({ formula, date }: { formula: string, date: string }) => {
+    const [result, setResult] = useState<number | null>(null);
+    useEffect(() => {
+        const evalF = async () => {
+            const res = await evaluateFormula(formula, undefined, date);
+            setResult(res);
+        };
+        evalF();
+    }, [formula, date]);
+    return <>{result !== null ? `$${result.toFixed(3)}` : '...'}</>;
 };
 
 const StrategyTicker = ({ movements, baselineDate }: { movements: { name: string, delta: number }[], baselineDate: string }) => {
@@ -586,7 +640,7 @@ const StrategyTicker = ({ movements, baselineDate }: { movements: { name: string
 };
 
 const FinancialHeroCard = ({ title, stats, baseline, compareDate, isHero, colorClass, onDrillDown }: any) => {
-    const format = (val: number) => new Intl.NumberFormat('en-US', { style: 'currency', currency: 'USD', maximumFractionDigits: 0 }).format(val);
+    const format = formatCurrency;
     const delta = stats.pnl - baseline.pnl;
     const isPositive = delta >= 0;
 
@@ -738,7 +792,7 @@ const DrillDownTable = ({ profiles, config, onClose, onCargoClick, targetDate, f
                 val = (prof.finalTotalPnL || 0) - revenue + purchase;
                 src = prof.reconciledSrcCost || ((prof.incoterms === 'DES') ? (prof.srcUnitFee || 0) * ((prof.deliveredVolume || 0) + (prof.tier2DeliveredVolume || 0)) : 0);
             } else if (config.metric === 'Volume') {
-                val = prof.deliveredVolume || 0;
+                val = (prof.deliveredVolume || 0) + (prof.isTieredPricing ? (prof.tier2DeliveredVolume || 0) : 0);
                 volume = val;
             }
             return { val, price, volume, src };
@@ -804,6 +858,13 @@ const DrillDownTable = ({ profiles, config, onClose, onCargoClick, targetDate, f
                             )}
                             {config.metric === 'Other' && (
                                 <th className="px-6 py-4 text-right">SRC Value</th>
+                            )}
+                            {config.metric === 'Volume' && (
+                                <>
+                                    <th className="px-6 py-4">Index</th>
+                                    <th className="px-6 py-4">Pricing Def</th>
+                                    <th className="px-6 py-4">Exposure Month</th>
+                                </>
                             )}
                             <th className="px-6 py-4 text-right">Line Total</th>
                             <th className="px-6 py-4 text-right">PnL Variance</th>
@@ -877,6 +938,59 @@ const DrillDownTable = ({ profiles, config, onClose, onCargoClick, targetDate, f
                                                 </div>
                                             )}
                                         </td>
+                                    )}
+
+                                    {config.metric === 'Volume' && (
+                                        <>
+                                            <td className="px-6 py-4 text-[10px] font-mono text-slate-600">
+                                                {(() => {
+                                                    const indices: string[] = [];
+                                                    const add = (pref: string) => {
+                                                        for(let i=1; i<=3; i++) {
+                                                            const idx = (p as any)[`${pref}PriceIndex${i}`];
+                                                            if (idx && !indices.includes(idx)) indices.push(idx);
+                                                        }
+                                                    };
+                                                    add('sell');
+                                                    if (p.isTieredPricing) add('tier2Sell');
+                                                    return indices.length > 0 ? indices.join(', ') : (p.sellFormula || 'Fixed');
+                                                })()}
+                                            </td>
+                                            <td className="px-6 py-4 text-[10px] font-mono text-slate-600">
+                                                {(() => {
+                                                    const defs: string[] = [];
+                                                    const add = (pref: string) => {
+                                                        for(let i=1; i<=3; i++) {
+                                                            const idx = (p as any)[`${pref}PriceIndex${i}`];
+                                                            const def = (p as any)[`${pref}Price${i}MonthDef`] || 'n';
+                                                            if (idx && !defs.includes(def)) defs.push(def);
+                                                        }
+                                                    };
+                                                    add('sell');
+                                                    if (p.isTieredPricing) add('tier2Sell');
+                                                    return defs.length > 0 ? defs.join(', ') : 'n';
+                                                })()}
+                                            </td>
+                                            <td className="px-6 py-4 text-[10px] font-mono text-slate-600">
+                                                {(() => {
+                                                    const months: string[] = [];
+                                                    const add = (pref: string, date: string) => {
+                                                        for(let i=1; i<=3; i++) {
+                                                            const idx = (p as any)[`${pref}PriceIndex${i}`];
+                                                            const def = (p as any)[`${pref}Price${i}MonthDef`] || 'n';
+                                                            if (idx && date) {
+                                                                getPricingMonths(date, def).forEach(m => {
+                                                                    if (!months.includes(m)) months.push(m);
+                                                                });
+                                                            }
+                                                        }
+                                                    };
+                                                    add('sell', p.deliveryDate);
+                                                    if (p.isTieredPricing) add('tier2Sell', p.deliveryDate);
+                                                    return months.length > 0 ? months.join(', ') : '-';
+                                                })()}
+                                            </td>
+                                        </>
                                     )}
 
                                     <td className={`px-6 py-4 text-right font-mono font-bold ${config.metric === 'Volume' ? (isEditing ? 'text-indigo-700' : 'text-slate-700') : (curr.val >= 0 ? 'text-emerald-600' : 'text-rose-600')}`}>

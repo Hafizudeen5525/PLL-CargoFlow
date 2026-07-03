@@ -2,6 +2,7 @@
 import React, { useState, useMemo } from 'react';
 import { CargoProfile, PnLBucket } from '../types';
 import { motion } from 'framer-motion';
+import { formatCurrency } from '../services/calculationService';
 
 interface PnLBreakdownProps {
     profiles: CargoProfile[];
@@ -47,9 +48,6 @@ export const PnLBreakdown: React.FC<PnLBreakdownProps> = ({ profiles }) => {
             maxPnl: Math.max(acc.maxPnl, Math.abs(curr.finalTotalPnL || 0)) // For visual bars
         }), { revenue: 0, cost: 0, pnl: 0, maxPnl: 0 });
     }, [filteredData]);
-
-    const formatCurrency = (val: number) => 
-        new Intl.NumberFormat('en-US', { style: 'currency', currency: 'USD', maximumFractionDigits: 0 }).format(val);
 
     const handleSort = (key: keyof CargoProfile) => {
         if (sortKey === key) setSortDesc(!sortDesc);

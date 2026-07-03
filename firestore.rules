@@ -1,0 +1,124 @@
+rules_version = '2';
+service cloud.firestore {
+  match /databases/{database}/documents {
+    
+    // 0. Global Safety Net
+    match /{document=**} {
+      allow read, write: if false;
+    }
+
+    // ===============================================================
+    // Helper Functions
+    // ===============================================================
+    
+    function isSignedIn() {
+      return request.auth != null;
+    }
+
+    function isOwner(userId) {
+      return isSignedIn() && request.auth.uid == userId;
+    }
+
+    function incoming() {
+      return request.resource.data;
+    }
+
+    function getUserData() {
+      return get(/databases/$(database)/documents/users/$(request.auth.uid)).data;
+    }
+
+    function isAdmin() {
+      return isSignedIn() && (
+        request.auth.token.email == 'hafizudeen991022@gmail.com' ||
+        (exists(/databases/$(database)/documents/users/$(request.auth.uid)) && getUserData().role == 'admin')
+      );
+    }
+
+    function isTrader() {
+      return isSignedIn() && (
+        isAdmin() ||
+        (exists(/databases/$(database)/documents/users/$(request.auth.uid)) && getUserData().role == 'trader')
+      );
+    }
+
+    // ===============================================================
+    // Validation Blueprints
+    // ===============================================================
+
+    function isValidUser(data) {
+      return data.uid == request.auth.uid &&
+             data.email is string &&
+             (data.role == null || data.role in ['admin', 'trader', 'viewer']) &&
+             (data.displayName == null || data.displayName is string) &&
+             (data.photoURL == null || data.photoURL is string) &&
+             (data.preferredYear == null || data.preferredYear is string) &&
+             (data.lastLogin == null || data.lastLogin is string);
+    }
+
+    function isValidCargoProfile(data, userId) {
+      return (data.userId == userId || isAdmin()) &&
+             data.strategyName is string && data.strategyName.size() > 0;
+    }
+
+    function isValidForwardCurve(data, userId) {
+      return data.userId == userId &&
+             data.asOfDate is string &&
+             data.rows is list;
+    }
+
+    function isValidMarketData(data) {
+      return data.rows is list;
+    }
+
+    // ===============================================================
+    // Rules
+    // ===============================================================
+
+    match /users/{userId} {
+      // User Settings/Profile
+      allow get: if isOwner(userId) || isAdmin();
+      allow list: if isAdmin();
+      allow create: if isOwner(userId) && isValidUser(incoming());
+      allow update: if (isOwner(userId) || isAdmin()) && isValidUser(incoming()) && (
+        // Regular users can't change their own role
+        (incoming().role == resource.data.role) || isAdmin()
+      );
+
+      // Cargo Profiles
+      match /cargo_profiles/{profileId} {
+        allow list, get: if isOwner(userId) || (isAdmin() && isSignedIn());
+        allow create, update: if isOwner(userId) && isTrader() && isValidCargoProfile(incoming(), userId);
+        allow delete: if isOwner(userId) && isTrader();
+      }
+
+      // Forward Curves
+      match /forward_curves/{date} {
+        allow list, get: if isOwner(userId) || isAdmin();
+        allow create, update: if isOwner(userId) && isTrader() && isValidForwardCurve(incoming(), userId);
+        allow delete: if isOwner(userId) && isTrader();
+      }
+
+      // GRM Forward Curves
+      match /grm_forward_curves/{date} {
+        allow list, get: if isOwner(userId) || isAdmin();
+        allow create, update: if isOwner(userId) && isTrader() && isValidForwardCurve(incoming(), userId);
+        allow delete: if isOwner(userId) && isTrader();
+      }
+
+      // Historical Market Data
+      match /market_data/{dataId} {
+        allow get: if isOwner(userId) || isAdmin();
+        allow create, update: if isOwner(userId) && isTrader() && isValidMarketData(incoming());
+        allow delete: if isOwner(userId) && isTrader();
+      }
+    }
+
+    // Shared Organization Data
+    match /shared_cargo_profiles/{profileId} {
+      allow list, get: if isSignedIn();
+      allow create: if isTrader() && isValidCargoProfile(incoming(), request.auth.uid);
+      allow update: if isTrader() && isValidCargoProfile(incoming(), resource.data.userId);
+      allow delete: if isOwner(resource.data.userId) || isAdmin();
+    }
+  }
+}

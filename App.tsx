@@ -8,10 +8,15 @@ import { CargoForm } from './components/CargoForm';
 import { ForwardCurveModal } from './components/ForwardCurveModal';
 import { BulkImportModal } from './components/BulkImportModal';
 import { ExposureView } from './components/ExposureView';
+import { SettingsView } from './components/SettingsView';
+import { UserManagement } from './components/UserManagement';
 import { DiscrepancyCheck, ReconciliationData } from './components/DiscrepancyCheck';
 import { CargoProfile, PnLBucket, ForwardCurveData, ForwardCurve, ForwardCurvePoint } from './types';
 import { getMarketData, getForwardCurve, recalculateProfile, getPortfolioYear, saveForwardCurve } from './services/calculationService';
-import { saveToDB, getFromDB } from './services/db';
+import { getFromDB, saveToDB } from './services/db';
+import { auth, db, handleFirestoreError, FirestoreOperation } from './firebase';
+import { onAuthStateChanged, User } from 'firebase/auth';
+import { doc, setDoc, onSnapshot, collection, query, where, getDoc } from 'firebase/firestore';
 
 // Navigation Items
 const NAV_ITEMS = [
@@ -24,16 +29,33 @@ const NAV_ITEMS = [
 const MAX_HISTORY = 50;
 
 const App: React.FC = () => {
+  // Hardcoded compliance guest session requested by user to remove Google Auth gate
+  const [user, setUser] = useState<User>({
+    uid: 'guest_user',
+    displayName: 'Guest Trader',
+    email: 'guest@cargoflow.local',
+    photoURL: 'https://images.unsplash.com/photo-1535713875002-d1d0cf377fde?auto=format&fit=crop&w=150&h=150',
+    emailVerified: true,
+    isAnonymous: false,
+    providerData: []
+  } as any);
+  const [userRole, setUserRole] = useState<'admin' | 'trader' | 'viewer'>('admin');
+  const [testRole, setTestRole] = useState<'admin' | 'trader' | 'viewer' | null>(null);
+  const activeRole = testRole || userRole;
+  const [isAuthReady, setIsAuthReady] = useState(true);
+  const [isLoggingIn, setIsLoggingIn] = useState(false);
+  const [isLoading, setIsLoading] = useState(false);
   const [view, setView] = useState('dashboard');
   const [profiles, setProfiles] = useState<CargoProfile[]>([]);
+  const [sharedProfiles, setSharedProfiles] = useState<CargoProfile[]>([]);
   const [isMobileMenuOpen, setIsMobileMenuOpen] = useState(false);
   
   // History Stacks
   const [past, setPast] = useState<CargoProfile[][]>([]);
   const [future, setFuture] = useState<CargoProfile[][]>([]);
 
-  const [marketData, setMarketData] = useState(getMarketData());
-  const [forwardCurve, setForwardCurve] = useState(getForwardCurve());
+  const [marketData, setMarketData] = useState<Record<string, number>>({});
+  const [forwardCurve, setForwardCurve] = useState<any[]>([]);
   const [portfolioYear, setPortfolioYear] = useState<string>(new Date().getFullYear().toString());
   
   // Persisted TRMS Data for discrepancy check
@@ -44,23 +66,127 @@ const App: React.FC = () => {
     trmsAgg: {}, 
     forwardCurves: [],
     uniqueValues: { src: {}, hedging: {}, paper: {} },
+    extractedRows: [],
     summary: { total: 0, src: 0, hedging: 0, paper: 0 }
   });
 
+  // Guest profile loader & listener
+  useEffect(() => {
+    // Basic user document initialization in Firestore
+    const userRef = doc(db, 'users', 'guest_user');
+    getDoc(userRef).then(snap => {
+      if (!snap.exists()) {
+        setDoc(userRef, {
+          uid: 'guest_user',
+          email: 'guest@cargoflow.local',
+          role: 'admin',
+          displayName: 'Guest Trader',
+          photoURL: 'https://images.unsplash.com/photo-1535713875002-d1d0cf377fde?auto=format&fit=crop&w=150&h=150',
+          lastLogin: new Date().toISOString()
+        }, { merge: true }).catch(err => console.warn("Initial guest setup error:", err));
+      } else {
+        const data = snap.data();
+        if (data.role) setUserRole(data.role);
+        if (data.preferredYear) setPortfolioYear(data.preferredYear);
+      }
+    }).catch(err => {
+      console.warn("Guest retrieval failed, staying local / guest session:", err);
+    });
+  }, []);
+
+  // Firestore Sync: Profiles (Shared + Private)
+  useEffect(() => {
+    if (!user) {
+      setProfiles([]);
+      setSharedProfiles([]);
+      return;
+    }
+
+    // 1. Private Profiles
+    const privateQ = query(collection(db, 'users', user.uid, 'cargo_profiles'), where('deleted', '!=', true));
+    const unsubPrivate = onSnapshot(privateQ, (snapshot) => {
+      const docs = snapshot.docs.map(d => ({ ...d.data(), id: d.id } as CargoProfile));
+      setProfiles(docs);
+    }, (err) => {
+        // Suppress initial permission errors if doc doesn't exist yet
+        if (err.code !== 'permission-denied') {
+            handleFirestoreError(err, FirestoreOperation.LIST, `users/${user.uid}/cargo_profiles`);
+        }
+    });
+
+    // 2. Shared/Global Profiles (The Centralized Database feel)
+    const sharedQ = query(collection(db, 'shared_cargo_profiles'), where('deleted', '!=', true));
+    const unsubShared = onSnapshot(sharedQ, (snapshot) => {
+       const docs = snapshot.docs.map(d => ({ ...d.data(), id: d.id, isShared: true } as CargoProfile));
+       setSharedProfiles(docs);
+    }, (err) => {
+        if (err.code !== 'permission-denied') {
+            handleFirestoreError(err, FirestoreOperation.LIST, `shared_cargo_profiles`);
+        }
+    });
+
+    return () => {
+      unsubPrivate();
+      unsubShared();
+    };
+  }, [user]);
+
+  // Combine for aggregated dashboard
+  const allProfiles = useMemo(() => {
+    // Deduplicate if needed, but here we just merge
+    return [...profiles, ...sharedProfiles].filter(p => !p.deleted);
+  }, [profiles, sharedProfiles]);
+
+  // Firestore Sync: User Settings (Portfolio Year)
+  useEffect(() => {
+    if (!user) return;
+    const userRef = doc(db, 'users', user.uid);
+    const unsubscribe = onSnapshot(userRef, (docSnap) => {
+      if (docSnap.exists()) {
+        const data = docSnap.data();
+        if (data.preferredYear) setPortfolioYear(data.preferredYear);
+        if (data.role) setUserRole(data.role);
+      }
+    }, (err) => {
+        if (err.code !== 'permission-denied') {
+            handleFirestoreError(err, FirestoreOperation.GET, `users/${user.uid}`);
+        }
+    });
+    return () => unsubscribe();
+  }, [user]);
+
   // History Helper
   const updateProfiles = useCallback((newProfiles: CargoProfile[] | ((prev: CargoProfile[]) => CargoProfile[])) => {
+    if (!user) return;
+    
     setProfiles((prev: CargoProfile[]) => {
       const next = typeof newProfiles === 'function' ? newProfiles(prev) : newProfiles;
       if (JSON.stringify(next) === JSON.stringify(prev)) return prev;
+      
+      // Update Firestore
+      // For simplicity in this demo, we'll handle individual updates in handleSaveProfile
+      // but for bulk operations we'd need a batch.
+      
       setPast(history => [...history, prev].slice(-MAX_HISTORY));
       setFuture([]); 
       return next;
     });
-  }, []);
+  }, [user]);
 
-  const handleMarketRefresh = useCallback(() => {
-    setMarketData(getMarketData());
-    setForwardCurve(getForwardCurve());
+  const handleLogin = async () => {
+    // Session is persistently active for anyone in Guest Sandbox Mode
+  };
+
+  const handleLogout = async () => {
+    toast.success('Session is persistently active in Sandbox Mode.');
+  };
+
+  const handleMarketRefresh = useCallback(async () => {
+    const curve = await getForwardCurve();
+    setForwardCurve(curve);
+    if (curve.length > 0) {
+      setMarketData(curve[0].prices);
+    }
     updateProfiles((prev: CargoProfile[]) => prev.map((p: CargoProfile) => 
       recalculateProfile(p, true) as CargoProfile
     ));
@@ -153,6 +279,7 @@ const App: React.FC = () => {
           toSave.src = [];
           toSave.hedging = [];
           toSave.paper = [];
+          toSave.extractedRows = [];
         }
         
         const trmsAggClone = { ...toSave.trmsAgg };
@@ -333,34 +460,93 @@ const App: React.FC = () => {
     return () => window.removeEventListener('keydown', handleKeyDown);
   }, [undo, redo]);
 
-  const handleSaveProfile = (profile: CargoProfile) => {
-    updateProfiles((prev: CargoProfile[]) => {
-      const idx = prev.findIndex((p: CargoProfile) => p.id === profile.id);
-      if (idx >= 0) {
-        const newProfiles = [...prev];
-        newProfiles[idx] = profile;
-        return newProfiles;
-      } else {
-        return [...prev, { ...profile, id: profile.id || Date.now().toString() }];
+  const handleSaveProfile = async (profile: CargoProfile) => {
+    if (!user || userRole === 'viewer') {
+      toast.error('Permission denied: Viewer only access');
+      return;
+    }
+
+    // "Modify the SN instead": Identify if a profile with this Strategy Name already exists in either collection
+    const existingShared = sharedProfiles.find(p => p.strategyName.trim().toLowerCase() === profile.strategyName.trim().toLowerCase());
+    const existingPrivate = profiles.find(p => p.strategyName.trim().toLowerCase() === profile.strategyName.trim().toLowerCase());
+    
+    // Determine the target ID and collection. If it exists in shared, we must update the shared one.
+    const profileId = existingShared?.id || profile.id || existingPrivate?.id || Date.now().toString();
+    const isNowShared = !!existingShared || profile.isShared; // Preserve shared status or upgrade if SN exists in shared
+    
+    const profileWithId = { 
+        ...profile, 
+        id: profileId, 
+        userId: user.uid, 
+        isShared: isNowShared 
+    };
+    
+    const wasShared = allProfiles.find(p => p.id === profileId)?.isShared;
+
+    const targetCollection = isNowShared ? 'shared_cargo_profiles' : 'cargo_profiles';
+    const profileRef = isNowShared 
+      ? doc(db, 'shared_cargo_profiles', profileId)
+      : doc(db, 'users', user.uid, 'cargo_profiles', profileId);
+
+    try {
+      await setDoc(profileRef, profileWithId);
+      
+      // If moving from private to shared (by matching an SN or previous toggle), delete the old private one
+      if (isNowShared && existingPrivate && existingPrivate.id !== profileId) {
+          const oldPrivateRef = doc(db, 'users', user.uid, 'cargo_profiles', existingPrivate.id);
+          await setDoc(oldPrivateRef, { deleted: true }, { merge: true });
       }
-    });
-    setIsEditing(false);
-    setEditingProfile(undefined);
+      
+      // Handle the case where we just updated an existing record but the ID was different (unlikely with SN logic but safe)
+      if (profile.id && profile.id !== profileId) {
+          const oldRef = wasShared 
+              ? doc(db, 'shared_cargo_profiles', profile.id)
+              : doc(db, 'users', user.uid, 'cargo_profiles', profile.id);
+          await setDoc(oldRef, { deleted: true }, { merge: true });
+      }
+
+      setIsEditing(false);
+      setEditingProfile(undefined);
+      toast.success(isNowShared ? 'Saved to Shared Portfolio' : 'Saved to Private Portfolio');
+    } catch (err) {
+      handleFirestoreError(err, FirestoreOperation.WRITE, `${targetCollection}/${profileId}`);
+    }
   };
 
   const handleDeleteProfile = (id: string) => {
-    if (confirm('Delete this cargo?')) {
-      updateProfiles((prev: CargoProfile[]) => prev.filter((p: CargoProfile) => p.id !== id));
+    if (!user || userRole === 'viewer') {
+      toast.error('Permission denied: Viewer only access');
+      return;
+    }
+    const profileToDelete = allProfiles.find(p => p.id === id);
+    if (!profileToDelete) return;
+
+    if (confirm(`Delete ${profileToDelete.strategyName}?`)) {
+      const profileRef = profileToDelete.isShared
+        ? doc(db, 'shared_cargo_profiles', id)
+        : doc(db, 'users', user.uid, 'cargo_profiles', id);
+
+      setDoc(profileRef, { deleted: true }, { merge: true })
+        .then(() => toast.success('Cargo deleted'))
+        .catch(err => handleFirestoreError(err, FirestoreOperation.DELETE, `profiles/${id}`));
     }
   };
 
   const handleBulkDelete = (ids: Set<string>) => {
+    if (userRole === 'viewer') {
+      toast.error('Permission denied: Viewer only access');
+      return;
+    }
     if (confirm(`Delete ${ids.size} cargoes?`)) {
       updateProfiles((prev: CargoProfile[]) => prev.filter((p: CargoProfile) => !ids.has(p.id)));
     }
   };
 
   const handleBulkUpdate = (ids: Set<string>, updates: Partial<CargoProfile>) => {
+    if (userRole === 'viewer') {
+      toast.error('Permission denied: Viewer only access');
+      return;
+    }
     updateProfiles((prev: CargoProfile[]) => prev.map((p: CargoProfile) => {
       if (ids.has(p.id)) {
         return recalculateProfile({ ...p, ...updates }, true) as CargoProfile;
@@ -370,6 +556,10 @@ const App: React.FC = () => {
   };
 
   const handleBulkImport = (newProfiles: CargoProfile[]) => {
+    if (userRole === 'viewer') {
+      toast.error('Permission denied: Viewer only access');
+      return;
+    }
     updateProfiles((prev: CargoProfile[]) => {
         const existingMap = new Map<string, CargoProfile>(prev.map((p: CargoProfile) => [p.strategyName, p]));
         newProfiles.forEach((np: CargoProfile) => {
@@ -391,16 +581,24 @@ const App: React.FC = () => {
   };
 
   const filteredProfiles = useMemo(() => {
-    if (portfolioYear === 'All') return profiles;
-    return profiles.filter((p: CargoProfile) => getPortfolioYear(p).toString() === portfolioYear);
-  }, [profiles, portfolioYear]);
+    if (portfolioYear === 'All') return allProfiles;
+    return allProfiles.filter((p: CargoProfile) => getPortfolioYear(p).toString() === portfolioYear);
+  }, [allProfiles, portfolioYear]);
 
   const availableYears = useMemo(() => {
       const years = new Set<string>();
-      profiles.forEach((p: CargoProfile) => years.add(getPortfolioYear(p).toString()));
+      allProfiles.forEach((p: CargoProfile) => years.add(getPortfolioYear(p).toString()));
       const sorted = Array.from(years).sort().reverse();
       return ['All', ...sorted];
-  }, [profiles]);
+  }, [allProfiles]);
+
+  const existingSources = useMemo(() => {
+    const sources = new Set<string>();
+    allProfiles.forEach(p => {
+      if (p.source) sources.add(p.source);
+    });
+    return Array.from(sources).sort();
+  }, [allProfiles]);
 
   const NavigationContent = () => (
     <>
@@ -436,7 +634,13 @@ const App: React.FC = () => {
                <label className="text-[10px] font-bold text-slate-500 uppercase block mb-2">Portfolio Year</label>
                <select 
                   value={portfolioYear} 
-                  onChange={(e) => setPortfolioYear(e.target.value)}
+                  onChange={(e) => {
+                    const year = e.target.value;
+                    setPortfolioYear(year);
+                    if (user) {
+                      setDoc(doc(db, 'users', user.uid), { preferredYear: year }, { merge: true });
+                    }
+                  }}
                   className="w-full bg-slate-800 border-none rounded-lg text-sm text-slate-300 focus:ring-1 focus:ring-blue-500"
                >
                    {availableYears.map((y: string) => <option key={y} value={y}>{y}</option>)}
@@ -453,9 +657,54 @@ const App: React.FC = () => {
                <svg className="w-4 h-4 text-emerald-400" fill="none" stroke="currentColor" viewBox="0 0 24 24"><path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M7 12l3-3 3 3 4-4M8 21l4-4 4 4M3 4h18M4 4h16v12a1 1 0 01-1 1H5a1 1 0 01-1-1V4z" /></svg>
                Forward Curve
            </button>
+
+            {/*
+             <div className="pt-4 border-t border-slate-800">
+               <div className="flex items-center justify-between px-2 mb-4 group">
+                 <div className="flex items-center gap-3 min-w-0">
+                    <img src={user.photoURL || ''} alt="" className="w-8 h-8 rounded-full border border-slate-700 flex-shrink-0" referrerPolicy="no-referrer" />
+                    <div className="min-w-0">
+                      <div className="text-xs font-bold text-white truncate">{user.displayName}</div>
+                      <div className="text-[10px] text-slate-500 truncate">{user.email}</div>
+                    </div>
+                 </div>
+                 <button 
+                    onClick={() => {
+                      setView('settings');
+                      setIsMobileMenuOpen(false);
+                    }}
+                    className={`p-1.5 rounded-lg transition-colors ${view === 'settings' ? 'text-blue-400 bg-blue-500/10' : 'text-slate-500 hover:text-white hover:bg-slate-800'}`}
+                    title="Settings"
+                 >
+                    <svg className="w-4 h-4" fill="none" stroke="currentColor" viewBox="0 0 24 24"><path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M10.325 4.317c.426-1.756 2.924-1.756 3.35 0a1.724 1.724 0 002.573 1.066c1.543-.94 3.31.826 2.37 2.37a1.724 1.724 0 001.065 2.572c1.756.426 1.756 2.924 0 3.35a1.724 1.724 0 00-1.066 2.573c.94 1.543-.826 3.31-2.37 2.37a1.724 1.724 0 00-2.572 1.065c-.426 1.756-2.924 1.756-3.35 0a1.724 1.724 0 00-2.573-1.066c-1.543.94-3.31-.826-2.37-2.37a1.724 1.724 0 00-1.065-2.572c-1.756-.426-1.756-2.924 0-3.35a1.724 1.724 0 001.066-2.573c-.94-1.543.826-3.31 2.37-2.37.996.608 2.296.07 2.572-1.065z" /><path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M15 12a3 3 0 11-6 0 3 3 0 016 0z" /></svg>
+                 </button>
+               </div>
+               <button 
+                onClick={handleLogout}
+                className="w-full flex items-center gap-2 px-4 py-2 text-slate-400 hover:text-white hover:bg-slate-800 rounded-lg text-xs font-bold uppercase transition-colors"
+               >
+                 <svg className="w-4 h-4" fill="none" stroke="currentColor" viewBox="0 0 24 24"><path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M17 16l4-4m0 0l-4-4m4 4H7m6 4v1a3 3 0 01-3 3H6a3 3 0 01-3-3V7a3 3 0 013-3h4a3 3 0 013 3v1" /></svg>
+                 Sign Out
+               </button>
+             </div>
+           */}
+          <button 
+             onClick={() => {
+               setView('settings');
+               setIsMobileMenuOpen(false);
+             }}
+             className={`w-full flex items-center gap-2 px-4 py-2 mt-2 bg-slate-800/60 hover:bg-slate-700/80 rounded-lg text-xs font-semibold uppercase tracking-wide transition-all ${view === 'settings' ? 'text-blue-400 bg-slate-700/90 border border-slate-700' : 'text-slate-400'}`}
+          >
+             <svg className="w-4 h-4 opacity-75" fill="none" stroke="currentColor" viewBox="0 0 24 24"><path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M10.325 4.317c.426-1.756 2.924-1.756 3.35 0a1.724 1.724 0 002.573 1.066c1.543-.94 3.31.826 2.37 2.37a1.724 1.724 0 001.065 2.572c1.756.426 1.756 2.924 0 3.35a1.724 1.724 0 00-1.066 2.573c.94 1.543-.826 3.31-2.37 2.37a1.724 1.724 0 00-2.572 1.065c-.426 1.756-2.924 1.756-3.35 0a1.724 1.724 0 00-2.573-1.066c-1.543.94-3.31-.826-2.37-2.37a1.724 1.724 0 00-1.065-2.572c-1.756-.426-1.756-2.924 0-3.35a1.724 1.724 0 001.066-2.573c-.94-1.543.826-3.31 2.37-2.37.996.608 2.296.07 2.572-1.065z" /><path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M15 12a3 3 0 11-6 0 3 3 0 016 0z" /></svg>
+             System Settings
+          </button>
       </div>
     </>
   );
+
+
+
+
 
   return (
     <div className="flex h-screen bg-slate-100 font-sans text-slate-900 overflow-hidden relative">
@@ -499,7 +748,11 @@ const App: React.FC = () => {
               >
                 <svg className="w-6 h-6" fill="none" stroke="currentColor" viewBox="0 0 24 24"><path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M4 6h16M4 12h16M4 18h16" /></svg>
               </button>
-              <h1 className="text-lg lg:text-xl font-bold text-slate-800 capitalize truncate">{NAV_ITEMS.find((n: any) => n.id === view)?.label}</h1>
+              <div className="flex items-baseline gap-2">
+                <h1 className="text-lg lg:text-xl font-bold text-slate-800 capitalize truncate">
+                  {view === 'settings' ? 'System Settings' : (NAV_ITEMS.find((n: any) => n.id === view)?.label || view)}
+                </h1>
+              </div>
             </div>
             
             <div className="flex items-center gap-2 lg:gap-4">
@@ -522,7 +775,7 @@ const App: React.FC = () => {
                     </button>
                 </div>
 
-                {view !== 'discrepancy' && (
+                {view !== 'discrepancy' && activeRole !== 'viewer' && (
                   <>
                     <button 
                         onClick={() => setIsImporting(true)}
@@ -555,6 +808,7 @@ const App: React.FC = () => {
                             onCargoClick={(p: CargoProfile) => handleEdit(p, 'dashboard')}
                             portfolioYear={portfolioYear}
                             editingProfileId={editingProfile?.id}
+                            userRole={activeRole}
                         />
                     </motion.div>
                 ) : view === 'cargos' ? (
@@ -567,8 +821,9 @@ const App: React.FC = () => {
                             onBulkDelete={handleBulkDelete}
                             onBulkUpdate={handleBulkUpdate}
                             onBulkImport={handleBulkImport}
-                            onForwardCurveUpdate={() => setForwardCurve(getForwardCurve())}
+                            onForwardCurveUpdate={async () => setForwardCurve(await getForwardCurve())}
                             trmsData={trmsData}
+                            userRole={activeRole}
                         />
                     </motion.div>
                 ) : view === 'exposure' ? (
@@ -587,9 +842,23 @@ const App: React.FC = () => {
                             trmsData={trmsData}
                             onTrmsUpload={setTrmsData}
                             onEditProfile={(p: CargoProfile) => handleEdit(p, 'list')}
-                            onForwardCurveUpdate={() => setForwardCurve(getForwardCurve())}
+                            onForwardCurveUpdate={async () => setForwardCurve(await getForwardCurve())}
                         />
                     </motion.div>
+                ) : view === 'settings' ? (
+                  <motion.div key="settings" initial={{opacity:0, x:-20}} animate={{opacity:1, x:0}} exit={{opacity:0, x:20}} className="w-full">
+                      <SettingsView 
+                        user={user} 
+                        userRole={userRole} 
+                        testRole={testRole}
+                        setTestRole={setTestRole}
+                        preferredYear={portfolioYear}
+                        onSetPreferredYear={(y) => {
+                          setPortfolioYear(y);
+                          setDoc(doc(db, 'users', user.uid), { preferredYear: y }, { merge: true });
+                        }}
+                      />
+                  </motion.div>
                 ) : null}
             </AnimatePresence>
         </div>
@@ -606,6 +875,7 @@ const App: React.FC = () => {
                             setIsEditing(false);
                             setEditingProfile(undefined);
                         }} 
+                        existingSources={existingSources}
                     />
                 </div>
             )}

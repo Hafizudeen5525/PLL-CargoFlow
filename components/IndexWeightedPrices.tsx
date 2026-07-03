@@ -1,6 +1,6 @@
 import React, { useMemo, useState } from 'react';
 import { CargoProfile, PnLBucket } from '../types';
-import { getIndexType, getIndexPrice, ForwardCurveRow, getHistoricalCurve, getForwardCurve } from '../services/calculationService';
+import { getIndexType, getIndexPrice, ForwardCurveRow, getHistoricalCurve, getForwardCurveSync } from '../services/calculationService';
 import { motion, AnimatePresence } from 'framer-motion';
 
 interface IndexWeightedPricesProps {
@@ -40,7 +40,7 @@ export const IndexWeightedPrices: React.FC<IndexWeightedPricesProps> = ({
   const [selectedIdxDetail, setSelectedIdxDetail] = useState<IndexWeightedResult | null>(null);
 
   const weightedResults = useMemo(() => {
-    const targetFullCurve = getForwardCurve(curveDate);
+    const targetFullCurve = getForwardCurveSync(curveDate);
 
     const results: IndexWeightedResult[] = INDEX_ORDER.map((idx: string) => {
         const stats = { 

@@ -1,5 +1,7 @@
 
-import { CargoProfile, PnLBucket, EmptyCargoProfile } from '../types';
+import { CargoProfile, PnLBucket, EmptyCargoProfile, ForwardCurveData, ForwardCurve, ForwardCurvePoint } from '../types';
+import { db, handleFirestoreError, FirestoreOperation, auth } from '../firebase';
+import { doc, setDoc, getDoc, collection, getDocs, deleteDoc, query, orderBy, limit } from 'firebase/firestore';
 
 export interface ForwardCurveRow {
     month: string; // YYYY-MM
@@ -112,10 +114,12 @@ const INDEX_ALIASES: Record<string, string> = {
     'STATION 2': 'STN 2',
     'STN 2': 'STN 2',
     'HH LAST DAY': 'HH Last Day',
-    'HENRY HUB LAST DAY': 'HH Last Day'
+    'HENRY HUB LAST DAY': 'HH Last Day',
+    'FIX AND FIRM': 'Fix and Firm'
 };
 
 const STORAGE_KEY_CURVES = 'forward_curves_data';
+const STORAGE_KEY_GRM_CURVES = 'grm_forward_curves_data';
 const STORAGE_KEY_HISTORICAL = 'historical_market_data';
 
 export const GROUPS = ['PL9SB', 'PFLNG1', 'PFLNG2', 'LNGC', 'Spot', 'Cheniere'];
@@ -207,6 +211,11 @@ export const getPricingMonths = (refDateStr: string | undefined, monthDef: strin
     const results: string[] = [];
     const cleanDef = (monthDef || 'n').toLowerCase().replace(/\s/g, '');
     
+    if (cleanDef === 'none') {
+        results.push(`${d.getFullYear()}-${String(d.getMonth() + 1).padStart(2, '0')}`);
+        return results;
+    }
+    
     const avgMatch = cleanDef.match(/\(?(\d+),(\d+),(\d+)\)?/);
     if (avgMatch) {
         const count = parseInt(avgMatch[1]);
@@ -286,10 +295,27 @@ function toMonthKey(date: Date): string {
     return `${y}-${m}`;
 }
 
+const priceLookupCache = new Map<string, { price: number, details: string, monthUsed: string }>();
+
 export function getIndexPrice(index: string, refDateStr: string, monthDef: string, curveDate?: string): { price: number, details: string, monthUsed: string } {
+    const cacheKey = `${index}-${refDateStr}-${monthDef}-${curveDate || 'latest'}`;
+    if (priceLookupCache.has(cacheKey)) {
+        return priceLookupCache.get(cacheKey)!;
+    }
+    
+    const result = getIndexPriceInternal(index, refDateStr, monthDef, curveDate);
+    
+    // Safety check to clear cache occasionally
+    if (priceLookupCache.size > 1000) priceLookupCache.clear();
+    priceLookupCache.set(cacheKey, result);
+    
+    return result;
+}
+
+function getIndexPriceInternal(index: string, refDateStr: string, monthDef: string, curveDate?: string): { price: number, details: string, monthUsed: string } {
     if (index === 'Fix and Firm') return { price: 0, details: 'Fixed Price', monthUsed: '' };
-    const curve = getForwardCurve(curveDate);
-    const historical = getHistoricalCurve();
+    const curve = getForwardCurveSync(curveDate);
+    const historical = getHistoricalCurveSync();
     
     if (!index || !refDateStr) return { price: 0, details: 'Missing Index or Ref Date', monthUsed: '' };
     
@@ -299,29 +325,33 @@ export function getIndexPrice(index: string, refDateStr: string, monthDef: strin
     const targetMonths: string[] = [];
     const label = monthDef || 'n';
     const cleanDef = (monthDef || 'n').toLowerCase().replace(/\s/g, '');
-    
-    const avgMatch = cleanDef.match(/\(?(\d+),(\d+),(\d+)\)?/);
-    if (avgMatch) {
-        const count = parseInt(avgMatch[1]);
-        const lag = parseInt(avgMatch[2]);
-        for (let i = 1; i <= count; i++) {
-            const date = new Date(d.getFullYear(), d.getMonth() - lag - i, 15);
+
+    if (cleanDef === 'none') {
+        targetMonths.push(toMonthKey(d));
+    } else {
+        const avgMatch = cleanDef.match(/\(?(\d+),(\d+),(\d+)\)?/);
+        if (avgMatch) {
+            const count = parseInt(avgMatch[1]);
+            const lag = parseInt(avgMatch[2]);
+            for (let i = 1; i <= count; i++) {
+                const date = new Date(d.getFullYear(), d.getMonth() - lag - i, 15);
+                targetMonths.push(toMonthKey(date));
+            }
+        } else {
+            let offset = 0;
+            if (cleanDef.includes('n-')) {
+                const val = cleanDef.split('n-')[1];
+                offset = -parseInt(val || '0');
+            } else if (cleanDef.includes('n+')) {
+                const val = cleanDef.split('n+')[1];
+                offset = parseInt(val || '0');
+            } else if (cleanDef === 'n') {
+                offset = 0;
+            }
+            
+            const date = new Date(d.getFullYear(), d.getMonth() + offset, 15);
             targetMonths.push(toMonthKey(date));
         }
-    } else {
-        let offset = 0;
-        if (cleanDef.includes('n-')) {
-            const val = cleanDef.split('n-')[1];
-            offset = -parseInt(val || '0');
-        } else if (cleanDef.includes('n+')) {
-            const val = cleanDef.split('n+')[1];
-            offset = parseInt(val || '0');
-        } else if (cleanDef === 'n') {
-            offset = 0;
-        }
-        
-        const date = new Date(d.getFullYear(), d.getMonth() + offset, 15);
-        targetMonths.push(toMonthKey(date));
     }
 
     let total = 0;
@@ -334,11 +364,16 @@ export function getIndexPrice(index: string, refDateStr: string, monthDef: strin
         const curveRow = curve.find((r: ForwardCurveRow) => r.month === m);
         const histRow = historical.find((r: ForwardCurveRow) => r.month === m);
         
-        if (histRow?.prices[canonicalIndex]) {
-            p = histRow.prices[canonicalIndex];
-        } else if (curveRow?.prices[canonicalIndex]) {
-            p = curveRow.prices[canonicalIndex];
-        }
+        const getVal = (row: ForwardCurveRow | undefined, idx: string) => {
+            if (!row) return 0;
+            if (row.prices[idx]) return row.prices[idx];
+            // Fallback HH Last Day to HH if missing
+            if (idx === 'HH Last Day' && row.prices['HH']) return row.prices['HH'];
+            return 0;
+        };
+
+        p = getVal(histRow, canonicalIndex);
+        if (p === 0) p = getVal(curveRow, canonicalIndex);
 
         if (p > 0) {
             total += p;
@@ -439,9 +474,90 @@ function formatMonthStr(dateStr: string): string {
     } catch { return ''; }
 }
 
+/** 
+ * REUSABLE FORMATTERS (Performance Optimization)
+ * Initializing these once avoids massive lag during render loops.
+ */
+export const currencyFormatter = new Intl.NumberFormat('en-US', { 
+    style: 'currency', 
+    currency: 'USD', 
+    maximumFractionDigits: 0 
+});
+
+export const priceFormatter = new Intl.NumberFormat('en-US', { 
+    style: 'currency', 
+    currency: 'USD', 
+    minimumFractionDigits: 4, 
+    maximumFractionDigits: 4 
+});
+
+export const formatCurrency = (val: number) => currencyFormatter.format(val || 0);
+export const formatPrice = (val: number, decimals: number = 4) => {
+    if (decimals === 4) return priceFormatter.format(val || 0);
+    return new Intl.NumberFormat('en-US', { 
+        style: 'currency', 
+        currency: 'USD', 
+        minimumFractionDigits: decimals, 
+        maximumFractionDigits: decimals 
+    }).format(val || 0);
+};
+
 export function recalculateProfile(p: Partial<CargoProfile>, useMarket: boolean = true, curveDate?: string): Partial<CargoProfile> {
     const up: CargoProfile = { ...EmptyCargoProfile, ...(p as any), id: (p as any).id || '' };
     
+    // Tiered Splitting Logic
+    // Sync total volumes if they are missing but granular ones are present (robustness for imports)
+    if (up.isTieredPricing) {
+        if (!up.totalLoadedVolume) {
+            up.totalLoadedVolume = (up.loadedVolume || 0) + (up.tier2LoadedVolume || 0);
+        }
+        if (!up.totalDeliveredVolume) {
+            up.totalDeliveredVolume = (up.deliveredVolume || 0) + (up.tier2DeliveredVolume || 0);
+        }
+        // If tiered but no limit set (e.g. Jarvis import), initialize limit to T1 volume to avoid re-splitting everything into T1
+        if (!up.tierLimit && up.loadedVolume && up.loadedVolume > 0 && up.tier2LoadedVolume && up.tier2LoadedVolume > 0) {
+            up.tierLimit = up.loadedVolume;
+        }
+    } else {
+        // Not tiered: Total MUST match Tier 1
+        if (up.totalLoadedVolume && up.totalLoadedVolume > 0) {
+            up.loadedVolume = up.totalLoadedVolume;
+        } else if (up.loadedVolume && up.loadedVolume > 0) {
+            up.totalLoadedVolume = up.loadedVolume;
+        }
+        
+        if (up.totalDeliveredVolume && up.totalDeliveredVolume > 0) {
+            up.deliveredVolume = up.totalDeliveredVolume;
+        } else if (up.deliveredVolume && up.deliveredVolume > 0) {
+            up.totalDeliveredVolume = up.deliveredVolume;
+        }
+    }
+
+    if (up.isTieredPricing && (up.tierLimit || 0) > 0) {
+        const limit = up.tierLimit || 0;
+        const totalL = up.totalLoadedVolume || 0;
+        const totalD = up.totalDeliveredVolume || 0;
+        
+        up.loadedVolume = Math.min(totalL, limit);
+        up.tier2LoadedVolume = Math.max(0, totalL - limit);
+        
+        up.deliveredVolume = Math.min(totalD, limit);
+        up.tier2DeliveredVolume = Math.max(0, totalD - limit);
+    } else if (up.isTieredPricing && (up.tierLimit || 0) <= 0) {
+        // If tiered but no limit, default to everything in T1 for safety 
+        up.loadedVolume = up.totalLoadedVolume || 0;
+        up.tier2LoadedVolume = 0;
+        up.deliveredVolume = up.totalDeliveredVolume || 0;
+        up.tier2DeliveredVolume = 0;
+    } else {
+        // If not tiered, tier 2 volumes should be 0
+        up.tier2LoadedVolume = 0;
+        up.tier2DeliveredVolume = 0;
+        // Tier 1 volume should match Total (already synced above, but enforced here)
+        up.loadedVolume = up.totalLoadedVolume || 0;
+        up.deliveredVolume = up.totalDeliveredVolume || 0;
+    }
+
     if (useMarket) {
         if (!up.isBuyPriceManual) {
             const rawBuyPrice = calculateLegPrice(up, 'buy', curveDate);
@@ -470,10 +586,14 @@ export function recalculateProfile(p: Partial<CargoProfile>, useMarket: boolean 
     const t1Revenue = (up.deliveredVolume || 0) * (up.absoluteSellPrice || 0);
     const t2Revenue = up.isTieredPricing ? (up.tier2DeliveredVolume || 0) * (up.absoluteTier2SellPrice || 0) : 0;
     up.salesRevenue = t1Revenue + t2Revenue;
+    up.finalSalesRevenueT1 = t1Revenue;
+    up.finalSalesRevenueT2 = t2Revenue;
     
     const t1PurchaseCost = (up.loadedVolume || 0) * (up.absoluteBuyPrice || 0);
     const t2PurchaseCost = up.isTieredPricing ? (up.tier2LoadedVolume || 0) * (up.absoluteTier2BuyPrice || 0) : 0;
     const totalPurchaseCost = t1PurchaseCost + t2PurchaseCost;
+    up.finalPurchaseCostT1 = t1PurchaseCost;
+    up.finalPurchaseCostT2 = t2PurchaseCost;
 
     const totalDelVol = (up.deliveredVolume || 0) + (up.tier2DeliveredVolume || 0);
     const calcSrcCost = (up.incoterms === 'DES') ? (up.srcUnitFee || 0) * totalDelVol : 0;
@@ -510,7 +630,7 @@ export function findDataGaps(profiles: CargoProfile[], curveDate?: string): Data
             const idx = (p as any)[`${type}PriceIndex${i}`];
             const mDef = (p as any)[`${type}Price${i}MonthDef`] || 'n';
             const date = (type === 'buy' || type === 'tier2Buy') ? p.loadingDate : p.deliveryDate;
-            if (idx && date) {
+            if (idx && date && idx !== 'Fix and Firm') {
                 const { price, monthUsed } = getIndexPrice(idx, date, mDef, curveDate);
                 if (price <= 0) {
                     const months = monthUsed.split(',');
@@ -534,52 +654,191 @@ export function findDataGaps(profiles: CargoProfile[], curveDate?: string): Data
     return Object.values(gaps).sort((a: DataGap, b: DataGap) => a.month.localeCompare(b.month));
 }
 
-export function getForwardCurve(dateStr?: string): ForwardCurveRow[] {
+const curveCache: Record<string, ForwardCurveRow[]> = {};
+let historicalCache: ForwardCurveRow[] | null = null;
+
+export async function getForwardCurve(dateStr?: string): Promise<ForwardCurveRow[]> {
+    if (!auth.currentUser) return [];
     try {
-        const raw = localStorage.getItem(STORAGE_KEY_CURVES);
-        if (!raw) return [];
-        const data = JSON.parse(raw);
+        const userId = auth.currentUser.uid;
         if (dateStr) {
-            return data[dateStr] || [];
+            if (curveCache[dateStr]) return curveCache[dateStr];
+            const docRef = doc(db, 'users', userId, 'forward_curves', dateStr);
+            const snap = await getDoc(docRef);
+            if (snap.exists()) {
+                const data = (snap.data().rows || []) as ForwardCurveRow[];
+                curveCache[dateStr] = data;
+                return data;
+            }
+            return [];
+        } else {
+            const q = query(collection(db, 'users', userId, 'forward_curves'), orderBy('asOfDate', 'desc'), limit(1));
+            const snap = await getDocs(q);
+            if (!snap.empty) {
+                const data = (snap.docs[0].data().rows || []) as ForwardCurveRow[];
+                const date = snap.docs[0].id;
+                curveCache[date] = data;
+                return data;
+            }
+            return [];
         }
-        const dates = Object.keys(data).sort().reverse();
-        return dates.length > 0 ? data[dates[0]] : [];
-    } catch { return []; }
+    } catch (err) {
+        handleFirestoreError(err, FirestoreOperation.GET, 'forward_curves');
+        return [];
+    }
 }
 
-export function getHistoricalCurve(): ForwardCurveRow[] {
+export async function getHistoricalCurve(): Promise<ForwardCurveRow[]> {
+    if (!auth.currentUser) return [];
+    if (historicalCache) return historicalCache;
     try {
-        const raw = localStorage.getItem(STORAGE_KEY_HISTORICAL);
-        if (!raw) return [];
-        return JSON.parse(raw);
-    } catch { return []; }
+        const docRef = doc(db, 'users', auth.currentUser.uid, 'market_data', 'historical');
+        const snap = await getDoc(docRef);
+        if (snap.exists()) {
+            const data = (snap.data().rows || []) as ForwardCurveRow[];
+            historicalCache = data;
+            return data;
+        }
+        return [];
+    } catch (err) {
+        handleFirestoreError(err, FirestoreOperation.GET, 'market_data/historical');
+        return [];
+    }
 }
 
-export function saveHistoricalCurve(curve: ForwardCurveRow[]) {
-    localStorage.setItem(STORAGE_KEY_HISTORICAL, JSON.stringify(curve));
+export async function saveHistoricalCurve(curve: ForwardCurveRow[]) {
+    if (!auth.currentUser) return;
+    historicalCache = curve;
+    try {
+        const docRef = doc(db, 'users', auth.currentUser.uid, 'market_data', 'historical');
+        await setDoc(docRef, { rows: curve, updatedAt: new Date().toISOString() });
+    } catch (err) {
+        handleFirestoreError(err, FirestoreOperation.WRITE, 'market_data/historical');
+    }
 }
 
-export function getAvailableCurveDates(): string[] {
-    const raw = localStorage.getItem(STORAGE_KEY_CURVES);
-    return raw ? Object.keys(JSON.parse(raw)).sort().reverse() : [];
+export async function getAvailableCurveDates(): Promise<string[]> {
+    if (!auth.currentUser) return [];
+    try {
+        const q = query(collection(db, 'users', auth.currentUser.uid, 'forward_curves'), orderBy('asOfDate', 'desc'));
+        const snap = await getDocs(q);
+        return snap.docs.map(d => d.id);
+    } catch (err) {
+        handleFirestoreError(err, FirestoreOperation.LIST, 'forward_curves');
+        return [];
+    }
 }
 
-export function saveForwardCurve(date: string, curve: ForwardCurveRow[]) {
-    const raw = localStorage.getItem(STORAGE_KEY_CURVES);
-    const data = raw ? JSON.parse(raw) : {};
-    data[date] = curve;
-    localStorage.setItem(STORAGE_KEY_CURVES, JSON.stringify(data));
+export async function saveForwardCurve(date: string, curve: ForwardCurveRow[]) {
+    if (!auth.currentUser) return;
+    try {
+        const docRef = doc(db, 'users', auth.currentUser.uid, 'forward_curves', date);
+        await setDoc(docRef, { asOfDate: date, rows: curve, userId: auth.currentUser.uid });
+    } catch (err) {
+        handleFirestoreError(err, FirestoreOperation.WRITE, `forward_curves/${date}`);
+    }
 }
 
-export function deleteForwardCurve(date: string) {
-    const raw = localStorage.getItem(STORAGE_KEY_CURVES);
-    if (!raw) return;
-    const data = JSON.parse(raw);
-    delete data[date];
-    localStorage.setItem(STORAGE_KEY_CURVES, JSON.stringify(data));
+export async function deleteForwardCurve(date: string) {
+    if (!auth.currentUser) return;
+    try {
+        const docRef = doc(db, 'users', auth.currentUser.uid, 'forward_curves', date);
+        await deleteDoc(docRef);
+    } catch (err) {
+        handleFirestoreError(err, FirestoreOperation.DELETE, `forward_curves/${date}`);
+    }
 }
 
-export function getPricesSnapshot(d?: string) { return getForwardCurve(d)[0]?.prices || {}; }
+const grmCurveCache: Record<string, ForwardCurveRow[]> = {};
+
+export async function getGRMForwardCurve(dateStr?: string): Promise<ForwardCurveRow[]> {
+    if (!auth.currentUser) return [];
+    try {
+        const userId = auth.currentUser.uid;
+        if (dateStr) {
+            if (grmCurveCache[dateStr]) return grmCurveCache[dateStr];
+            const docRef = doc(db, 'users', userId, 'grm_forward_curves', dateStr);
+            const snap = await getDoc(docRef);
+            if (snap.exists()) {
+                const data = (snap.data().rows || []) as ForwardCurveRow[];
+                grmCurveCache[dateStr] = data;
+                return data;
+            }
+            return [];
+        } else {
+            const q = query(collection(db, 'users', userId, 'grm_forward_curves'), orderBy('asOfDate', 'desc'), limit(1));
+            const snap = await getDocs(q);
+            if (!snap.empty) {
+                const data = (snap.docs[0].data().rows || []) as ForwardCurveRow[];
+                const date = snap.docs[0].id;
+                grmCurveCache[date] = data;
+                return data;
+            }
+            return [];
+        }
+    } catch (err) {
+        handleFirestoreError(err, FirestoreOperation.GET, 'grm_forward_curves');
+        return [];
+    }
+}
+
+export function getGRMForwardCurveSync(dateStr?: string): ForwardCurveRow[] {
+    if (dateStr) return grmCurveCache[dateStr] || [];
+    const keys = Object.keys(grmCurveCache).sort().reverse();
+    return keys.length > 0 ? grmCurveCache[keys[0]] : [];
+}
+
+export function getAvailableGRMCurveDatesSync(): string[] {
+    return Object.keys(grmCurveCache).sort().reverse();
+}
+
+export async function getAvailableGRMCurveDates(): Promise<string[]> {
+    if (!auth.currentUser) return [];
+    try {
+        const q = query(collection(db, 'users', auth.currentUser.uid, 'grm_forward_curves'), orderBy('asOfDate', 'desc'));
+        const snap = await getDocs(q);
+        return snap.docs.map(d => d.id);
+    } catch (err) {
+        handleFirestoreError(err, FirestoreOperation.LIST, 'grm_forward_curves');
+        return [];
+    }
+}
+
+export async function saveGRMForwardCurve(date: string, curve: ForwardCurveRow[]) {
+    if (!auth.currentUser) return;
+    try {
+        const docRef = doc(db, 'users', auth.currentUser.uid, 'grm_forward_curves', date);
+        await setDoc(docRef, { asOfDate: date, rows: curve, userId: auth.currentUser.uid });
+    } catch (err) {
+        handleFirestoreError(err, FirestoreOperation.WRITE, `grm_forward_curves/${date}`);
+    }
+}
+
+export async function deleteGRMForwardCurve(date: string) {
+    if (!auth.currentUser) return;
+    try {
+        const docRef = doc(db, 'users', auth.currentUser.uid, 'grm_forward_curves', date);
+        await deleteDoc(docRef);
+    } catch (err) {
+        handleFirestoreError(err, FirestoreOperation.DELETE, `grm_forward_curves/${date}`);
+    }
+}
+
+export function getAvailableCurveDatesSync(): string[] {
+    return Object.keys(curveCache).sort().reverse();
+}
+
+export function getForwardCurveSync(dateStr?: string): ForwardCurveRow[] {
+    if (dateStr) return curveCache[dateStr] || [];
+    const keys = Object.keys(curveCache).sort().reverse();
+    return keys.length > 0 ? curveCache[keys[0]] : [];
+}
+
+export function getHistoricalCurveSync(): ForwardCurveRow[] {
+    return historicalCache || [];
+}
+
+export function getPricesSnapshot(d?: string) { return getForwardCurveSync(d)[0]?.prices || {}; }
 export function getMarketData() { return getPricesSnapshot(); }
 export function getPortfolioYear(p: CargoProfile) { return new Date(p.deliveryDate || p.loadingDate || Date.now()).getFullYear(); }
 
@@ -594,8 +853,12 @@ export function detectUnit(f?: string) {
 export function explainPricing(f: string | undefined, d: string | undefined, curveDate?: string) {
     if (!f || !d) return { pricingMode: 'Error', details: 'Missing data' };
     const price = evaluateFormula(f, d, curveDate);
-    if (price === null || price <= 0) return { pricingMode: 'Error', details: 'No valid price found in curve' };
-    return { pricingMode: 'Calculated', details: 'Using Formula/Components' };
+    
+    // Fix and Firm doesn't need a curve, so we don't treat price <= 0 as an error if it's present
+    const isFixAndFirm = f.toUpperCase().includes('FIX AND FIRM');
+    if (price === null || (price <= 0 && !isFixAndFirm)) return { pricingMode: 'Error', details: 'No valid price found in curve' };
+    
+    return { pricingMode: 'Calculated', details: isFixAndFirm ? 'Fixed Price' : 'Using Formula/Components' };
 }
 
 export function analyzeFormulaStructure(f: string, d?: string, curveDate?: string): { parts: PricingMetadata[], globalConstant: string, warnings: string[] } {

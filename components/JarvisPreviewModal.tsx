@@ -90,12 +90,12 @@ export const JarvisPreviewModal: React.FC<JarvisPreviewModalProps> = ({ existing
                           mixed[field] = (original as any)[field];
                       }
                   });
-                  const { _status, _changes, totalLoadedVolume, totalDeliveredVolume, ...cleanMixed } = mixed;
+                  const { _status, _changes, ...cleanMixed } = mixed;
                   finalImports.push(recalculateProfile(cleanMixed, true) as CargoProfile);
                   return;
               }
           }
-          const { _status, _changes, totalLoadedVolume, totalDeliveredVolume, ...rest } = row;
+          const { _status, _changes, ...rest } = row;
           finalImports.push(rest as CargoProfile);
       });
       onImport(finalImports);

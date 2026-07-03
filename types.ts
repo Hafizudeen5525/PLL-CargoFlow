@@ -25,6 +25,9 @@ export interface CargoProfile {
   incoterms: string;
   src: string;
   pnlBucket: PnLBucket;
+  isShared?: boolean;
+  userId?: string;
+  deleted?: boolean;
   reconciledPurchaseCost: number;
   finalSalesRevenue: number;
   reconciledSalesRevenue: number;
@@ -139,6 +142,12 @@ export interface CargoProfile {
   sellPriceOverallConstantWeightage?: number;
   
   jarvisNo?: string;
+  tierLimit?: number;
+
+  finalSalesRevenueT1?: number;
+  finalSalesRevenueT2?: number;
+  finalPurchaseCostT1?: number;
+  finalPurchaseCostT2?: number;
 }
 
 export interface ForwardCurvePoint {
@@ -155,6 +164,10 @@ export interface ForwardCurveData {
   asOfDate: string;
   curves: ForwardCurve[];
   fileName?: string;
+}
+
+export interface GRMForwardCurveData extends ForwardCurveData {
+  isGRM: boolean;
 }
 
 export const EmptyCargoProfile: Omit<CargoProfile, 'id'> = {
@@ -176,6 +189,8 @@ export const EmptyCargoProfile: Omit<CargoProfile, 'id'> = {
   incoterms: 'FOB',
   src: '',
   pnlBucket: PnLBucket.Unrealized,
+  isShared: false,
+  deleted: false,
   reconciledPurchaseCost: 0,
   finalSalesRevenue: 0,
   reconciledSalesRevenue: 0,
@@ -183,6 +198,10 @@ export const EmptyCargoProfile: Omit<CargoProfile, 'id'> = {
   finalPhysicalPnL: 0,
   totalHedgingPnL: 0,
   finalTotalPnL: 0,
+  finalSalesRevenueT1: 0,
+  finalSalesRevenueT2: 0,
+  finalPurchaseCostT1: 0,
+  finalPurchaseCostT2: 0,
   volumeUnit: 'MMBtu',
   loadingWindowStart: '',
   loadingWindowEnd: '',
@@ -206,7 +225,8 @@ export const EmptyCargoProfile: Omit<CargoProfile, 'id'> = {
   tier2BuyFormula: '',
   absoluteTier2BuyPrice: 0,
   tier2BuyPriceRounding: 3,
-  isTier2BuyPriceManual: false
+  isTier2BuyPriceManual: false,
+  tierLimit: 0
 };
 
 export interface YearlyReportData {

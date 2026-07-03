@@ -1,10 +1,29 @@
 import React, { useState, useMemo, useRef, useEffect, useCallback, memo } from 'react';
 import { motion, AnimatePresence } from 'framer-motion';
+import { 
+  Search, 
+  ArrowUpDown, 
+  Filter, 
+  Check, 
+  X, 
+  ChevronDown, 
+  ChevronUp, 
+  Download, 
+  RefreshCw, 
+  SlidersHorizontal, 
+  Eye, 
+  EyeOff, 
+  Sigma,
+  Info
+} from 'lucide-react';
 import { AutoScalingText } from './AutoScalingText';
 import { toast } from 'react-hot-toast';
 import * as XLSX from 'xlsx';
+import { DataQualityDashboard } from './DataQualityDashboard';
 import { CargoProfile, PnLBucket, ForwardCurveData, ForwardCurve, ForwardCurvePoint } from '../types';
-import { getGroupName, GROUPS, saveForwardCurve, ForwardCurveRow } from '../services/calculationService';
+import { TrmsSummaryTable } from './TrmsSummaryTable';
+import { getGroupName, GROUPS, saveForwardCurve, ForwardCurveRow, getForwardCurve, getAvailableCurveDates, getGRMForwardCurve, getAvailableGRMCurveDates, formatCurrency } from '../services/calculationService';
+import { LineChart, Line, XAxis, YAxis, CartesianGrid, Tooltip, Legend, ResponsiveContainer } from 'recharts';
 
 export interface TRMSCommodityLeg {
     price: number;
@@ -116,6 +135,7 @@ export interface ReconciliationData {
     uniqueValues: Record<string, Record<string, any[]>>;
     portfolioName?: string;
     portfolioYear?: string;
+    extractedRows?: any[];
     summary: {
         total: number;
         src: number;
@@ -143,7 +163,7 @@ type SortConfig = {
   direction: 'asc' | 'desc';
 };
 
-type TRMSTab = 'reconcile' | 'src' | 'hedging' | 'paper';
+type TRMSTab = 'reconcile' | 'quality' | 'curves' | 'extracted' | 'summary' | 'executive';
 
 const ROW_HEIGHT = 140; 
 const VISIBLE_ROWS = 40; 
@@ -219,6 +239,104 @@ export const DiscrepancyCheck: React.FC<DiscrepancyCheckProps> = ({
   onForwardCurveUpdate
 }) => {
   const [activeTab, setActiveTab] = useState<TRMSTab>('reconcile');
+
+  const uniqueStrategiesCount = useMemo(() => {
+    const sNames = new Set<string>();
+    (trmsData.extractedRows || []).forEach((r: any) => {
+      const sn = String(r['Strategy Name'] || r['Strategy'] || '').trim();
+      if (sn) sNames.add(sn);
+    });
+    return sNames.size;
+  }, [trmsData.extractedRows]);
+
+  const allQualityIssuesCount = useMemo(() => {
+    let count = 0;
+    const hasUnbalancedParenthesesLocal = (formula: string): boolean => {
+      if (!formula) return false;
+      let c = 0;
+      for (const char of formula) {
+        if (char === '(') c++;
+        else if (char === ')') c--;
+        if (c < 0) return true;
+      }
+      return c !== 0;
+    };
+
+    profiles.filter(p => !p.deleted).forEach(p => {
+      // 1. Date Inversion
+      if (p.loadingDate && p.deliveryDate) {
+        const load = new Date(p.loadingDate);
+        const del = new Date(p.deliveryDate);
+        if (!isNaN(load.getTime()) && !isNaN(del.getTime()) && load.getTime() > del.getTime()) count++;
+      }
+      // 2. Missing Dates
+      if (!p.loadingDate) count++;
+      if (!p.deliveryDate) count++;
+      
+      // 3. Unnamed Strategy
+      if (!p.strategyName || p.strategyName.trim() === '' || p.strategyName.toLowerCase() === 'unnamed strategy' || p.strategyName.toLowerCase() === 'unnamed') count++;
+      
+      // 4. Quantity/Volume checks (zero or negative)
+      const totalLoaded = p.totalLoadedVolume ?? p.loadedVolume;
+      const totalDelivered = p.totalDeliveredVolume ?? p.deliveredVolume;
+      if (totalLoaded === undefined || totalLoaded === null || totalLoaded <= 0) count++;
+      if (totalDelivered === undefined || totalDelivered === null || totalDelivered <= 0) count++;
+
+      if (p.isTieredPricing) {
+        if (p.tier2LoadedVolume === undefined || p.tier2LoadedVolume === null || p.tier2LoadedVolume < 0) count++;
+        if (p.tier2DeliveredVolume === undefined || p.tier2DeliveredVolume === null || p.tier2DeliveredVolume < 0) count++;
+      }
+
+      // 5. Two-Tier Volume checks
+      if (p.isTieredPricing) {
+        const sumLoaded = (p.loadedVolume || 0) + (p.tier2LoadedVolume || 0);
+        const sumDelivered = (p.deliveredVolume || 0) + (p.tier2DeliveredVolume || 0);
+        if (totalLoaded && Math.abs(sumLoaded - totalLoaded) > 0.05) count++;
+        if (totalDelivered && Math.abs(sumDelivered - totalDelivered) > 0.05) count++;
+        if (!p.tierLimit || p.tierLimit <= 0) count++;
+      }
+
+      // 6. Pricing Checks
+      if (p.isBuyPriceManual) {
+        if (p.absoluteBuyPrice === undefined || p.absoluteBuyPrice === null || p.absoluteBuyPrice <= 0 || p.absoluteBuyPrice > 75) count++;
+      }
+      if (p.isSellPriceManual) {
+        if (p.absoluteSellPrice === undefined || p.absoluteSellPrice === null || p.absoluteSellPrice <= 0 || p.absoluteSellPrice > 75) count++;
+      }
+      if (p.isTieredPricing && p.isTier2BuyPriceManual) {
+        if (p.absoluteTier2BuyPrice === undefined || p.absoluteTier2BuyPrice === null || p.absoluteTier2BuyPrice <= 0) count++;
+      }
+      if (p.isTieredPricing && p.isTier2SellPriceManual) {
+        if (p.absoluteTier2SellPrice === undefined || p.absoluteTier2SellPrice === null || p.absoluteTier2SellPrice <= 0) count++;
+      }
+
+      // 7. Formula parentheses
+      if (!p.isBuyPriceManual && p.buyFormula && hasUnbalancedParenthesesLocal(p.buyFormula)) count++;
+      if (!p.isSellPriceManual && p.sellFormula && hasUnbalancedParenthesesLocal(p.sellFormula)) count++;
+      if (p.isTieredPricing) {
+        if (!p.isTier2BuyPriceManual && p.tier2BuyFormula && hasUnbalancedParenthesesLocal(p.tier2BuyFormula)) count++;
+        if (!p.isTier2SellPriceManual && p.tier2SellFormula && hasUnbalancedParenthesesLocal(p.tier2SellFormula)) count++;
+      }
+
+      // 8. Buyer missing
+      if (!p.buyer || p.buyer.trim() === '') count++;
+
+      // 9. Shipping / SRC checks
+      if (p.incoterms === 'FOB') {
+        const hasUnitFee = p.srcUnitFee && p.srcUnitFee > 0;
+        const hasReconciledCost = p.reconciledSrcCost && p.reconciledSrcCost > 0;
+        const hasSrcCodeIndicator = p.src && p.src.trim() !== '';
+        if (hasUnitFee || hasReconciledCost || hasSrcCodeIndicator) count++;
+      }
+      if (p.incoterms === 'DES') {
+        const lacksUnitFee = !p.srcUnitFee || p.srcUnitFee <= 0;
+        const lacksReconciledCost = !p.reconciledSrcCost || p.reconciledSrcCost <= 0;
+        if (lacksUnitFee && lacksReconciledCost) count++;
+      }
+      if (!p.incoterms || p.incoterms.trim() === '') count++;
+    });
+    return count;
+  }, [profiles]);
   const [isParsing, setIsParsing] = useState(false);
   const [showSyncModal, setShowSyncModal] = useState(false);
   const [pendingData, setPendingData] = useState<ReconciliationData | null>(null);
@@ -399,6 +517,7 @@ export const DiscrepancyCheck: React.FC<DiscrepancyCheckProps> = ({
       uniqueValues: {},
       portfolioName: 'Unknown',
       portfolioYear: 'Unknown',
+      extractedRows: [],
       summary: { total: 0, src: 0, hedging: 0, paper: 0 },
       fileNames: Array.from(files).map(f => f.name)
     };
@@ -425,6 +544,9 @@ export const DiscrepancyCheck: React.FC<DiscrepancyCheckProps> = ({
             aggregatedData.src.push(...result.src);
             aggregatedData.hedging.push(...result.hedging);
             aggregatedData.paper.push(...result.paper);
+            if (result.extractedRows) {
+              aggregatedData.extractedRows?.push(...result.extractedRows);
+            }
             
             // Merge trmsAgg
             Object.entries(result.trmsAgg).forEach(([key, value]) => {
@@ -684,7 +806,11 @@ export const DiscrepancyCheck: React.FC<DiscrepancyCheckProps> = ({
 
   const currentRawData = useMemo(() => {
     if (activeTab === 'reconcile') return reconciliationData;
-    return trmsData[activeTab as keyof ReconciliationData] as any[];
+    if (activeTab === 'quality') return [];
+    if (activeTab === 'curves') return [];
+    if (activeTab === 'summary') return [];
+    const val = (trmsData as any)[activeTab];
+    return Array.isArray(val) ? val : [];
   }, [activeTab, trmsData, reconciliationData]);
 
   const headers = useMemo(() => {
@@ -1223,7 +1349,7 @@ export const DiscrepancyCheck: React.FC<DiscrepancyCheckProps> = ({
     toast.success("Excel report downloaded successfully.");
   };
 
-  const formatUSD = (val: number) => new Intl.NumberFormat('en-US', { style: 'currency', currency: 'USD', maximumFractionDigits: 0 }).format(val);
+  const formatUSD = formatCurrency;
 
   const stats = useMemo(() => {
     const totalDiscrepancies = reconciliationData.reduce((acc, r) => acc + r.discrepancies.size, 0);
@@ -1275,10 +1401,25 @@ export const DiscrepancyCheck: React.FC<DiscrepancyCheckProps> = ({
     return { totalDiscrepancies, totalSrcValue, totalHedgingPnL, avgErrors, totals, criticalErrorsCount, errorCounts };
   }, [reconciliationData, trmsData.trmsAgg]);
 
-  const handleConfirmSync = () => {
+  const [availableDates, setAvailableDates] = useState<string[]>([]);
+  const [availableGRMDates, setAvailableGRMDates] = useState<string[]>([]);
+
+  useEffect(() => {
+    const fetchDates = async () => {
+      const [dates, grmDates] = await Promise.all([
+        getAvailableCurveDates(),
+        getAvailableGRMCurveDates()
+      ]);
+      setAvailableDates(dates);
+      setAvailableGRMDates(grmDates);
+    };
+    fetchDates();
+  }, []);
+
+  const handleConfirmSync = async () => {
     if (pendingData) {
       if (syncOptions.syncForwardCurves && pendingData.forwardCurves && pendingData.forwardCurves.length > 0) {
-        pendingData.forwardCurves.forEach(fc => {
+        for (const fc of pendingData.forwardCurves) {
           const monthToPrices: Record<string, Record<string, number>> = {};
           fc.curves.forEach(curve => {
             curve.points.forEach(point => {
@@ -1293,11 +1434,18 @@ export const DiscrepancyCheck: React.FC<DiscrepancyCheckProps> = ({
           })).sort((a, b) => a.month.localeCompare(b.month));
 
           if (rows.length > 0) {
-            saveForwardCurve(fc.asOfDate, rows);
+            await saveForwardCurve(fc.asOfDate, rows);
             toast.success(`Forward curve for ${fc.asOfDate} imported.`);
             if (onForwardCurveUpdate) onForwardCurveUpdate();
           }
-        });
+        }
+        // Refresh dates after import
+        const [dates, grmDates] = await Promise.all([
+          getAvailableCurveDates(),
+          getAvailableGRMCurveDates()
+        ]);
+        setAvailableDates(dates);
+        setAvailableGRMDates(grmDates);
       }
 
       onTrmsUpload({
@@ -1447,18 +1595,49 @@ export const DiscrepancyCheck: React.FC<DiscrepancyCheckProps> = ({
 
       <div className="flex flex-wrap gap-2 flex-shrink-0">
           <TabButton active={activeTab === 'reconcile'} onClick={() => setActiveTab('reconcile')} label="App vs TRMS Reconciliation" count={reconciliationData.filter(r => r.discrepancies.size > 0).length} color="rose" />
-          <TabButton active={activeTab === 'src'} onClick={() => setActiveTab('src')} label="SRC Raw Lines" count={trmsData.summary.src} color="indigo" />
-          <TabButton active={activeTab === 'hedging'} onClick={() => setActiveTab('hedging')} label="Hedging Lines" count={trmsData.summary.hedging} color="emerald" />
-          <TabButton active={activeTab === 'paper'} onClick={() => setActiveTab('paper')} label="DH/DFT Lines" count={trmsData.summary.paper} color="amber" />
+          <TabButton active={activeTab === 'extracted'} onClick={() => setActiveTab('extracted')} label="Extracted TRMS Table" count={trmsData.extractedRows?.length || 0} color="indigo" />
+          <TabButton active={activeTab === 'executive'} onClick={() => setActiveTab('executive')} label="Executive Dashboard" count={0} color="emerald" />
+          <TabButton active={activeTab === 'summary'} onClick={() => setActiveTab('summary')} label="TRMS Summary Table" count={uniqueStrategiesCount} color="violet" />
+          <TabButton active={activeTab === 'quality'} onClick={() => setActiveTab('quality')} label="Data Quality" count={allQualityIssuesCount} color="amber" />
+          <TabButton active={activeTab === 'curves'} onClick={() => setActiveTab('curves')} label="Curve Comparison" count={Array.from(new Set([...availableDates, ...availableGRMDates])).length} color="blue" />
       </div>
 
-      <div className="h-[2000px] bg-white rounded-xl border border-slate-200 shadow-sm overflow-hidden flex flex-col">
-        <div className="p-3 border-b border-slate-100 bg-slate-50/50 flex flex-col md:flex-row justify-between items-center gap-3 flex-shrink-0">
+      <div className="flex-1 min-h-[600px] bg-white rounded-xl border border-slate-200 shadow-sm overflow-hidden flex flex-col">
+        {activeTab === 'summary' ? (
+          <TrmsSummaryTable trmsData={trmsData} viewModeOnly="grid" />
+        ) : activeTab === 'executive' ? (
+          <TrmsSummaryTable trmsData={trmsData} viewModeOnly="dashboard" />
+        ) : activeTab === 'curves' ? (
+          <CurveComparison availableDates={availableDates} availableGRMDates={availableGRMDates} />
+        ) : activeTab === 'quality' ? (
+          <DataQualityDashboard profiles={profiles} trmsData={trmsData} onEditProfile={onEditProfile} />
+        ) : activeTab === 'extracted' ? (
+          <ExtractedTrmsTable trmsData={trmsData} />
+        ) : (
+          <>
+            <div className="p-3 border-b border-slate-100 bg-slate-50/50 flex flex-col md:flex-row justify-between items-center gap-3 flex-shrink-0">
           <div className="flex items-center gap-3 w-full md:w-auto">
             <div className="relative w-full md:w-80">
-              <input type="text" placeholder={`Search strategy...`} value={searchTerm} onChange={(e) => setSearchTerm(e.target.value)} className="block w-full pl-10 pr-3 py-2 border border-slate-300 rounded-lg text-xs font-medium focus:ring-2 focus:ring-indigo-500/20" />
+              <input type="text" placeholder={`Search strategy...`} value={searchTerm} onChange={(e) => setSearchTerm(e.target.value)} className="block w-full pl-10 pr-10 py-2 border border-slate-300 rounded-lg text-xs font-medium focus:ring-2 focus:ring-indigo-500/20" />
               <svg className="absolute left-3 top-2.5 h-4 w-4 text-slate-400" fill="none" stroke="currentColor" viewBox="0 0 24 24"><path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M21 21l-6-6m2-5a7 7 0 11-14 0 7 7 0 0114 0z" /></svg>
+              {searchTerm && (
+                <button 
+                  onClick={() => setSearchTerm('')}
+                  className="absolute right-3 top-2.5 text-slate-400 hover:text-slate-600"
+                >
+                  <svg className="w-4 h-4" fill="none" stroke="currentColor" viewBox="0 0 24 24"><path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M6 18L18 6M6 6l12 12" /></svg>
+                </button>
+              )}
             </div>
+            {Object.keys(activeFilters).length > 0 && (
+              <button 
+                onClick={() => setActiveFilters({})}
+                className="px-3 py-2 text-rose-600 text-[10px] font-black uppercase hover:bg-rose-50 rounded-lg transition-colors flex items-center gap-1.5 border border-rose-100"
+              >
+                <svg className="w-3 h-3" fill="none" stroke="currentColor" viewBox="0 0 24 24"><path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M6 18L18 6M6 6l12 12" /></svg>
+                Clear Filters
+              </button>
+            )}
             <button 
               onClick={handleDownloadReport}
               className="px-4 py-2 bg-white border border-slate-200 text-slate-700 text-xs font-bold rounded-lg hover:bg-slate-50 hover:border-slate-300 transition-all flex items-center gap-2 shadow-sm"
@@ -1686,7 +1865,9 @@ export const DiscrepancyCheck: React.FC<DiscrepancyCheckProps> = ({
             </div>
           )}
         </div>
-      </div>
+      </>
+    )}
+  </div>
 
       {/* Summary Cards moved below table */}
       <div className="grid grid-cols-1 md:grid-cols-2 lg:grid-cols-4 gap-3 flex-shrink-0">
@@ -1734,6 +1915,7 @@ export const DiscrepancyCheck: React.FC<DiscrepancyCheckProps> = ({
               </div>
           </div>
       </div>
+    </div>
       {/* Report Preview Modal */}
       <AnimatePresence>
         {showReportPreview && (
@@ -1820,26 +2002,60 @@ export const DiscrepancyCheck: React.FC<DiscrepancyCheckProps> = ({
 
               <div className="flex-1 overflow-auto p-6 bg-slate-50/30">
                 <div className="bg-white rounded-2xl border border-slate-200 shadow-sm overflow-x-auto custom-scrollbar">
-                  <table className="w-full text-left border-collapse min-w-max">
+                    <table className="w-full text-left border-collapse min-w-max">
                     <thead>
                       <tr className="bg-slate-50 border-b border-slate-200">
-                        {Object.keys(viewingRawData[0] || {}).map(key => (
-                          <th key={key} className="px-4 py-3 text-[10px] font-black text-slate-500 uppercase tracking-wider border-r border-slate-200 last:border-r-0 whitespace-nowrap">
-                            {key}
-                          </th>
-                        ))}
+                        {(() => {
+                          const allKeys = new Set<string>();
+                          viewingRawData.forEach(r => Object.keys(r).forEach(k => allKeys.add(k)));
+                          const sortedKeys = WHITELIST_COLUMNS.filter(k => allKeys.has(k));
+                          // Add any keys not in whitelist at the end
+                          const otherKeys = Array.from(allKeys).filter(k => !WHITELIST_COLUMNS.includes(k));
+                          const finalHeaders = [...sortedKeys, ...otherKeys];
+                          
+                          return (
+                            <>
+                              {finalHeaders.map(key => (
+                                <th key={key} className="px-4 py-3 text-[10px] font-black text-slate-500 uppercase tracking-wider border-r border-slate-200 last:border-r-0 whitespace-nowrap">
+                                  {key}
+                                </th>
+                              ))}
+                            </>
+                          );
+                        })()}
                       </tr>
                     </thead>
                     <tbody>
-                      {viewingRawData.map((row, i) => (
-                        <tr key={i} className="border-b border-slate-100 last:border-b-0 hover:bg-slate-50/50 transition-colors">
-                          {Object.values(row).map((val: any, j) => (
-                            <td key={j} className="px-4 py-3 text-[11px] text-slate-600 border-r border-slate-100 last:border-r-0 font-mono whitespace-nowrap">
-                              {val instanceof Date ? val.toLocaleDateString() : String(val ?? '-')}
-                            </td>
-                          ))}
-                        </tr>
-                      ))}
+                      {(() => {
+                        const allKeys = new Set<string>();
+                        viewingRawData.forEach(r => Object.keys(r).forEach(k => allKeys.add(k)));
+                        const sortedKeys = WHITELIST_COLUMNS.filter(k => allKeys.has(k));
+                        const otherKeys = Array.from(allKeys).filter(k => !WHITELIST_COLUMNS.includes(k));
+                        const finalHeaders = [...sortedKeys, ...otherKeys];
+
+                        const formatVal = (v: any) => {
+                          if (v === null || v === undefined) return '-';
+                          if (typeof v === 'number') {
+                            // Fix floating point precision issues (e.g. 7.81 showing as 7.8099999999999993)
+                            const s = String(v);
+                            if (s.includes('.') && s.split('.')[1].length > 8) {
+                              return Number(v.toFixed(6)).toString();
+                            }
+                            return v.toString();
+                          }
+                          return String(v);
+                        };
+
+                        return viewingRawData.map((row, i) => (
+                          <tr key={i} className="border-b border-slate-100 last:border-b-0 hover:bg-slate-50/50 transition-colors">
+                            {finalHeaders.map((key, j) => (
+                              <td key={j} className="px-4 py-3 text-[11px] text-slate-600 border-r border-slate-100 last:border-r-0 font-mono whitespace-nowrap">
+                                {formatVal(row[key])}
+                              </td>
+                            ))}
+                          </tr>
+                        ));
+                      })()}
                     </tbody>
                   </table>
                 </div>
@@ -1861,7 +2077,6 @@ export const DiscrepancyCheck: React.FC<DiscrepancyCheckProps> = ({
         )}
       </AnimatePresence>
     </div>
-  </div>
   );
 };
 
@@ -1881,20 +2096,20 @@ const AlignedSplitCell = ({
     label,
     onDeepDive
 }: { 
-    type: 'price' | 'vol' | 'value', 
-    appVal: number, 
-    trmsLegs: TRMSCommodityLeg[], 
-    found: boolean, 
-    width: number, 
-    formatUSD: (v: number) => string, 
-    errorPct: number,
-    isTiered?: boolean,
-    tier1Val?: number,
-    tier2Val?: number,
-    effectiveVal?: number,
-    totalVol?: number,
-    label?: string,
-    onDeepDive?: (rows: any[]) => void
+    type: 'price' | 'vol' | 'value';
+    appVal: number;
+    trmsLegs: TRMSCommodityLeg[];
+    found: boolean;
+    width: number;
+    formatUSD: (v: number) => string;
+    errorPct: number;
+    isTiered?: boolean;
+    tier1Val?: number;
+    tier2Val?: number;
+    effectiveVal?: number;
+    totalVol?: number;
+    label?: string;
+    onDeepDive?: (rows: any[]) => void;
 }) => (
     <div className="px-4 py-2 shrink-0 flex flex-col justify-center border-r border-slate-50 overflow-hidden" style={{ width }}>
         <div className="flex flex-col mb-2 pb-1 border-b border-slate-50 group/app">
@@ -2276,8 +2491,1440 @@ const ReconciliationRowItem = memo(({ row, activeTab, columnWidths, handleRowEdi
 });
 
 const TabButton = ({ active, onClick, label, count, color }: { active: boolean, onClick: () => void, label: string, count: number, color: string }) => {
-    const cls = { indigo: 'text-indigo-600 border-indigo-500 bg-indigo-50', emerald: 'text-emerald-600 border-emerald-500 bg-emerald-50', amber: 'text-amber-600 border-amber-500 bg-amber-50', rose: 'text-rose-600 border-rose-500 bg-rose-50' }[color as 'indigo'|'emerald'|'amber'|'rose'];
+    const cls = { 
+        indigo: 'text-indigo-600 border-indigo-500 bg-indigo-50', 
+        emerald: 'text-emerald-600 border-emerald-500 bg-emerald-50', 
+        amber: 'text-amber-600 border-amber-500 bg-amber-50', 
+        rose: 'text-rose-600 border-rose-500 bg-rose-50',
+        blue: 'text-blue-600 border-blue-500 bg-blue-50',
+        violet: 'text-violet-600 border-violet-500 bg-violet-50'
+    }[color as 'indigo'|'emerald'|'amber'|'rose'|'blue'|'violet'] || 'text-indigo-600 border-indigo-500 bg-indigo-50';
     return (
         <button onClick={onClick} className={`px-4 py-3 text-xs font-bold border-b-2 flex items-center gap-2 ${active ? cls : 'border-transparent text-slate-400 hover:text-slate-600'}`}>{label} {count > 0 && <span className={`px-1.5 py-0.5 rounded-full text-[10px] ${active ? 'bg-white shadow-sm' : 'bg-slate-100 text-slate-500'}`}>{count.toLocaleString()}</span>}</button>
     );
 };
+
+const CurveComparison: React.FC<{ availableDates: string[], availableGRMDates: string[] }> = ({ availableDates, availableGRMDates }) => {
+    const [selectedDate, setSelectedDate] = useState<string>('');
+    const [selectedIndex, setSelectedIndex] = useState('TTF');
+    const [chartData, setChartData] = useState<any[]>([]);
+    const [isLoading, setIsLoading] = useState(false);
+
+    useEffect(() => {
+        if (availableDates.length > 0 && !selectedDate) {
+            setSelectedDate(availableDates[0]);
+        }
+    }, [availableDates, selectedDate]);
+
+    useEffect(() => {
+        const fetchCurves = async () => {
+            if (!selectedDate) return;
+            setIsLoading(true);
+            try {
+                const [normalCurve, grmCurve] = await Promise.all([
+                    getForwardCurve(selectedDate),
+                    getGRMForwardCurve(selectedDate)
+                ]);
+                
+                const allMonths = Array.from(new Set([...normalCurve.map(r => r.month), ...grmCurve.map(r => r.month)])).sort();
+                
+                const data = allMonths.map(month => {
+                    const nVal = normalCurve.find(r => r.month === month)?.prices[selectedIndex] || null;
+                    const gVal = grmCurve.find(r => r.month === month)?.prices[selectedIndex] || null;
+                    return {
+                        month,
+                        'Normal Curve': nVal,
+                        'GRM Curve (Endur)': gVal,
+                        'Diff': (nVal !== null && gVal !== null) ? nVal - gVal : null
+                    };
+                });
+                setChartData(data);
+            } catch (error) {
+                console.error("Error fetching curves:", error);
+                toast.error("Failed to fetch curve data");
+            } finally {
+                setIsLoading(false);
+            }
+        };
+        fetchCurves();
+    }, [selectedDate, selectedIndex]);
+
+    const indices = ['TTF', 'JKM', 'HH', 'Dated Brent', 'NBP', 'AECO', 'STN 2'];
+
+    const handleDownloadCurveData = () => {
+        if (chartData.length === 0) {
+            toast.error("No curve data to download");
+            return;
+        }
+        const ws = XLSX.utils.json_to_sheet(chartData);
+        const wb = XLSX.utils.book_new();
+        XLSX.utils.book_append_sheet(wb, ws, "Curve Comparison");
+        XLSX.writeFile(wb, `Curve_Comparison_${selectedIndex}_${selectedDate}.xlsx`);
+        toast.success("Curve data exported to Excel");
+    };
+
+    if (availableDates.length === 0 && availableGRMDates.length === 0) {
+        return (
+            <div className="flex-1 flex flex-col items-center justify-center p-20 text-slate-400 bg-slate-50">
+                <svg className="w-16 h-16 mb-4 opacity-20 text-indigo-600" fill="none" stroke="currentColor" viewBox="0 0 24 24"><path strokeLinecap="round" strokeLinejoin="round" strokeWidth={1.5} d="M7 12l3-3 3 3 4-4M8 21l4-4 4 4" /></svg>
+                <p className="font-bold text-slate-600 uppercase tracking-widest text-sm">No Curve Data Available</p>
+                <p className="text-xs text-center max-w-xs mt-2">
+                    Upload a TRMS file containing forward curves to begin comparison.
+                </p>
+            </div>
+        );
+    }
+
+    return (
+        <div className="flex-1 flex flex-col overflow-hidden bg-slate-50">
+            <div className="p-6 border-b border-slate-200 bg-white flex flex-wrap items-center gap-6 shadow-sm">
+                <div className="space-y-1">
+                    <label className="text-[10px] font-black text-slate-400 uppercase tracking-widest">Pricing Index</label>
+                    <select 
+                        value={selectedIndex} 
+                        onChange={(e) => setSelectedIndex(e.target.value)}
+                        className="block w-48 border border-slate-200 rounded-xl px-4 py-2.5 text-sm font-bold text-slate-700 outline-none focus:ring-2 focus:ring-indigo-500/20"
+                    >
+                        {indices.map(idx => <option key={idx} value={idx}>{idx}</option>)}
+                    </select>
+                </div>
+                <div className="space-y-1">
+                    <label className="text-[10px] font-black text-slate-400 uppercase tracking-widest">Comparison Date</label>
+                    <select 
+                        value={selectedDate} 
+                        onChange={(e) => setSelectedDate(e.target.value)}
+                        className="block w-48 border border-slate-200 rounded-xl px-4 py-2.5 text-sm font-bold text-slate-700 outline-none focus:ring-2 focus:ring-indigo-500/20"
+                    >
+                        {Array.from(new Set([...availableDates, ...availableGRMDates])).sort().reverse().map(d => (
+                            <option key={d} value={d}>{d}</option>
+                        ))}
+                    </select>
+                </div>
+                <div className="flex items-center gap-4 ml-auto">
+                    <button 
+                        onClick={handleDownloadCurveData}
+                        className="px-4 py-2.5 bg-white border border-slate-200 text-slate-700 text-xs font-bold rounded-xl hover:bg-slate-50 hover:border-slate-300 transition-all flex items-center gap-2 shadow-sm"
+                    >
+                        <svg className="w-4 h-4 text-emerald-600" fill="none" stroke="currentColor" viewBox="0 0 24 24"><path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M12 10v6m0 0l-3-3m3 3l3-3m2 8H7a2 2 0 01-2-2V5a2 2 0 012-2h5.586a1 1 0 01.707.293l5.414 5.414a1 1 0 01.293.707V19a2 2 0 01-2 2z" /></svg>
+                        Export CSV
+                    </button>
+                    <div className="h-10 w-px bg-slate-200 mx-2" />
+                    {isLoading && <span className="text-xs text-slate-400 animate-pulse">Loading curves...</span>}
+                    <div className="flex items-center gap-2">
+                        <div className="w-3 h-3 bg-indigo-600 rounded-full"></div>
+                        <span className="text-[10px] font-bold text-slate-500 uppercase">Normal Curve</span>
+                    </div>
+                    <div className="flex items-center gap-2">
+                        <div className="w-3 h-3 bg-rose-500 rounded-full"></div>
+                        <span className="text-[10px] font-bold text-slate-500 uppercase">GRM Curve</span>
+                    </div>
+                </div>
+            </div>
+
+            <div className="flex-1 overflow-y-auto p-6 space-y-6">
+                <div className="grid grid-cols-1 lg:grid-cols-3 gap-6">
+                    <div className="lg:col-span-2 bg-white p-6 rounded-2xl border border-slate-200 shadow-sm h-[500px]">
+                        <h3 className="text-sm font-black text-slate-800 uppercase tracking-tight mb-6 flex items-center gap-2">
+                            <svg className="w-4 h-4 text-indigo-600" fill="none" stroke="currentColor" viewBox="0 0 24 24"><path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M7 12l3-3 3 3 4-4M8 21l4-4 4 4" /></svg>
+                            Visual Comparison: {selectedIndex}
+                        </h3>
+                        <ResponsiveContainer width="100%" height="90%">
+                            <LineChart data={chartData}>
+                                <CartesianGrid strokeDasharray="3 3" vertical={false} stroke="#f1f5f9" />
+                                <XAxis dataKey="month" tick={{fontSize: 10, fontWeight: 700}} axisLine={false} tickLine={false} />
+                                <YAxis axisLine={false} tickLine={false} tick={{fontSize: 10}} />
+                                <Tooltip 
+                                    contentStyle={{ borderRadius: '12px', border: 'none', boxShadow: '0 10px 15px -3px rgba(0,0,0,0.1)' }}
+                                    formatter={(value: number) => [value.toFixed(4), '']}
+                                />
+                                <Legend verticalAlign="top" align="right" />
+                                <Line type="monotone" dataKey="Normal Curve" stroke="#4f46e5" strokeWidth={4} dot={{ r: 4, fill: '#4f46e5', strokeWidth: 2, stroke: '#fff' }} animationDuration={600} />
+                                <Line type="monotone" dataKey="GRM Curve (Endur)" stroke="#f43f5e" strokeWidth={4} dot={{ r: 4, fill: '#f43f5e', strokeWidth: 2, stroke: '#fff' }} strokeDasharray="6 6" animationDuration={600} />
+                            </LineChart>
+                        </ResponsiveContainer>
+                    </div>
+
+                    <div className="bg-white rounded-2xl border border-slate-200 shadow-sm flex flex-col overflow-hidden">
+                        <div className="p-4 border-b border-slate-100 bg-slate-50/50">
+                            <h3 className="text-[10px] font-black text-slate-400 uppercase tracking-widest">Numerical Variance</h3>
+                        </div>
+                        <div className="flex-1 overflow-y-auto custom-scrollbar">
+                            <table className="w-full text-left border-collapse">
+                                <thead className="sticky top-0 bg-white shadow-sm z-10">
+                                    <tr className="border-b border-slate-100">
+                                        <th className="px-4 py-3 text-[9px] font-black text-slate-400 uppercase">Month</th>
+                                        <th className="px-4 py-3 text-[9px] font-black text-slate-400 uppercase text-right">Normal</th>
+                                        <th className="px-4 py-3 text-[9px] font-black text-slate-400 uppercase text-right">GRM</th>
+                                        <th className="px-4 py-3 text-[9px] font-black text-slate-400 uppercase text-right">Diff</th>
+                                    </tr>
+                                </thead>
+                                <tbody className="divide-y divide-slate-50">
+                                    {chartData.map(row => (
+                                        <tr key={row.month} className="hover:bg-slate-50 transition-colors">
+                                            <td className="px-4 py-2.5 text-[10px] font-bold text-slate-700">{row.month}</td>
+                                            <td className="px-4 py-2.5 text-[10px] font-mono text-right text-slate-600">{row['Normal Curve']?.toFixed(4) || '-'}</td>
+                                            <td className="px-4 py-2.5 text-[10px] font-mono text-right text-slate-600">{row['GRM Curve (Endur)']?.toFixed(4) || '-'}</td>
+                                            <td className={`px-4 py-2.5 text-[10px] font-mono font-bold text-right ${row.Diff && Math.abs(row.Diff) > 0.0001 ? (row.Diff > 0 ? 'text-rose-500' : 'text-emerald-500') : 'text-slate-300'}`}>
+                                                {row.Diff ? (row.Diff > 0 ? '+' : '') + row.Diff.toFixed(4) : '-'}
+                                            </td>
+                                        </tr>
+                                    ))}
+                                </tbody>
+                            </table>
+                        </div>
+                    </div>
+                </div>
+            </div>
+        </div>
+    );
+};
+
+export const ExtractedTrmsTable: React.FC<{ trmsData: ReconciliationData }> = ({ trmsData }) => {
+  const [searchTerm, setSearchTerm] = useState('');
+  const [currentPage, setCurrentPage] = useState(1);
+  const [pageSize, setPageSize] = useState(100);
+  const [showGridlines, setShowGridlines] = useState(true);
+
+  const columns = useMemo(() => [
+    'Deal Num', 'Reference', 'Internal Portfolio', 'External Legal Entity',
+    'Trade Date', 'Start Date', 'End Date', 'Buy_Sell', 'Price', 'Strike', 
+    'Base_Total_Value_USD', 'Change_in_Total_PnL', 'Payment Date', 
+    'Plsb Year Bucket', 'Volume', 'Unit', 'Strategy Name', 'Ins Type', 
+    'Event Source', 'Settlement Type', 'Cflow Type', 'Volume Type', 
+    'Price Status', 'EOD Date', 'Tran_Status', 'Yday_Tran_Status', 
+    'Incoterm', 'BU_L1', 'BU_L2', 'BU_L3', 'BU_L4', 'BU_L5', 'BU_L6', 
+    'Trader', 'IndexName_ProjectionMethod'
+  ], []);
+
+  const numCols = useMemo(() => [
+    'Price', 'Strike', 'Base_Total_Value_USD', 'Change_in_Total_PnL', 'Volume'
+  ], []);
+
+  const [visibleColumns, setVisibleColumns] = useState<Set<string>>(() => new Set(columns));
+  const [isColumnPickerOpen, setIsColumnPickerOpen] = useState(false);
+  const [activeFilterMenu, setActiveFilterMenu] = useState<string | null>(null);
+  const [selectedRows, setSelectedRows] = useState<Set<number>>(new Set());
+
+  // Filters state
+  const [sortConfig, setSortConfig] = useState<{ column: string; direction: 'asc' | 'desc' | null }>({
+    column: '',
+    direction: null,
+  });
+
+  const [columnFilters, setColumnFilters] = useState<Record<string, {
+    selectedValues: Set<string>;
+    condition: string;
+    conditionValue1: string;
+    conditionValue2: string;
+  }>>({});
+
+  const [filterSearchTerms, setFilterSearchTerms] = useState<Record<string, string>>({});
+
+  const rows = useMemo(() => trmsData.extractedRows || [], [trmsData.extractedRows]);
+
+  // Click outside handling for menus
+  const menuRef = useRef<HTMLDivElement>(null);
+  const colPickerRef = useRef<HTMLDivElement>(null);
+
+  useEffect(() => {
+    const handleClickOutside = (event: MouseEvent) => {
+      const target = event.target as Node;
+      if (menuRef.current && !menuRef.current.contains(target)) {
+        setActiveFilterMenu(null);
+      }
+      if (colPickerRef.current && !colPickerRef.current.contains(target)) {
+        setIsColumnPickerOpen(false);
+      }
+    };
+    document.addEventListener('mousedown', handleClickOutside);
+    return () => {
+      document.removeEventListener('mousedown', handleClickOutside);
+    };
+  }, []);
+
+  // Compute unique values inside each column
+  const uniqueValues = useMemo(() => {
+    const map: Record<string, { value: string; count: number }[]> = {};
+    columns.forEach(col => {
+      const counts: Record<string, number> = {};
+      rows.forEach((row: any) => {
+        const v = String(row[col] !== undefined && row[col] !== null ? row[col] : '').trim();
+        counts[v] = (counts[v] || 0) + 1;
+      });
+      map[col] = Object.entries(counts)
+        .map(([value, count]) => ({ value, count }))
+        .sort((a, b) => b.count - a.count);
+    });
+    return map;
+  }, [rows, columns]);
+
+  // Main Comprehensive Filter and Sort Engine
+  const filteredAndSortedRows = useMemo(() => {
+    let result = [...rows];
+
+    // 1. Global text search
+    if (searchTerm.trim()) {
+      const term = searchTerm.toLowerCase();
+      result = result.filter((row: any) => {
+        return Object.entries(row).some(([col, val]) => {
+          if (!visibleColumns.has(col)) return false;
+          return String(val || '').toLowerCase().includes(term);
+        });
+      });
+    }
+
+    // 2. Multi-column filters
+    Object.entries(columnFilters).forEach(([col, filter]) => {
+      // A. Value checkbox selections
+      if (filter.selectedValues && filter.selectedValues.size > 0) {
+        result = result.filter((row: any) => {
+          const val = String(row[col] !== undefined && row[col] !== null ? row[col] : '').trim();
+          return filter.selectedValues.has(val);
+        });
+      }
+
+      // B. Condition operations
+      if (filter.condition && filter.condition !== 'none') {
+        const cond = filter.condition;
+        const val1 = filter.conditionValue1.toLowerCase();
+        const val2 = filter.conditionValue2.toLowerCase();
+
+        result = result.filter((row: any) => {
+          const rawVal = row[col];
+          const valStr = String(rawVal === undefined || rawVal === null ? '' : rawVal);
+          const valStrLower = valStr.toLowerCase();
+          const valNum = Number(String(rawVal || '').replace(/[^0-9.-]/g, ''));
+
+          switch (cond) {
+            case 'contains':
+              return valStrLower.includes(val1);
+            case 'notContains':
+              return !valStrLower.includes(val1);
+            case 'equals':
+              return valStrLower === val1;
+            case 'notEquals':
+              return valStrLower !== val1;
+            case 'starts':
+              return valStrLower.startsWith(val1);
+            case 'ends':
+              return valStrLower.endsWith(val1);
+            case 'empty':
+              return valStr.trim() === '';
+            case 'notEmpty':
+              return valStr.trim() !== '';
+            case 'gt':
+              return !isNaN(valNum) && valNum > Number(val1);
+            case 'lt':
+              return !isNaN(valNum) && valNum < Number(val1);
+            case 'between':
+              return !isNaN(valNum) && valNum >= Number(val1) && valNum <= Number(val2);
+            default:
+              return true;
+          }
+        });
+      }
+    });
+
+    // 3. Sorting
+    if (sortConfig.column && sortConfig.direction) {
+      const col = sortConfig.column;
+      const isAsc = sortConfig.direction === 'asc';
+      result.sort((a, b) => {
+        const valA = a[col];
+        const valB = b[col];
+
+        const numA = Number(String(valA || '').replace(/[^0-9.-]/g, ''));
+        const numB = Number(String(valB || '').replace(/[^0-9.-]/g, ''));
+
+        // Number sort
+        if (!isNaN(numA) && !isNaN(numB) && valA !== '' && valB !== '' && numCols.includes(col)) {
+          return isAsc ? numA - numB : numB - numA;
+        }
+
+        // String locale sort
+        const strA = String(valA || '').toLowerCase();
+        const strB = String(valB || '').toLowerCase();
+        return isAsc ? strA.localeCompare(strB) : strB.localeCompare(strA);
+      });
+    }
+
+    return result;
+  }, [rows, searchTerm, columnFilters, sortConfig, visibleColumns, numCols]);
+
+  // Auto-clear selected rows when layout data adjusts
+  useEffect(() => {
+    setSelectedRows(new Set());
+  }, [columnFilters, searchTerm]);
+
+  // Compute dynamic aggregations (Excel Bottom Status Bar style)
+  const targetGroupForStats = useMemo(() => {
+    if (selectedRows.size > 0) {
+      const selectionArray = Array.from(selectedRows);
+      return filteredAndSortedRows.filter((_, idx) => selectedRows.has(idx));
+    }
+    return filteredAndSortedRows;
+  }, [filteredAndSortedRows, selectedRows]);
+
+  const stats = useMemo(() => {
+    const totalLines = targetGroupForStats.length;
+    let sumValue = 0;
+    let sumPnL = 0;
+    let sumVolume = 0;
+    let priceSum = 0;
+    let priceCount = 0;
+
+    targetGroupForStats.forEach((row: any) => {
+      const valStr = String(row['Base_Total_Value_USD'] || '').replace(/[^0-9.-]/g, '');
+      const pnlStr = String(row['Change_in_Total_PnL'] || '').replace(/[^0-9.-]/g, '');
+      const volStr = String(row['Volume'] || '').replace(/[^0-9.-]/g, '');
+      const prcStr = String(row['Price'] || '').replace(/[^0-9.-]/g, '');
+
+      const v = Number(valStr);
+      const p = Number(pnlStr);
+      const vol = Number(volStr);
+      const prc = Number(prcStr);
+
+      if (!isNaN(v) && valStr !== '') sumValue += v;
+      if (!isNaN(p) && pnlStr !== '') sumPnL += p;
+      if (!isNaN(vol) && volStr !== '') sumVolume += vol;
+      if (!isNaN(prc) && prcStr !== '' && prc !== 0) {
+        priceSum += prc;
+        priceCount++;
+      }
+    });
+
+    return {
+      count: totalLines,
+      sumValue,
+      avgValue: totalLines > 0 ? sumValue / totalLines : 0,
+      sumPnL,
+      avgPnL: totalLines > 0 ? sumPnL / totalLines : 0,
+      sumVolume,
+      avgVolume: totalLines > 0 ? sumVolume / totalLines : 0,
+      avgPrice: priceCount > 0 ? priceSum / priceCount : 0
+    };
+  }, [targetGroupForStats]);
+
+  // Pagination bounds
+  const totalPages = Math.max(1, Math.ceil(filteredAndSortedRows.length / pageSize));
+  const paginatedRows = useMemo(() => {
+    const start = (currentPage - 1) * pageSize;
+    return filteredAndSortedRows.slice(start, start + pageSize);
+  }, [filteredAndSortedRows, currentPage, pageSize]);
+
+  // Helpers to act on columns
+  const toggleColumnVisibility = (col: string) => {
+    setVisibleColumns(prev => {
+      const next = new Set(prev);
+      if (next.has(col)) {
+        if (next.size > 1) next.delete(col); // Keep at least one column visible
+      } else {
+        next.add(col);
+      }
+      return next;
+    });
+  };
+
+  const handleApplyConditionFilter = (col: string, condition: string, val1: string, val2: string) => {
+    setColumnFilters(prev => {
+      const current = prev[col] || { selectedValues: new Set<string>(), condition: 'none', conditionValue1: '', conditionValue2: '' };
+      return {
+        ...prev,
+        [col]: {
+          ...current,
+          condition,
+          conditionValue1: val1,
+          conditionValue2: val2
+        }
+      };
+    });
+    setCurrentPage(1);
+  };
+
+  const handleToggleUniqueValueCheckbox = (col: string, val: string) => {
+    setColumnFilters(prev => {
+      const current = prev[col] || { selectedValues: new Set<string>(), condition: 'none', conditionValue1: '', conditionValue2: '' };
+      const newSel = new Set(current.selectedValues);
+      if (newSel.has(val)) {
+        newSel.delete(val);
+      } else {
+        newSel.add(val);
+      }
+      return {
+        ...prev,
+        [col]: {
+          ...current,
+          selectedValues: newSel
+        }
+      };
+    });
+    setCurrentPage(1);
+  };
+
+  const handleSelectAllUniqueValues = (col: string, selectAll: boolean) => {
+    setColumnFilters(prev => {
+      const current = prev[col] || { selectedValues: new Set<string>(), condition: 'none', conditionValue1: '', conditionValue2: '' };
+      const newSel = new Set<string>();
+      if (!selectAll) {
+        // Find visible matches within checklist and populate them to define exact filter
+        const checklistSearchTerm = (filterSearchTerms[col] || '').toLowerCase();
+        const uValues = uniqueValues[col] || [];
+        uValues.forEach(uv => {
+          if (uv.value.toLowerCase().includes(checklistSearchTerm)) {
+            newSel.add(uv.value);
+          }
+        });
+      }
+      return {
+        ...prev,
+        [col]: {
+          ...current,
+          selectedValues: newSel
+        }
+      };
+    });
+    setCurrentPage(1);
+  };
+
+  const handleClearColumnFilter = (col: string) => {
+    setColumnFilters(prev => {
+      const next = { ...prev };
+      delete next[col];
+      return next;
+    });
+  };
+
+  const handleClearAllFilters = () => {
+    setColumnFilters({});
+    setSearchTerm('');
+    setSortConfig({ column: '', direction: null });
+    setCurrentPage(1);
+  };
+
+  // Preset quick filter triggers
+  const handleApplyPresetFilter = (preset: 'highValue' | 'losses' | 'buys' | 'sells' | 'clear') => {
+    if (preset === 'clear') {
+      handleClearAllFilters();
+      return;
+    }
+    
+    handleClearAllFilters();
+    
+    setTimeout(() => {
+      if (preset === 'highValue') {
+        setColumnFilters({
+          'Base_Total_Value_USD': {
+            selectedValues: new Set(),
+            condition: 'gt',
+            conditionValue1: '1000000',
+            conditionValue2: ''
+          }
+        });
+      } else if (preset === 'losses') {
+        setColumnFilters({
+          'Change_in_Total_PnL': {
+            selectedValues: new Set(),
+            condition: 'lt',
+            conditionValue1: '0',
+            conditionValue2: ''
+          }
+        });
+      } else if (preset === 'buys') {
+        const buyValues = new Set<string>();
+        const uValues = uniqueValues['Buy_Sell'] || [];
+        uValues.forEach(uv => {
+          const l = uv.value.toLowerCase();
+          if (l === 'buy' || l === 'buys' || l.includes('buy')) {
+            buyValues.add(uv.value);
+          }
+        });
+        if (buyValues.size === 0) {
+          buyValues.add('BUY');
+          buyValues.add('Buy');
+          buyValues.add('buys');
+        }
+        setColumnFilters({
+          'Buy_Sell': {
+            selectedValues: buyValues,
+            condition: 'none',
+            conditionValue1: '',
+            conditionValue2: ''
+          }
+        });
+      } else if (preset === 'sells') {
+        const sellValues = new Set<string>();
+        const uValues = uniqueValues['Buy_Sell'] || [];
+        uValues.forEach(uv => {
+          const l = uv.value.toLowerCase();
+          if (l === 'sell' || l === 'sells' || l.includes('sell')) {
+            sellValues.add(uv.value);
+          }
+        });
+        if (sellValues.size === 0) {
+          sellValues.add('SELL');
+          sellValues.add('Sell');
+          sellValues.add('sells');
+        }
+        setColumnFilters({
+          'Buy_Sell': {
+            selectedValues: sellValues,
+            condition: 'none',
+            conditionValue1: '',
+            conditionValue2: ''
+          }
+        });
+      }
+    }, 50);
+  };
+
+  // Row selection states
+  const handleSelectPageCheckbox = (checked: boolean) => {
+    const startIndex = (currentPage - 1) * pageSize;
+    setSelectedRows(prev => {
+      const next = new Set(prev);
+      paginatedRows.forEach((_, idx) => {
+        const globalIdx = startIndex + idx;
+        if (checked) {
+          next.add(globalIdx);
+        } else {
+          next.delete(globalIdx);
+        }
+      });
+      return next;
+    });
+  };
+
+  const handleSelectRow = (globalIdx: number, checked: boolean) => {
+    setSelectedRows(prev => {
+      const next = new Set(prev);
+      if (checked) {
+        next.add(globalIdx);
+      } else {
+        next.delete(globalIdx);
+      }
+      return next;
+    });
+  };
+
+  const isAllPageSelected = useMemo(() => {
+    if (paginatedRows.length === 0) return false;
+    const startIndex = (currentPage - 1) * pageSize;
+    return paginatedRows.every((_, idx) => selectedRows.has(startIndex + idx));
+  }, [paginatedRows, selectedRows, currentPage, pageSize]);
+
+  // Export dynamically configured CSV (only filtered rows & visible columns option)
+  const handleExportCSV = (exportOnlyVisibleCols: boolean = false) => {
+    if (filteredAndSortedRows.length === 0) return;
+
+    const targetCols = columns.filter(c => !exportOnlyVisibleCols || visibleColumns.has(c));
+    const headerRow = targetCols.map(c => `"${c.replace(/"/g, '""')}"`).join(',');
+    const bodyRows = filteredAndSortedRows.map(row => {
+      return targetCols.map(col => {
+        const val = row[col] === undefined || row[col] === null ? '' : String(row[col]);
+        return `"${val.replace(/"/g, '""')}"`;
+      }).join(',');
+    });
+
+    const csvContent = "data:text/csv;charset=utf-8,\uFEFF" + [headerRow, ...bodyRows].join('\n');
+    const encodedUri = encodeURI(csvContent);
+    const link = document.createElement("a");
+    link.setAttribute("href", encodedUri);
+    link.setAttribute("download", `extracted_trms_reconciliation_${new Date().toISOString().split('T')[0]}.csv`);
+    document.body.appendChild(link);
+    link.click();
+    document.body.removeChild(link);
+    toast.success("Successfully exported current view as CSV!");
+  };
+
+  const renderCellContent = (col: string, val: any) => {
+    if (val === undefined || val === null) return '';
+    const num = Number(val);
+    if (!isNaN(num) && val !== '' && numCols.includes(col)) {
+      if (col === 'Base_Total_Value_USD' || col === 'Change_in_Total_PnL') {
+        const sign = num < 0 ? '-' : '';
+        return `${sign}$${Math.abs(num).toLocaleString(undefined, { minimumFractionDigits: 0, maximumFractionDigits: 2 })}`;
+      }
+      if (col === 'Price' || col === 'Strike') {
+        return num.toLocaleString(undefined, { minimumFractionDigits: 2, maximumFractionDigits: 4 });
+      }
+      if (col === 'Volume') {
+        return num.toLocaleString(undefined, { maximumFractionDigits: 3 });
+      }
+    }
+    return String(val);
+  };
+
+  return (
+    <div className="flex-1 flex flex-col min-h-0 bg-slate-900 border border-slate-800 text-slate-100 h-full select-none">
+      
+      {/* 1. Header Toolbar with actions */}
+      <div className="p-4 border-b border-slate-800 bg-slate-900/80 flex flex-col xl:flex-row justify-between items-stretch xl:items-center gap-4">
+        
+        {/* Left Search and Active Filter count */}
+        <div className="flex flex-wrap items-center gap-3">
+          <div className="relative w-full sm:w-80">
+            <input 
+              type="text" 
+              placeholder="Global Excel search (fuzzy tracking)..." 
+              value={searchTerm} 
+              onChange={(e) => {
+                setSearchTerm(e.target.value);
+                setCurrentPage(1);
+              }} 
+              className="block w-full pl-10 pr-10 py-1.5 bg-slate-950/80 border border-slate-750 hover:border-slate-650 rounded-lg text-xs font-medium text-slate-200 placeholder-slate-500 focus:ring-2 focus:ring-indigo-500/50 focus:border-indigo-500 focus:outline-none transition-all" 
+            />
+            <Search className="absolute left-3 top-2.5 h-3.5 w-3.5 text-slate-500" />
+            {searchTerm && (
+              <button 
+                onClick={() => {
+                  setSearchTerm('');
+                  setCurrentPage(1);
+                }} 
+                className="absolute right-3 top-2.5 text-slate-500 hover:text-slate-300"
+              >
+                <X className="w-4 h-4" />
+              </button>
+            )}
+          </div>
+
+          <div className="flex items-center gap-2">
+            <span className="text-xs px-2.5 py-1 bg-slate-950 rounded-full text-slate-400 font-mono flex items-center gap-1.5 border border-slate-800">
+              <span className="w-1.5 h-1.5 bg-indigo-500 rounded-full animate-pulse"></span>
+              <strong>{filteredAndSortedRows.length}</strong> of {rows.length} rows
+            </span>
+            {Object.keys(columnFilters).length > 0 && (
+              <button 
+                onClick={handleClearAllFilters}
+                className="text-xs px-2.5 py-1 bg-rose-950/40 text-rose-400 border border-rose-900 hover:bg-rose-950/80 rounded-full flex items-center gap-1.5 transition-colors"
+                title="Clear all active column sorting & filters"
+              >
+                <X className="w-3 h-3" />
+                Clear Filters ({Object.keys(columnFilters).length})
+              </button>
+            )}
+          </div>
+        </div>
+
+        {/* Action presets and custom configuration toggles */}
+        <div className="flex flex-wrap items-center gap-2.5">
+          {/* Quick Preset Selector */}
+          <div className="flex items-center bg-slate-950 rounded-lg p-0.5 border border-slate-800 text-slate-400 text-xs">
+            <span className="px-2 font-semibold text-[10px] uppercase text-slate-550 hidden md:inline">Presets:</span>
+            <button 
+              onClick={() => handleApplyPresetFilter('buys')}
+              className="px-2 py-1 rounded hover:text-white hover:bg-slate-850 text-[11px]"
+            >
+              Buys
+            </button>
+            <button 
+              onClick={() => handleApplyPresetFilter('sells')}
+              className="px-2 py-1 rounded hover:text-white hover:bg-slate-850 text-[11px]"
+            >
+              Sells
+            </button>
+            <button 
+              onClick={() => handleApplyPresetFilter('highValue')}
+              className="px-2 py-1 rounded hover:text-white hover:bg-slate-850 text-[11px]"
+              title="Deals where Value > $1,000,000 USD"
+            >
+              &gt; $1M
+            </button>
+            <button 
+              onClick={() => handleApplyPresetFilter('losses')}
+              className="px-2 py-1 rounded hover:text-white hover:bg-slate-850 text-[11px]"
+              title="Deals with Negative Realized P&L"
+            >
+              Losses
+            </button>
+          </div>
+
+          {/* Gridline display toggle */}
+          <button 
+            onClick={() => setShowGridlines(prev => !prev)}
+            className={`px-3 py-1.5 border rounded-lg text-xs font-semibold flex items-center gap-1.5 transition-colors ${showGridlines ? 'bg-slate-800 text-indigo-400 border-indigo-500/30' : 'bg-slate-950/60 text-slate-400 border-slate-800'}`}
+            title="Toggle Excel Cell Borders Grid"
+          >
+            <SlidersHorizontal className="w-3.5 h-3.5" />
+            Gridlines: {showGridlines ? 'ON' : 'OFF'}
+          </button>
+
+          {/* Column Picker popover */}
+          <div className="relative" ref={colPickerRef}>
+            <button 
+              onClick={() => setIsColumnPickerOpen(!isColumnPickerOpen)}
+              className="px-3 py-1.5 bg-slate-950 select-none hover:bg-slate-850 border border-slate-800 hover:border-slate-700 text-xs font-semibold text-slate-300 hover:text-white rounded-lg flex items-center gap-1.5 transition-all"
+            >
+              <Eye className="w-3.5 h-3.5 text-blue-400" />
+              Columns ({visibleColumns.size}/{columns.length})
+              <ChevronDown className="w-3 h-3 text-slate-500" />
+            </button>
+
+            <AnimatePresence>
+              {isColumnPickerOpen && (
+                <motion.div 
+                  initial={{ opacity: 0, y: 10 }}
+                  animate={{ opacity: 1, y: 0 }}
+                  exit={{ opacity: 0, y: 10 }}
+                  className="absolute right-0 mt-2 w-72 bg-slate-950 border border-slate-800 rounded-xl shadow-2xl p-3 z-50 flex flex-col"
+                >
+                  <div className="flex justify-between items-center mb-2 pb-2 border-b border-slate-850">
+                    <span className="text-xs font-bold text-slate-300">Toggle Column Visibility</span>
+                    <div className="flex gap-1">
+                      <button 
+                        onClick={() => setVisibleColumns(new Set(columns))}
+                        className="text-[10px] px-1.5 py-0.5 bg-slate-800 hover:bg-slate-700 text-slate-300 rounded"
+                      >
+                        All
+                      </button>
+                      <button 
+                        onClick={() => setVisibleColumns(new Set(['Deal Num', 'Reference', 'Price', 'Volume', 'Base_Total_Value_USD', 'Change_in_Total_PnL']))}
+                        className="text-[10px] px-1.5 py-0.5 bg-slate-800 hover:bg-slate-700 text-slate-300 rounded"
+                      >
+                        Reset
+                      </button>
+                    </div>
+                  </div>
+                  <div className="max-h-72 overflow-y-auto custom-scrollbar flex flex-col gap-1.5 pr-1">
+                    {columns.map(col => {
+                      const isChecked = visibleColumns.has(col);
+                      return (
+                        <label key={col} className="flex items-center gap-2 px-2 py-1 hover:bg-slate-900 rounded cursor-pointer text-xs select-none">
+                          <input 
+                            type="checkbox" 
+                            checked={isChecked}
+                            onChange={() => toggleColumnVisibility(col)}
+                            className="bg-slate-800 border-slate-700 text-indigo-500 rounded focus:ring-0 focus:ring-offset-0"
+                          />
+                          <span className={isChecked ? 'text-slate-200' : 'text-slate-500 line-through'}>{col}</span>
+                        </label>
+                      );
+                    })}
+                  </div>
+                </motion.div>
+              )}
+            </AnimatePresence>
+          </div>
+
+          {/* Export Actions with drop configuration */}
+          <div className="flex items-center gap-1.5">
+            <button 
+              onClick={() => handleExportCSV(false)}
+              disabled={filteredAndSortedRows.length === 0}
+              className="px-3.5 py-1.5 bg-indigo-600 hover:bg-indigo-500 disabled:opacity-40 disabled:cursor-not-allowed text-xs font-bold rounded-lg flex items-center justify-center gap-1.5 transition-colors text-white"
+              title="Export all rows of the table"
+            >
+              <Download className="w-3.5 h-3.5" />
+              CSV (All Cols)
+            </button>
+            <button 
+              onClick={() => handleExportCSV(true)}
+              disabled={filteredAndSortedRows.length === 0}
+              className="px-3 py-1.5 bg-slate-950 hover:bg-slate-850 border border-slate-800 disabled:opacity-40 text-xs font-bold rounded-lg flex items-center justify-center gap-1.5 transition-colors text-slate-300"
+              title="Export only visible columns"
+            >
+              CSV (Visible Only)
+            </button>
+          </div>
+
+        </div>
+      </div>
+
+      {/* 2. List of active filters - visual feedback panel */}
+      {Object.keys(columnFilters).length > 0 && (
+        <div className="px-4 py-2 bg-slate-950/40 border-b border-slate-850/60 flex flex-wrap gap-2 items-center">
+          <span className="text-[10px] font-bold text-slate-500 uppercase tracking-wider font-mono">Active Filters:</span>
+          {Object.entries(columnFilters).map(([col, filter]) => {
+            const hasCheckedValues = filter.selectedValues.size > 0;
+            const hasCondition = filter.condition !== 'none';
+            if (!hasCheckedValues && !hasCondition) return null;
+            return (
+              <span key={col} className="text-[11px] bg-slate-900 border border-slate-750 text-slate-200 px-2.5 py-0.5 rounded-full flex items-center gap-1.5 shadow-sm">
+                <span className="text-slate-450 font-medium">{col}:</span>
+                <span className="text-amber-400 font-bold">
+                  {hasCondition ? `${filter.condition}(${filter.conditionValue1}${filter.conditionValue2 ? `, ${filter.conditionValue2}` : ''})` : `${filter.selectedValues.size} selections`}
+                </span>
+                <button 
+                  onClick={() => handleClearColumnFilter(col)}
+                  className="p-0.5 hover:bg-slate-800 text-slate-400 hover:text-rose-400 rounded-full transition-colors"
+                >
+                  <X className="w-3 h-3" />
+                </button>
+              </span>
+            );
+          })}
+        </div>
+      )}
+
+      {/* 3. Table container & Scroll Panel */}
+      <div className="flex-1 overflow-auto custom-scrollbar relative bg-slate-950/80">
+        {rows.length === 0 ? (
+          <div className="flex flex-col items-center justify-center py-20 px-4 text-center h-full">
+            <div className="w-16 h-16 bg-slate-900 border border-slate-800 rounded-full flex items-center justify-center mb-4 text-slate-500 shadow-xl">
+              <DatabaseIcon className="w-8 h-8 text-indigo-400" />
+            </div>
+            <h4 className="text-sm font-bold text-slate-300">No TRMS Data Extracted</h4>
+            <p className="text-xs text-slate-500 max-w-sm mt-1">Please select and upload a TRMS export Excel file to analyze records.</p>
+          </div>
+        ) : filteredAndSortedRows.length === 0 ? (
+          <div className="flex flex-col items-center justify-center py-20 text-center h-full">
+            <X className="w-10 h-10 text-rose-500 mb-2" />
+            <h4 className="text-sm font-bold text-slate-300">No Matching Spreadsheet Rows</h4>
+            <p className="text-xs text-slate-500 mt-1 max-w-xs">Your spreadsheet filters did not match any of the {rows.length} records. Click the 'Clear Filters' button above to start fresh.</p>
+          </div>
+        ) : (
+          <div className="h-full overflow-hidden flex flex-col">
+            <div className="flex-1 overflow-auto custom-scrollbar relative">
+              <table className={`w-full text-left border-collapse min-w-max text-[11.5px] ${showGridlines ? 'gridlines-active' : ''}`}>
+                
+                <thead>
+                  <tr className="bg-slate-900 sticky top-0 z-30 shadow-md">
+                    {/* Checkbox frozen left element */}
+                    <th className="px-3 py-3 w-10 sticky left-0 z-40 bg-slate-900 border-r border-slate-800/80 shadow-[1px_0_0_0_rgba(30,41,59,1)]">
+                      <input 
+                        type="checkbox" 
+                        checked={isAllPageSelected}
+                        onChange={(e) => handleSelectPageCheckbox(e.target.checked)}
+                        className="bg-slate-800 border-slate-700 text-indigo-500 rounded focus:ring-0 focus:ring-offset-0"
+                      />
+                    </th>
+
+                    {/* Deal Num static frozen left element */}
+                    {visibleColumns.has('Deal Num') && (
+                      <th className="px-4 py-3 w-32 sticky left-10 z-40 bg-slate-900 border-r border-slate-800/80 shadow-[1px_0_0_0_rgba(30,41,59,1)]">
+                        <div className="flex items-center justify-between gap-1 group">
+                          <span className="text-[10px] font-bold text-slate-400 uppercase tracking-wider">Deal Num</span>
+                          <button 
+                            onClick={() => {
+                              setActiveFilterMenu(activeFilterMenu === 'Deal Num' ? null : 'Deal Num');
+                            }}
+                            className={`p-1 rounded transition-colors ${columnFilters['Deal Num'] ? 'text-amber-500 bg-slate-800' : 'text-slate-500 hover:text-slate-200 hover:bg-slate-850'}`}
+                          >
+                            <Filter className="w-3.5 h-3.5" />
+                          </button>
+                        </div>
+                        {/* Inline drop-menu panel for Deal Num */}
+                        {activeFilterMenu === 'Deal Num' && (
+                          <div className="absolute left-10 mt-1.5 z-50 text-left" ref={menuRef}>
+                            <ColumnFilterPopover 
+                              columnName="Deal Num"
+                              filter={columnFilters['Deal Num'] || { selectedValues: new Set(), condition: 'none', conditionValue1: '', conditionValue2: '' }}
+                              uniqueValues={uniqueValues['Deal Num'] || []}
+                              filterSearchTerm={filterSearchTerms['Deal Num'] || ''}
+                              setFilterSearchTerm={(val) => setFilterSearchTerms(prev => ({ ...prev, 'Deal Num': val }))}
+                              onApplyCondition={(condition, val1, val2) => handleApplyConditionFilter('Deal Num', condition, val1, val2)}
+                              onToggleCheckbox={(val) => handleToggleUniqueValueCheckbox('Deal Num', val)}
+                              onSelectAll={(sel) => handleSelectAllUniqueValues('Deal Num', sel)}
+                              onClear={() => handleClearColumnFilter('Deal Num')}
+                              onClose={() => setActiveFilterMenu(null)}
+                              sortConfig={sortConfig}
+                              onSortChange={(dir) => {
+                                setSortConfig({ column: 'Deal Num', direction: dir });
+                                setActiveFilterMenu(null);
+                              }}
+                            />
+                          </div>
+                        )}
+                      </th>
+                    )}
+
+                    {/* Reference static frozen left element */}
+                    {visibleColumns.has('Reference') && (
+                      <th className="px-4 py-3 w-40 sticky left-[168px] z-40 bg-slate-900 border-r border-slate-800/80 shadow-[2px_0_4px_-1px_rgba(0,0,0,0.4)]">
+                        <div className="flex items-center justify-between gap-1 group">
+                          <span className="text-[10px] font-bold text-slate-400 uppercase tracking-wider truncate">Reference</span>
+                          <button 
+                            onClick={() => {
+                              setActiveFilterMenu(activeFilterMenu === 'Reference' ? null : 'Reference');
+                            }}
+                            className={`p-1 rounded transition-colors ${columnFilters['Reference'] ? 'text-amber-500 bg-slate-800' : 'text-slate-500 hover:text-slate-200 hover:bg-slate-850'}`}
+                          >
+                            <Filter className="w-3.5 h-3.5" />
+                          </button>
+                        </div>
+                        {activeFilterMenu === 'Reference' && (
+                          <div className="absolute left-[8px] mt-1.5 z-50 text-left" ref={menuRef}>
+                            <ColumnFilterPopover 
+                              columnName="Reference"
+                              filter={columnFilters['Reference'] || { selectedValues: new Set(), condition: 'none', conditionValue1: '', conditionValue2: '' }}
+                              uniqueValues={uniqueValues['Reference'] || []}
+                              filterSearchTerm={filterSearchTerms['Reference'] || ''}
+                              setFilterSearchTerm={(val) => setFilterSearchTerms(prev => ({ ...prev, 'Reference': val }))}
+                              onApplyCondition={(condition, val1, val2) => handleApplyConditionFilter('Reference', condition, val1, val2)}
+                              onToggleCheckbox={(val) => handleToggleUniqueValueCheckbox('Reference', val)}
+                              onSelectAll={(sel) => handleSelectAllUniqueValues('Reference', sel)}
+                              onClear={() => handleClearColumnFilter('Reference')}
+                              onClose={() => setActiveFilterMenu(null)}
+                              sortConfig={sortConfig}
+                              onSortChange={(dir) => {
+                                setSortConfig({ column: 'Reference', direction: dir });
+                                setActiveFilterMenu(null);
+                              }}
+                            />
+                          </div>
+                        )}
+                      </th>
+                    )}
+
+                    {/* All other horizontal scrolling header elements */}
+                    {columns.map(col => {
+                      if (col === 'Deal Num' || col === 'Reference') return null; // Already frozen left
+                      if (!visibleColumns.has(col)) return null;
+
+                      const isFiltered = !!columnFilters[col];
+                      const isSorted = sortConfig.column === col;
+                      const colIdx = columns.indexOf(col);
+                      const isRightHalf = colIdx > columns.length / 2;
+
+                      return (
+                        <th key={col} className="px-4 py-3 text-[10px] font-bold text-slate-400 uppercase tracking-wider border-r border-slate-800/50 hover:bg-slate-850">
+                          <div className="flex items-center justify-between gap-1 group relative">
+                            <span className="truncate max-w-[150px]" title={col}>{col}</span>
+                            
+                            <div className="flex items-center gap-0.5">
+                              {isSorted && (
+                                <span className="text-indigo-400">
+                                  {sortConfig.direction === 'asc' ? <ChevronUp className="w-3 h-3" /> : <ChevronDown className="w-3 h-3" />}
+                                </span>
+                              )}
+                              <button 
+                                onClick={(e) => {
+                                  e.stopPropagation();
+                                  setActiveFilterMenu(activeFilterMenu === col ? null : col);
+                                }}
+                                className={`p-1 rounded transition-colors ${isFiltered ? 'text-amber-500 bg-slate-800' : 'text-slate-500 hover:text-slate-200 hover:bg-slate-800'}`}
+                              >
+                                <Filter className="w-3.5 h-3.5" />
+                              </button>
+                            </div>
+
+                            {activeFilterMenu === col && (
+                              <div className={`absolute top-full mt-2.5 z-50 text-left normal-case ${isRightHalf ? 'right-0' : 'left-0'}`} ref={menuRef}>
+                                <ColumnFilterPopover 
+                                  columnName={col}
+                                  filter={columnFilters[col] || { selectedValues: new Set(), condition: 'none', conditionValue1: '', conditionValue2: '' }}
+                                  uniqueValues={uniqueValues[col] || []}
+                                  filterSearchTerm={filterSearchTerms[col] || ''}
+                                  setFilterSearchTerm={(val) => setFilterSearchTerms(prev => ({ ...prev, [col]: val }))}
+                                  onApplyCondition={(condition, val1, val2) => handleApplyConditionFilter(col, condition, val1, val2)}
+                                  onToggleCheckbox={(val) => handleToggleUniqueValueCheckbox(col, val)}
+                                  onSelectAll={(sel) => handleSelectAllUniqueValues(col, sel)}
+                                  onClear={() => handleClearColumnFilter(col)}
+                                  onClose={() => setActiveFilterMenu(null)}
+                                  sortConfig={sortConfig}
+                                  onSortChange={(dir) => {
+                                    setSortConfig({ column: col, direction: dir });
+                                    setActiveFilterMenu(null);
+                                  }}
+                                />
+                              </div>
+                            )}
+                          </div>
+                        </th>
+                      );
+                    })}
+                  </tr>
+                </thead>
+
+                <tbody className="divide-y divide-slate-850/80">
+                  {paginatedRows.map((row, rIdx) => {
+                    const globalIdx = (currentPage - 1) * pageSize + rIdx;
+                    const isSelected = selectedRows.has(globalIdx);
+
+                    return (
+                      <tr 
+                        key={rIdx} 
+                        className={`hover:bg-slate-900/60 transition-colors ${isSelected ? 'bg-indigo-950/20 hover:bg-indigo-950/30 font-medium' : ''}`}
+                      >
+                        {/* Checkbox sticky pane */}
+                        <td className="px-3 py-2 text-center sticky left-0 z-20 bg-slate-950 border-r border-slate-850/60 shadow-[1px_0_0_0_rgba(30,41,59,1)]">
+                          <input 
+                            type="checkbox" 
+                            checked={isSelected}
+                            onChange={(e) => handleSelectRow(globalIdx, e.target.checked)}
+                            className="bg-slate-800 border-slate-700 text-indigo-500 rounded focus:ring-0 focus:ring-offset-0"
+                          />
+                        </td>
+
+                        {/* Deal Num sticky pane */}
+                        {visibleColumns.has('Deal Num') && (
+                          <td className="px-4 py-2 font-mono text-slate-300 font-semibold sticky left-10 z-20 bg-slate-950 border-r border-slate-850/60 shadow-[1px_0_0_0_rgba(30,41,59,1)]">
+                            {row['Deal Num']}
+                          </td>
+                        )}
+
+                        {/* Reference sticky pane */}
+                        {visibleColumns.has('Reference') && (
+                          <td className="px-4 py-2 font-medium text-slate-400 sticky left-[168px] z-20 bg-slate-950 border-r border-slate-850/60 shadow-[2px_0_4px_-1px_rgba(0,0,0,0.4)] truncate max-w-[150px]" title={row['Reference']}>
+                            {row['Reference']}
+                          </td>
+                        )}
+
+                        {/* Other scrollable items */}
+                        {columns.map(col => {
+                          if (col === 'Deal Num' || col === 'Reference') return null;
+                          if (!visibleColumns.has(col)) return null;
+
+                          const val = row[col];
+                          const formatted = renderCellContent(col, val);
+
+                          let highlightClass = "text-slate-300 font-mono";
+                          if (numCols.includes(col)) {
+                            const numeric = Number(String(val || '').replace(/[^0-9.-]/g, ''));
+                            if (!isNaN(numeric)) {
+                              if (col === 'Change_in_Total_PnL' && numeric !== 0) {
+                                highlightClass = numeric > 0 ? "text-emerald-400 font-bold font-mono" : "text-rose-400 font-bold font-mono";
+                              } else if (col === 'Base_Total_Value_USD') {
+                                highlightClass = "text-slate-200 font-semibold font-mono";
+                              } else {
+                                highlightClass = "text-slate-300 font-mono";
+                              }
+                            }
+                          } else if (col === 'Buy_Sell') {
+                            highlightClass = val === 'BUY' ? "text-emerald-500/90 font-black" : "text-rose-500/90 font-black";
+                          } else if (col === 'Tran_Status' || col === 'Price Status') {
+                            highlightClass = "text-indigo-400 font-semibold";
+                          }
+
+                          return (
+                            <td key={col} className={`px-4 py-2 border-r border-slate-900/60 truncate max-w-xs ${highlightClass}`}>
+                              {formatted}
+                            </td>
+                          );
+                        })}
+                      </tr>
+                    );
+                  })}
+                </tbody>
+              </table>
+            </div>
+          </div>
+        )}
+      </div>
+
+      {/* 4. Bottom aggregates and excel calculations footer status bar */}
+      {filteredAndSortedRows.length > 0 && (
+        <div className="bg-slate-950 px-4 py-2 border-t border-slate-800 flex flex-wrap justify-between items-center text-[10.5px] text-slate-400 font-mono gap-y-2 select-none shadow-[0_-4px_12px_rgba(0,0,0,0.2)]">
+          <div className="flex flex-wrap items-center gap-4">
+            <span className="flex items-center gap-1">
+              <Sigma className="w-3.5 h-3.5 text-slate-500" />
+              Calculated on: <strong>{selectedRows.size > 0 ? `Selected Row subset (${selectedRows.size} lines)` : `All filtered matches (${stats.count} lines)`}</strong>
+            </span>
+          </div>
+          
+          <div className="flex flex-wrap gap-x-5 gap-y-1.5 justify-end">
+            <span>Base Value Sum: <strong className={stats.sumValue >= 0 ? "text-emerald-400" : "text-rose-400"}>${stats.sumValue.toLocaleString(undefined, { maximumFractionDigits: 0 })}</strong></span>
+            <span>Average Value: <strong className="text-slate-300">${stats.avgValue.toLocaleString(undefined, { maximumFractionDigits: 0 })}</strong></span>
+            <span>Change in PnL Sum: <strong className={stats.sumPnL >= 0 ? "text-emerald-400 font-semibold" : "text-rose-400 font-semibold"}>${stats.sumPnL.toLocaleString(undefined, { maximumFractionDigits: 0 })}</strong></span>
+            <span>Avg PnL: <strong className="text-slate-300">${stats.avgPnL.toLocaleString(undefined, { maximumFractionDigits: 0 })}</strong></span>
+            <span>Total Volume Sum: <strong className="text-blue-400">{stats.sumVolume.toLocaleString(undefined, { maximumFractionDigits: 0 })} MT</strong></span>
+            <span>Avg Price: <strong className="text-amber-400">${stats.avgPrice.toLocaleString(undefined, { minimumFractionDigits: 2, maximumFractionDigits: 2 })}</strong></span>
+          </div>
+        </div>
+      )}
+
+      {/* 5. Pagination Bar */}
+      {filteredAndSortedRows.length > 0 && (
+        <div className="p-3 border-t border-slate-800 bg-slate-900 flex flex-col sm:flex-row justify-between items-center gap-3">
+          <div className="flex items-center gap-2">
+            <span className="text-xs text-slate-400">Grid rows to show:</span>
+            <select 
+              value={pageSize} 
+              onChange={(e) => {
+                setPageSize(Number(e.target.value));
+                setCurrentPage(1);
+              }}
+              className="bg-slate-950 border border-slate-850 text-xs text-slate-300 rounded px-1.5 py-1 focus:outline-none focus:border-indigo-500"
+            >
+              {[25, 55, 100, 250, 500, 1000].map(size => (
+                <option key={size} value={size}>{size} rows</option>
+              ))}
+            </select>
+          </div>
+
+          <div className="flex items-center gap-1.5">
+            <button 
+              onClick={() => setCurrentPage(1)} 
+              disabled={currentPage === 1}
+              className="px-2.5 py-1 bg-slate-950 hover:bg-slate-850 disabled:opacity-40 text-[10px] uppercase font-bold tracking-tight text-slate-300 rounded border border-slate-850 transition-colors"
+            >
+              First
+            </button>
+            <button 
+              onClick={() => setCurrentPage(prev => Math.max(1, prev - 1))} 
+              disabled={currentPage === 1}
+              className="px-2.5 py-1 bg-slate-950 hover:bg-slate-850 disabled:opacity-40 text-[10px] uppercase font-bold tracking-tight text-slate-300 rounded border border-slate-850 transition-colors"
+            >
+              Prev
+            </button>
+            <span className="text-xs text-slate-400 font-mono select-none px-2 font-medium">
+              Page {currentPage} of {totalPages}
+            </span>
+            <button 
+              onClick={() => setCurrentPage(prev => Math.min(totalPages, prev + 1))} 
+              disabled={currentPage === totalPages}
+              className="px-2.5 py-1 bg-slate-950 hover:bg-slate-850 disabled:opacity-40 text-[10px] uppercase font-bold tracking-tight text-slate-300 rounded border border-slate-850 transition-colors"
+            >
+              Next
+            </button>
+            <button 
+              onClick={() => setCurrentPage(totalPages)} 
+              disabled={currentPage === totalPages}
+              className="px-2.5 py-1 bg-slate-950 hover:bg-slate-850 disabled:opacity-40 text-[10px] uppercase font-bold tracking-tight text-slate-300 rounded border border-slate-850 transition-colors"
+            >
+              Last
+            </button>
+          </div>
+        </div>
+      )}
+    </div>
+  );
+};
+
+// Subcomponent: Column Filter Popover containing condition and checklist
+export interface ColumnFilterPopoverProps {
+  columnName: string;
+  filter: {
+    selectedValues: Set<string>;
+    condition: string;
+    conditionValue1: string;
+    conditionValue2: string;
+  };
+  uniqueValues: { value: string; count: number }[];
+  filterSearchTerm: string;
+  setFilterSearchTerm: (val: string) => void;
+  onApplyCondition: (condition: string, val1: string, val2: string) => void;
+  onToggleCheckbox: (val: string) => void;
+  onSelectAll: (val: boolean) => void;
+  onClear: () => void;
+  onClose: () => void;
+  sortConfig: { column: string; direction: 'asc' | 'desc' | null };
+  onSortChange: (dir: 'asc' | 'desc' | null) => void;
+}
+
+export const ColumnFilterPopover: React.FC<ColumnFilterPopoverProps> = ({
+  columnName,
+  filter,
+  uniqueValues,
+  filterSearchTerm,
+  setFilterSearchTerm,
+  onApplyCondition,
+  onToggleCheckbox,
+  onSelectAll,
+  onClear,
+  onClose,
+  sortConfig,
+  onSortChange
+}) => {
+  const [cond, setCond] = useState(filter.condition);
+  const [val1, setVal1] = useState(filter.conditionValue1);
+  const [val2, setVal2] = useState(filter.conditionValue2);
+
+  const numericColumns = ['Price', 'Strike', 'Base_Total_Value_USD', 'Change_in_Total_PnL', 'Volume'];
+  const isNumeric = numericColumns.includes(columnName);
+
+  const searchFilteredUniqueValues = useMemo(() => {
+    const term = filterSearchTerm.trim().toLowerCase();
+    if (!term) return uniqueValues;
+    return uniqueValues.filter(v => String(v.value).toLowerCase().includes(term));
+  }, [uniqueValues, filterSearchTerm]);
+
+  return (
+    <div className="w-72 bg-slate-900 border border-slate-700/80 rounded-xl shadow-2xl p-4 flex flex-col gap-3 font-sans relative">
+      
+      {/* Tab Header Sorting */}
+      <div>
+        <span className="text-[10px] font-bold text-slate-500 uppercase tracking-widest block mb-2 font-mono">Sort Configuration</span>
+        <div className="flex gap-2">
+          <button 
+            type="button"
+            onClick={() => onSortChange('asc')}
+            className={`flex-1 py-1 px-2 text-[11px] font-semibold border rounded-lg flex items-center justify-center gap-1.5 transition-colors ${sortConfig.column === columnName && sortConfig.direction === 'asc' ? 'bg-indigo-600 text-white border-indigo-500' : 'bg-slate-950 text-slate-300 border-slate-800 hover:bg-slate-850'}`}
+          >
+            <ChevronUp className="w-3.5 h-3.5 text-indigo-400" />
+            Sort A-Z (Asc)
+          </button>
+          <button 
+            type="button"
+            onClick={() => onSortChange('desc')}
+            className={`flex-1 py-1 px-2 text-[11px] font-semibold border rounded-lg flex items-center justify-center gap-1.5 transition-colors ${sortConfig.column === columnName && sortConfig.direction === 'desc' ? 'bg-indigo-600 text-white border-indigo-500' : 'bg-slate-950 text-slate-300 border-slate-800 hover:bg-slate-850'}`}
+          >
+            <ChevronDown className="w-3.5 h-3.5 text-rose-400" />
+            Sort Z-A (Desc)
+          </button>
+        </div>
+      </div>
+
+      <div className="h-px bg-slate-800" />
+
+      {/* Operator Conditional Filter */}
+      <div>
+        <span className="text-[10px] font-bold text-slate-500 uppercase tracking-widest block mb-1.5 font-mono">Conditional Rule</span>
+        <div className="flex flex-col gap-2">
+          <select 
+            value={cond}
+            onChange={(e) => {
+              setCond(e.target.value);
+              if (e.target.value === 'none' || e.target.value === 'empty' || e.target.value === 'notEmpty') {
+                onApplyCondition(e.target.value, '', '');
+              }
+            }}
+            className="w-full bg-slate-950 border border-slate-800 rounded-lg text-xs text-slate-200 px-2 py-1.5 focus:outline-none focus:border-indigo-500"
+          >
+            <option value="none">No conditional filter</option>
+            <option value="equals">Equals</option>
+            <option value="notEquals">Does Not Equal</option>
+            <option value="contains">Contains text</option>
+            <option value="notContains">Does not contain text</option>
+            <option value="starts">Starts with</option>
+            <option value="ends">Ends with</option>
+            <option value="empty">Is Empty</option>
+            <option value="notEmpty">Is Not Empty</option>
+            {isNumeric && (
+              <>
+                <option value="gt">Greater than (&gt;)</option>
+                <option value="lt">Less than (&lt;)</option>
+                <option value="between">Value is between</option>
+              </>
+            )}
+          </select>
+
+          {cond !== 'none' && cond !== 'empty' && cond !== 'notEmpty' && (
+            <div className="flex flex-col gap-1.5">
+              <input 
+                type="text"
+                placeholder={cond === 'between' ? "Minimum value" : "Filter rule matching value..."}
+                value={val1}
+                onChange={(e) => setVal1(e.target.value)}
+                className="w-full bg-slate-950 border border-slate-800 rounded-lg text-xs text-slate-200 px-2 py-1 focus:outline-none focus:border-indigo-500"
+              />
+              {cond === 'between' && (
+                <input 
+                  type="text"
+                  placeholder="Maximum value"
+                  value={val2}
+                  onChange={(e) => setVal2(e.target.value)}
+                  className="w-full bg-slate-950 border border-slate-800 rounded-lg text-xs text-slate-200 px-2 py-1 focus:outline-none focus:border-indigo-500"
+                />
+              )}
+              <button 
+                type="button"
+                onClick={() => onApplyCondition(cond, val1, val2)}
+                className="w-full py-1 bg-indigo-600/90 hover:bg-indigo-600 text-[11px] text-white font-bold rounded-lg transition-colors"
+              >
+                Apply Conditional Rule
+              </button>
+            </div>
+          )}
+        </div>
+      </div>
+
+      <div className="h-px bg-slate-800" />
+
+      {/* Select unique value checklist */}
+      <div className="flex-1 flex flex-col min-h-0">
+        <span className="text-[10px] font-bold text-slate-500 uppercase tracking-widest block mb-1.5 font-mono">Filter by Value ({uniqueValues.length})</span>
+        
+        {/* Checklist search box */}
+        <div className="relative mb-2">
+          <input 
+            type="text"
+            placeholder="Search within unique items..."
+            value={filterSearchTerm}
+            onChange={(e) => setFilterSearchTerm(e.target.value)}
+            className="w-full bg-slate-950 pl-7 pr-7 py-1 border border-slate-850 rounded-md text-[11px] text-slate-300 placeholder-slate-600 focus:outline-none"
+          />
+          <Search className="absolute left-2.5 top-2 h-3 w-3 text-slate-600" />
+          {filterSearchTerm && (
+            <button 
+              type="button"
+              onClick={() => setFilterSearchTerm('')}
+              className="absolute right-2 top-1.5 text-slate-500 hover:text-slate-300"
+            >
+              <X className="w-3.5 h-3.5" />
+            </button>
+          )}
+        </div>
+
+        {/* Global Select/Deselect buttons */}
+        <div className="flex gap-2 mb-2">
+          <button 
+            type="button" 
+            onClick={() => onSelectAll(true)}
+            className="text-[10px] px-2 py-0.5 bg-slate-950 hover:bg-slate-850 border border-slate-800/80 rounded text-slate-400 font-semibold flex-1"
+          >
+            Clear (Deselect All)
+          </button>
+          <button 
+            type="button"
+            onClick={() => onSelectAll(false)}
+            className="text-[10px] px-2 py-0.5 bg-slate-950 hover:bg-slate-850 border border-slate-800/80 rounded text-indigo-400 font-semibold flex-1"
+          >
+            Select Current
+          </button>
+        </div>
+
+        {/* List scroll panel */}
+        <div className="max-h-36 overflow-y-auto custom-scrollbar flex flex-col gap-1 border border-slate-950 p-1.5 bg-slate-950 rounded-lg">
+          {searchFilteredUniqueValues.slice(0, 80).map((uv, index) => {
+            const rowValueStr = String(uv.value);
+            const isChecked = filter.selectedValues.has(rowValueStr);
+
+            return (
+              <label 
+                key={index} 
+                className={`flex items-center gap-1.5 px-1.5 py-0.5 hover:bg-slate-900 rounded cursor-pointer select-none text-[11px] truncate ${isChecked ? 'text-indigo-400 font-semibold' : 'text-slate-300'}`}
+              >
+                <input 
+                  type="checkbox"
+                  checked={isChecked}
+                  onChange={() => onToggleCheckbox(rowValueStr)}
+                  className="bg-slate-850 border-slate-750 text-indigo-600 rounded focus:ring-0 focus:ring-offset-0 w-3 h-3"
+                />
+                <span className="truncate flex-1" title={rowValueStr || '(Blank)'}>
+                  {rowValueStr === '' ? <span className="text-slate-600 italic">(Blank)</span> : rowValueStr}
+                </span>
+                <span className="text-[10px] text-slate-500 font-mono">({uv.count})</span>
+              </label>
+            );
+          })}
+          {searchFilteredUniqueValues.length > 80 && (
+            <span className="text-[10px] text-slate-500 text-center italic py-1 border-t border-slate-900 mt-1">
+              +{searchFilteredUniqueValues.length - 80} more unique values
+            </span>
+          )}
+          {searchFilteredUniqueValues.length === 0 && (
+            <span className="text-[11px] text-slate-600 text-center py-4">No unique matches</span>
+          )}
+        </div>
+      </div>
+
+      <div className="h-px bg-slate-800" />
+
+      {/* Row with footer action controls */}
+      <div className="flex justify-between gap-2">
+        <button 
+          type="button"
+          onClick={onClear}
+          className="text-[11px] py-1 px-2.5 bg-slate-950 hover:bg-rose-950/20 border border-slate-850 text-slate-400 hover:text-rose-400 hover:border-rose-900/40 rounded-lg transition-colors font-semibold"
+        >
+          Reset Filter
+        </button>
+        <button 
+          type="button"
+          onClick={onClose}
+          className="text-[11px] py-1 px-3.5 bg-slate-800 hover:bg-slate-750 border border-slate-700 text-white rounded-lg transition-colors font-bold"
+        >
+          Close
+        </button>
+      </div>
+
+    </div>
+  );
+};
+
+// Generic fallback DatabaseIcon to prevent compile issues
+const DatabaseIcon: React.FC<{ className?: string }> = ({ className }) => (
+  <svg className={className} fill="none" stroke="currentColor" viewBox="0 0 24 24">
+    <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={1.5} d="M4 7v10c0 2.21 3.582 4 8 4s8-1.79 8-4V7M4 7c0 2.21 3.582 4 8 4s8-1.79 8-4M4 7c0-2.21 3.582-4 8-4s8 1.79 8 4m0 5c0 2.21-3.582 4-8 4s-8-1.79-8-4" />
+  </svg>
+);

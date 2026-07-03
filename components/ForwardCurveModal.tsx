@@ -1,6 +1,6 @@
 
 import React, { useState, useEffect, useMemo, useCallback, useRef } from 'react';
-import { saveForwardCurve, getForwardCurve, getAvailableCurveDates, deleteForwardCurve, ForwardCurveRow, getHistoricalCurve, saveHistoricalCurve } from '../services/calculationService';
+import { saveForwardCurve, getForwardCurve, getForwardCurveSync, getAvailableCurveDates, getAvailableCurveDatesSync, deleteForwardCurve, ForwardCurveRow, getHistoricalCurve, getHistoricalCurveSync, saveHistoricalCurve, getGRMForwardCurve, getGRMForwardCurveSync, getAvailableGRMCurveDates, getAvailableGRMCurveDatesSync, saveGRMForwardCurve, deleteGRMForwardCurve } from '../services/calculationService';
 import { toast } from 'react-hot-toast';
 import { LineChart, Line, XAxis, YAxis, CartesianGrid, Tooltip, Legend, ResponsiveContainer } from 'recharts';
 
@@ -22,17 +22,21 @@ interface Selection {
 
 export const ForwardCurveModal: React.FC<ForwardCurveModalProps> = ({ onClose, onSave }) => {
   const [activeTab, setActiveTab] = useState<'manage' | 'analyze' | 'evolution' | 'historical'>('manage');
-  const [availableDates, setAvailableDates] = useState<string[]>(() => getAvailableCurveDates());
+  const [curveType, setCurveType] = useState<'normal' | 'grm'>('normal');
+  const availableDates = useMemo(() => {
+      const dates = curveType === 'normal' ? getAvailableCurveDatesSync() : getAvailableGRMCurveDatesSync();
+      return dates;
+  }, [curveType]);
   const [curveDate, setCurveDate] = useState<string>(() => {
-      const dates = getAvailableCurveDates();
+      const dates = getAvailableCurveDatesSync();
       return dates.length > 0 ? dates[0] : new Date().toISOString().split('T')[0];
   });
   const [compareDateA, setCompareDateA] = useState<string>(() => {
-      const dates = getAvailableCurveDates();
+      const dates = getAvailableCurveDatesSync();
       return dates.length >= 1 ? dates[0] : '';
   });
   const [compareDateB, setCompareDateB] = useState<string>(() => {
-      const dates = getAvailableCurveDates();
+      const dates = getAvailableCurveDatesSync();
       return dates.length >= 2 ? dates[1] : '';
   });
   const [selectedAnalysisIndex, setSelectedAnalysisIndex] = useState('TTF');
@@ -43,10 +47,10 @@ export const ForwardCurveModal: React.FC<ForwardCurveModalProps> = ({ onClose, o
 
   // Grid State
   const [manageGrid, setManageGrid] = useState<ForwardCurveRow[]>(() => {
-      const dates = getAvailableCurveDates();
+      const dates = getAvailableCurveDatesSync();
       const today = new Date().toISOString().split('T')[0];
       const latest = dates.length > 0 ? dates[0] : today;
-      const data = getForwardCurve(latest);
+      const data = getForwardCurveSync(latest);
       if (data.length === 0) {
           const skeleton: ForwardCurveRow[] = [];
           const start = new Date(latest);
@@ -59,7 +63,7 @@ export const ForwardCurveModal: React.FC<ForwardCurveModalProps> = ({ onClose, o
       }
       return data;
   });
-  const [historicalGrid, setHistoricalGrid] = useState<ForwardCurveRow[]>(() => getHistoricalCurve());
+  const [historicalGrid, setHistoricalGrid] = useState<ForwardCurveRow[]>(() => getHistoricalCurveSync());
   const [historyPast, setHistoryPast] = useState<ForwardCurveRow[][]>([]);
   const [historyFuture, setHistoryFuture] = useState<ForwardCurveRow[][]>([]);
   
@@ -71,19 +75,8 @@ export const ForwardCurveModal: React.FC<ForwardCurveModalProps> = ({ onClose, o
   
   const containerRef = useRef<HTMLDivElement>(null);
 
-  const refreshDates = useCallback(() => {
-      setAvailableDates(getAvailableCurveDates());
-  }, []);
-
-  // Current active columns based on tab
-  const activeColumns = useMemo(() => {
-    return activeTab === 'historical' ? HISTORICAL_COLUMNS : MANAGE_COLUMNS;
-  }, [activeTab]);
-
-  const activeIndices = useMemo(() => activeColumns.slice(1), [activeColumns]);
-
-  const loadCurveData = useCallback((date: string) => {
-      const data = getForwardCurve(date);
+  const loadCurveData = useCallback(async (date: string) => {
+      const data = curveType === 'normal' ? await getForwardCurve(date) : await getGRMForwardCurve(date);
       let targetGrid: ForwardCurveRow[];
       if (data.length === 0) {
           const skeleton: ForwardCurveRow[] = [];
@@ -103,7 +96,32 @@ export const ForwardCurveModal: React.FC<ForwardCurveModalProps> = ({ onClose, o
       setEditingCell(null);
       setHistoryPast([]);
       setHistoryFuture([]);
+  }, [curveType]);
+
+  const refreshDates = useCallback(() => {
+      // availableDates is now memoized based on curveType
   }, []);
+
+  const lastLoadedRef = useRef<{ type: string; date: string } | null>(null);
+
+  useEffect(() => {
+      const initialDate = availableDates.length > 0 ? availableDates[0] : new Date().toISOString().split('T')[0];
+      if (lastLoadedRef.current?.type !== curveType || lastLoadedRef.current?.date !== initialDate) {
+          // Defer state update to next tick to avoid cascading render warning
+          const timer = setTimeout(() => {
+              loadCurveData(initialDate);
+              lastLoadedRef.current = { type: curveType, date: initialDate };
+          }, 0);
+          return () => clearTimeout(timer);
+      }
+  }, [availableDates, loadCurveData, curveType]);
+
+  // Current active columns based on tab
+  const activeColumns = useMemo(() => {
+    return activeTab === 'historical' ? HISTORICAL_COLUMNS : MANAGE_COLUMNS;
+  }, [activeTab]);
+
+  const activeIndices = useMemo(() => activeColumns.slice(1), [activeColumns]);
 
   const currentGrid = activeTab === 'manage' ? manageGrid : historicalGrid;
   
@@ -166,8 +184,13 @@ export const ForwardCurveModal: React.FC<ForwardCurveModalProps> = ({ onClose, o
             }
             return { ...row, prices: nextPrices };
         });
-        saveForwardCurve(curveDate, syncedGrid.filter(r => r.month));
-        toast.success(`Curve saved for ${curveDate} (HH Last Day synced to HH)`);
+        if (curveType === 'normal') {
+            saveForwardCurve(curveDate, syncedGrid.filter(r => r.month));
+            toast.success(`Normal Curve saved for ${curveDate}`);
+        } else {
+            saveGRMForwardCurve(curveDate, syncedGrid.filter(r => r.month));
+            toast.success(`GRM Curve saved for ${curveDate}`);
+        }
     } else {
         saveHistoricalCurve(historicalGrid.filter(r => r.month));
         toast.success(`Historical prices updated`);
@@ -178,8 +201,9 @@ export const ForwardCurveModal: React.FC<ForwardCurveModalProps> = ({ onClose, o
 
   const handleDeleteSnapshot = (e: React.MouseEvent, date: string) => {
       e.stopPropagation();
-      if (confirm(`Delete curve snapshot for ${date}?`)) {
-          deleteForwardCurve(date);
+      if (confirm(`Delete ${curveType === 'normal' ? 'Normal' : 'GRM'} curve snapshot for ${date}?`)) {
+          if (curveType === 'normal') deleteForwardCurve(date);
+          else deleteGRMForwardCurve(date);
           refreshDates();
           if (curveDate === date) loadCurveData(new Date().toISOString().split('T')[0]);
           toast.success(`Snapshot deleted`);
@@ -431,8 +455,8 @@ export const ForwardCurveModal: React.FC<ForwardCurveModalProps> = ({ onClose, o
   };
 
   const analysisChartData = useMemo(() => {
-      const curveA = getForwardCurve(compareDateA);
-      const curveB = getForwardCurve(compareDateB);
+      const curveA = getForwardCurveSync(compareDateA);
+      const curveB = getForwardCurveSync(compareDateB);
       const allMonths = Array.from(new Set([...curveA.map(r => r.month), ...curveB.map(r => r.month)])).sort();
       return allMonths.map(month => ({
           month,
@@ -470,7 +494,7 @@ export const ForwardCurveModal: React.FC<ForwardCurveModalProps> = ({ onClose, o
                         onClick={() => setActiveTab(tab as any)}
                         className={`pb-3 px-1 text-xs font-bold uppercase tracking-widest border-b-2 transition-all ${activeTab === tab ? 'border-blue-600 text-blue-600' : 'border-transparent text-slate-400 hover:text-slate-600'}`}
                     >
-                        {tab === 'manage' ? 'Forward Curves' : tab === 'historical' ? 'Historical Data' : tab === 'analyze' ? 'Curve Comparison' : 'Contract Evolution'}
+                        {tab === 'manage' ? (curveType === 'normal' ? 'Forward Curves' : 'GRM Curves') : tab === 'historical' ? 'Historical Data' : tab === 'analyze' ? 'Curve Comparison' : 'Contract Evolution'}
                     </button>
                 ))}
             </div>
@@ -479,11 +503,28 @@ export const ForwardCurveModal: React.FC<ForwardCurveModalProps> = ({ onClose, o
         <div className="flex-1 overflow-hidden bg-slate-50 flex">
             {activeTab === 'manage' && (
                 <div className="w-64 border-r border-slate-200 bg-white flex flex-col shrink-0">
-                    <div className="p-4 border-b border-slate-100 bg-slate-50/50">
-                        <h3 className="text-[10px] font-black text-slate-400 uppercase tracking-widest">Saved Snapshots</h3>
+                    <div className="p-4 border-b border-slate-100 bg-slate-50/50 flex flex-col gap-3">
+                        <div className="flex items-center justify-between">
+                            <h3 className="text-[10px] font-black text-slate-400 uppercase tracking-widest">Curve Type</h3>
+                        </div>
+                        <div className="flex p-1 bg-slate-100 rounded-lg">
+                            <button 
+                                onClick={() => setCurveType('normal')}
+                                className={`flex-1 py-1.5 text-[10px] font-black uppercase rounded-md transition-all ${curveType === 'normal' ? 'bg-white text-blue-600 shadow-sm' : 'text-slate-400 hover:text-slate-600'}`}
+                            >
+                                Normal
+                            </button>
+                            <button 
+                                onClick={() => setCurveType('grm')}
+                                className={`flex-1 py-1.5 text-[10px] font-black uppercase rounded-md transition-all ${curveType === 'grm' ? 'bg-white text-blue-600 shadow-sm' : 'text-slate-400 hover:text-slate-600'}`}
+                            >
+                                GRM (Endur)
+                            </button>
+                        </div>
+                        <h3 className="text-[10px] font-black text-slate-400 uppercase tracking-widest mt-2">Saved Snapshots</h3>
                     </div>
                     <div className="flex-1 overflow-y-auto custom-scrollbar p-2 space-y-1">
-                        {availableDates.map(date => (
+                        {availableDates.map((date: string) => (
                             <div 
                                 key={date} 
                                 onClick={() => loadCurveData(date)}
@@ -597,11 +638,11 @@ export const ForwardCurveModal: React.FC<ForwardCurveModalProps> = ({ onClose, o
                         </div>
                         <div className="space-y-1">
                             <label className="text-[10px] font-black text-slate-400 uppercase">Baseline Curve</label>
-                            <select value={compareDateA} onChange={(e) => setCompareDateA(e.target.value)} className="w-full border border-slate-200 rounded-xl px-4 py-2.5 text-sm">{availableDates.map(d => <option key={d} value={d}>{d}</option>)}</select>
+                            <select value={compareDateA} onChange={(e) => setCompareDateA(e.target.value)} className="w-full border border-slate-200 rounded-xl px-4 py-2.5 text-sm">{availableDates.map((d: string) => <option key={d} value={d}>{d}</option>)}</select>
                         </div>
                         <div className="space-y-1">
                             <label className="text-[10px] font-black text-slate-400 uppercase">Comparison Curve</label>
-                            <select value={compareDateB} onChange={(e) => setCompareDateB(e.target.value)} className="w-full border border-slate-200 rounded-xl px-4 py-2.5 text-sm">{availableDates.map(d => <option key={d} value={d}>{d}</option>)}</select>
+                            <select value={compareDateB} onChange={(e) => setCompareDateB(e.target.value)} className="w-full border border-slate-200 rounded-xl px-4 py-2.5 text-sm">{availableDates.map((d: string) => <option key={d} value={d}>{d}</option>)}</select>
                         </div>
                     </div>
                     <div className="flex-1 min-h-[450px] bg-white p-8 rounded-2xl border border-slate-200 shadow-sm">
@@ -631,14 +672,14 @@ export const ForwardCurveModal: React.FC<ForwardCurveModalProps> = ({ onClose, o
                             <label className="text-[10px] font-black text-slate-400 uppercase">Contract Month</label>
                             <select value={evolutionContract} onChange={(e) => setEvolutionContract(e.target.value)} className="w-full border border-slate-200 rounded-xl px-4 py-2.5 text-sm">
                                 <option value="">Select Target Month...</option>
-                                {Array.from(new Set(availableDates.flatMap(d => getForwardCurve(d).map(r => r.month)))).sort().map(m => <option key={m} value={m}>{m}</option>)}
+                                {Array.from(new Set(availableDates.flatMap(d => getForwardCurveSync(d).map(r => r.month)))).sort().map(m => <option key={m} value={m}>{m}</option>)}
                             </select>
                         </div>
                     </div>
                     <div className="flex-1 min-h-[450px] bg-white p-8 rounded-2xl border border-slate-200 shadow-sm flex items-center justify-center">
                         {evolutionContract ? (
                             <ResponsiveContainer width="100%" height="100%">
-                                <LineChart data={availableDates.sort().map(d => ({ date: d, price: getForwardCurve(d).find(r => r.month === evolutionContract)?.prices[evolutionIndex] || null }))}>
+                                <LineChart data={availableDates.sort().map(d => ({ date: d, price: getForwardCurveSync(d).find(r => r.month === evolutionContract)?.prices[evolutionIndex] || null }))}>
                                     <CartesianGrid strokeDasharray="3 3" vertical={false} stroke="#f1f5f9" />
                                     <XAxis dataKey="date" tick={{fontSize: 10, fontWeight: 700}} axisLine={false} tickLine={false} />
                                     <YAxis axisLine={false} tickLine={false} tick={{fontSize: 10}} />

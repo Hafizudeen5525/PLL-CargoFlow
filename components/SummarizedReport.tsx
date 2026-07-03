@@ -1,6 +1,6 @@
 import React, { useMemo, useState } from 'react';
 import { CargoProfile, PnLBucket } from '../types';
-import { getPortfolioYear, recalculateProfile, getAvailableCurveDates, getGroupName } from '../services/calculationService';
+import { getPortfolioYear, recalculateProfile, getAvailableCurveDates, getAvailableCurveDatesSync, getGroupName, formatCurrency } from '../services/calculationService';
 import { motion } from 'framer-motion';
 import { BarChart, Bar, XAxis, YAxis, CartesianGrid, Tooltip, ResponsiveContainer, PieChart, Pie, Cell, LineChart, Line, AreaChart, Area } from 'recharts';
 
@@ -12,10 +12,19 @@ interface SummarizedReportProps {
 const COLORS = ['#3b82f6', '#10b981', '#f59e0b', '#ef4444', '#8b5cf6', '#ec4899'];
 
 export const SummarizedReport: React.FC<SummarizedReportProps> = ({ profiles, portfolioYear: initialYear }) => {
-  const availableDates = useMemo(() => getAvailableCurveDates(), []);
+  const availableDates = useMemo(() => getAvailableCurveDatesSync(), []);
   const [targetDate, setTargetDate] = useState(availableDates[0] || new Date().toISOString().split('T')[0]);
   const [baselineDate, setBaselineDate] = useState(availableDates[1] || availableDates[0] || new Date().toISOString().split('T')[0]);
   const [selectedYear, setSelectedYear] = useState(initialYear === 'All' ? '2026' : initialYear);
+
+  React.useEffect(() => {
+    getAvailableCurveDates().then(dates => {
+        if (dates.length > 0 && !targetDate) {
+            setTargetDate(dates[0]);
+            setBaselineDate(dates[1] || dates[0]);
+        }
+    });
+  }, [targetDate]);
 
   const reportData = useMemo(() => {
     const year = selectedYear;
@@ -83,9 +92,6 @@ export const SummarizedReport: React.FC<SummarizedReportProps> = ({ profiles, po
       trendData
     };
   }, [profiles, selectedYear, targetDate, baselineDate, availableDates]);
-
-  const formatCurrency = (val: number) => 
-    new Intl.NumberFormat('en-US', { style: 'currency', currency: 'USD', maximumFractionDigits: 0 }).format(val);
 
   const formatCompact = (val: number) => 
     new Intl.NumberFormat('en-US', { notation: 'compact', maximumFractionDigits: 1 }).format(val);

@@ -2,7 +2,7 @@
 import React, { useState, useMemo, useRef, useEffect, useCallback } from 'react';
 import { CargoProfile, PnLBucket, EmptyCargoProfile } from '../types';
 import { motion, AnimatePresence } from 'framer-motion';
-import { detectUnit, recalculateProfile, getGroupName, GROUPS, getPortfolioYear, saveForwardCurve, ForwardCurveRow } from '../services/calculationService';
+import { detectUnit, recalculateProfile, getGroupName, GROUPS, getPortfolioYear, saveForwardCurve, ForwardCurveRow, formatCurrency, formatPrice } from '../services/calculationService';
 import { WorldMap } from './WorldMap';
 import { CalendarView } from './CalendarView';
 import { JarvisPreviewModal } from './JarvisPreviewModal';
@@ -20,6 +20,7 @@ interface CargoListProps {
   onBulkImport?: (profiles: CargoProfile[]) => void;
   onForwardCurveUpdate?: () => void;
   trmsData?: ReconciliationData;
+  userRole?: 'admin' | 'trader' | 'viewer';
 }
 
 type ViewMode = 'table' | 'map' | 'calendar';
@@ -28,7 +29,7 @@ const COLUMN_WIDTH = 180;
 const STRATEGY_COL_WIDTH = 210;
 
 export const CargoList: React.FC<CargoListProps> = ({ 
-    profiles, onEdit, onDelete, onActualize, onBulkDelete, onBulkUpdate, onBulkImport, onForwardCurveUpdate, trmsData 
+    profiles, onEdit, onDelete, onActualize, onBulkDelete, onBulkUpdate, onBulkImport, onForwardCurveUpdate, trmsData, userRole 
 }) => {
   const [viewMode, setViewMode] = useState<ViewMode>('table');
   const [selectedIds, setSelectedIds] = useState<Set<string>>(new Set());
@@ -296,6 +297,7 @@ export const CargoList: React.FC<CargoListProps> = ({
                                     }
 
                                     if (isTier2Leg && (sheetName === 'Purchase' || sheetName === 'Sales')) {
+                                         mergedData[lookupName].isTieredPricing = true;
                                          if (profileKey === 'deliveredVolume') {
                                              mergedData[lookupName].tier2DeliveredVolume = val as number;
                                          } else if (profileKey === 'loadedVolume') {
@@ -482,8 +484,8 @@ export const CargoList: React.FC<CargoListProps> = ({
                 
                 // --- Robust Tiered Volume Splitting Logic (Sync with BulkImportModal) ---
                 if (existingMatch.isTieredPricing) {
-                    // Purchase Volume Split
-                    if (parsedFields.loadedVolume !== undefined) {
+                    // Purchase Volume Split - only if not already explicitly provided in the import (Jarvis often has separate lines)
+                    if (parsedFields.loadedVolume !== undefined && parsedFields.tier2LoadedVolume === undefined) {
                         const incomingTotal = parsedFields.loadedVolume;
                         const t1Threshold = existingMatch.loadedVolume || 0;
                         if (t1Threshold > 0 && incomingTotal > t1Threshold) {
@@ -494,8 +496,8 @@ export const CargoList: React.FC<CargoListProps> = ({
                             merged.tier2LoadedVolume = 0;
                         }
                     }
-                    // Sales Volume Split
-                    if (parsedFields.deliveredVolume !== undefined) {
+                    // Sales Volume Split - only if not already explicitly provided in the import
+                    if (parsedFields.deliveredVolume !== undefined && parsedFields.tier2DeliveredVolume === undefined) {
                         const incomingTotal = parsedFields.deliveredVolume;
                         const t1Threshold = existingMatch.deliveredVolume || 0;
                         if (t1Threshold > 0 && incomingTotal > t1Threshold) {
@@ -586,8 +588,10 @@ export const CargoList: React.FC<CargoListProps> = ({
       return;
     }
 
-    const purchaseData = filtered.map(p => {
-      const row: any = {
+    const purchaseData = filtered.flatMap(p => {
+      const rows = [];
+      // Row 1 (Tier 1)
+      const row1: any = {
         'Strategy Name': p.strategyName,
         'No.': p.jarvisNo || '',
         'Source': p.source,
@@ -599,17 +603,43 @@ export const CargoList: React.FC<CargoListProps> = ({
         'Buy Price Overall Constant': p.buyPriceOverallConstant || 0
       };
       for (let i = 1; i <= 3; i++) {
-        row[`Buy Price ${i} Weightage`] = (p as any)[`buyPrice${i}Weightage`] || 0;
-        row[`Buy Price ${i} slope`] = (p as any)[`buyPrice${i}Slope`] || 0;
-        row[`Buy Price Index ${i}`] = (p as any)[`buyPriceIndex${i}`] || '';
-        row[`Buy Price ${i} Month Definition`] = (p as any)[`buyPrice${i}MonthDef`] || '';
-        row[`Buy Price ${i} constant`] = (p as any)[`buyPrice${i}Constant`] || 0;
+        row1[`Buy Price ${i} Weightage`] = (p as any)[`buyPrice${i}Weightage`] || 0;
+        row1[`Buy Price ${i} slope`] = (p as any)[`buyPrice${i}Slope`] || 0;
+        row1[`Buy Price Index ${i}`] = (p as any)[`buyPriceIndex${i}`] || '';
+        row1[`Buy Price ${i} Month Definition`] = (p as any)[`buyPrice${i}MonthDef`] || '';
+        row1[`Buy Price ${i} constant`] = (p as any)[`buyPrice${i}Constant`] || 0;
       }
-      return row;
+      rows.push(row1);
+
+      // Row 2 (Tier 2) - if tiered
+      if (p.isTieredPricing && (p.tier2LoadedVolume || 0) > 0) {
+        const row2: any = {
+            'Strategy Name': `${p.strategyName}t`,
+            'No.': p.jarvisNo || '',
+            'Source': p.source,
+            'Buyer': p.buyer,
+            'Optimized': p.optimized ? 'Yes' : 'No',
+            'Loading Date': p.loadingDate,
+            'Loaded Volume': p.tier2LoadedVolume,
+            'Buy Formula': p.tier2BuyFormula || p.buyFormula,
+            'Buy Price Overall Constant': p.tier2BuyPriceOverallConstant || 0
+        };
+        for (let i = 1; i <= 3; i++) {
+            row2[`Buy Price ${i} Weightage`] = (p as any)[`tier2BuyPrice${i}Weightage`] || 0;
+            row2[`Buy Price ${i} slope`] = (p as any)[`tier2BuyPrice${i}Slope`] || 0;
+            row2[`Buy Price Index ${i}`] = (p as any)[`tier2BuyPriceIndex${i}`] || '';
+            row2[`Buy Price ${i} Month Definition`] = (p as any)[`tier2BuyPrice${i}MonthDef`] || '';
+            row2[`Buy Price ${i} constant`] = (p as any)[`tier2BuyPrice${i}Constant`] || 0;
+        }
+        rows.push(row2);
+      }
+      return rows;
     });
 
-    const salesData = filtered.map(p => {
-      const row: any = {
+    const salesData = filtered.flatMap(p => {
+      const rows = [];
+      // Row 1 (Tier 1)
+      const row1: any = {
         'Strategy Name': p.strategyName,
         'Buyer': p.buyer,
         'Delivery Date': p.deliveryDate,
@@ -618,13 +648,34 @@ export const CargoList: React.FC<CargoListProps> = ({
         'Sell Price Overall Constant': p.sellPriceOverallConstant || 0
       };
       for (let i = 1; i <= 3; i++) {
-        row[`Sell Price ${i} Weightage`] = (p as any)[`sellPrice${i}Weightage`] || 0;
-        row[`Sell Price ${i} slope`] = (p as any)[`sellPrice${i}Slope`] || 0;
-        row[`Sell Price Index ${i}`] = (p as any)[`sellPriceIndex${i}`] || '';
-        row[`Sell Price ${i} Month Definition`] = (p as any)[`sellPrice${i}MonthDef`] || '';
-        row[`Sell Price ${i} constant`] = (p as any)[`sellPrice${i}Constant`] || 0;
+        row1[`Sell Price ${i} Weightage`] = (p as any)[`sellPrice${i}Weightage`] || 0;
+        row1[`Sell Price ${i} slope`] = (p as any)[`sellPrice${i}Slope`] || 0;
+        row1[`Sell Price Index ${i}`] = (p as any)[`sellPriceIndex${i}`] || '';
+        row1[`Sell Price ${i} Month Definition`] = (p as any)[`sellPrice${i}MonthDef`] || '';
+        row1[`Sell Price ${i} constant`] = (p as any)[`sellPrice${i}Constant`] || 0;
       }
-      return row;
+      rows.push(row1);
+
+      // Row 2 (Tier 2) - if tiered
+      if (p.isTieredPricing && (p.tier2DeliveredVolume || 0) > 0) {
+        const row2: any = {
+            'Strategy Name': `${p.strategyName}t`,
+            'Buyer': p.buyer,
+            'Delivery Date': p.deliveryDate,
+            'Delivered Volume': p.tier2DeliveredVolume,
+            'Sell Formula': p.tier2SellFormula || p.sellFormula,
+            'Sell Price Overall Constant': p.tier2SellPriceOverallConstant || 0
+        };
+        for (let i = 1; i <= 3; i++) {
+            row2[`Sell Price ${i} Weightage`] = (p as any)[`tier2SellPrice${i}Weightage`] || 0;
+            row2[`Sell Price ${i} slope`] = (p as any)[`tier2SellPrice${i}Slope`] || 0;
+            row2[`Sell Price Index ${i}`] = (p as any)[`tier2SellPriceIndex${i}`] || '';
+            row2[`Sell Price ${i} Month Definition`] = (p as any)[`tier2SellPrice${i}MonthDef`] || '';
+            row2[`Sell Price ${i} constant`] = (p as any)[`tier2SellPrice${i}Constant`] || 0;
+        }
+        rows.push(row2);
+      }
+      return rows;
     });
 
     const costData = filtered.map(p => ({
@@ -668,12 +719,6 @@ export const CargoList: React.FC<CargoListProps> = ({
   const isAllVisibleSelected = processedProfiles.length > 0 && processedProfiles.every((p: CargoProfile) => selectedIds.has(p.id));
   const isSomeVisibleSelected = processedProfiles.some((p: CargoProfile) => selectedIds.has(p.id)) && !isAllVisibleSelected;
 
-  const formatCurrency = (val: number) => 
-    new Intl.NumberFormat('en-US', { style: 'currency', currency: 'USD', maximumFractionDigits: 0 }).format(val);
-
-  const formatPrice = (val: number, decimals: number = 3) => 
-    new Intl.NumberFormat('en-US', { style: 'currency', currency: 'USD', minimumFractionDigits: decimals, maximumFractionDigits: decimals }).format(val);
-
   return (
     <div className="flex-1 flex flex-col min-h-0 bg-white rounded-xl shadow-sm border border-slate-200 overflow-hidden">
       <div className="px-4 lg:px-6 py-3 border-b border-slate-200 flex flex-col lg:flex-row justify-between items-start lg:items-center bg-white gap-4">
@@ -689,11 +734,15 @@ export const CargoList: React.FC<CargoListProps> = ({
             </div>
         </div>
         <div className="flex items-center gap-2 overflow-x-auto pb-1 sm:pb-0 w-full lg:w-auto custom-scrollbar">
-            <input type="file" accept=".xlsm, .xlsx" multiple onChange={handleJarvisImport} className="hidden" ref={fileInputRef} />
-            <button onClick={() => fileInputRef.current?.click()} className="whitespace-nowrap text-[10px] sm:text-xs font-bold text-indigo-600 bg-indigo-50 px-3 py-1.5 rounded-lg border border-indigo-100 hover:bg-indigo-100 transition-colors flex items-center gap-2 shadow-sm">
-                <svg className="w-4 h-4" fill="none" stroke="currentColor" viewBox="0 0 24 24"><path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M4 16v1a3 3 0 003 3h10a3 3 0 003 3h10a3 3 0 003-3v-1m-4-8l-4-4m0 0L8 8m4-4v12" /></svg>
-                Import Jarvis
-            </button>
+            {userRole !== 'viewer' && (
+              <>
+                <input type="file" accept=".xlsm, .xlsx" multiple onChange={handleJarvisImport} className="hidden" ref={fileInputRef} />
+                <button onClick={() => fileInputRef.current?.click()} className="whitespace-nowrap text-[10px] sm:text-xs font-bold text-indigo-600 bg-indigo-50 px-3 py-1.5 rounded-lg border border-indigo-100 hover:bg-indigo-100 transition-colors flex items-center gap-2 shadow-sm">
+                    <svg className="w-4 h-4" fill="none" stroke="currentColor" viewBox="0 0 24 24"><path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M4 16v1a3 3 0 003 3h10a3 3 0 003 3h10a3 3 0 003-3v-1m-4-8l-4-4m0 0L8 8m4-4v12" /></svg>
+                    Import Jarvis
+                </button>
+              </>
+            )}
             <div className="relative">
                 <button 
                     onClick={() => setIsExportPopoverOpen(!isExportPopoverOpen)} 
@@ -942,8 +991,16 @@ export const CargoList: React.FC<CargoListProps> = ({
                                           <div className="px-4 py-3 shrink-0 text-center border-r border-slate-50" style={{ width: COLUMN_WIDTH }}><span className={`px-2 py-0.5 rounded-full font-bold text-[9px] uppercase ${p.pnlBucket === PnLBucket.Realized ? 'bg-blue-100 text-blue-700' : 'bg-amber-100 text-amber-700'}`}>{p.pnlBucket}</span></div>
                                           
                                           <div className="px-4 py-3 border-l border-slate-100 sticky right-0 z-40 bg-white group-hover:bg-slate-50 w-32 shrink-0 flex items-center justify-center gap-1 shadow-[-2px_0_5px_rgba(0,0,0,0.05)]">
-                                              <button onClick={() => onEdit(p)} className="p-1 text-blue-600 hover:bg-blue-50 rounded"><svg className="w-3.5 h-3.5" fill="none" stroke="currentColor" viewBox="0 0 24 24"><path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M11 5H6a2 2 0 00-2 2v11a2 2 0 002 2h11a2 2 0 002-2v-5m-1.414-9.414a2 2 0 112.828 2.828L11.828 15H9v-2.828l8.586-8.586z" /></svg></button>
-                                              <button onClick={() => onDelete(p.id)} className="p-1 text-slate-400 hover:text-rose-600 hover:bg-rose-50 rounded"><svg className="w-3.5 h-3.5" fill="none" stroke="currentColor" viewBox="0 0 24 24"><path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M19 7l-.867 12.142A2 2 0 0116.138 21H7.862a2 2 0 01-1.995-1.858L5 7m5 4v6m4-6v6m1-10V4a1 1 0 00-1-1h-4a1 1 0 00-1 1v3M4 7h16" /></svg></button>
+                                              <button onClick={() => onEdit(p)} className={`p-1 ${userRole === 'viewer' ? 'text-slate-400' : 'text-blue-600'} hover:bg-blue-50 rounded`} title={userRole === 'viewer' ? 'View Details' : 'Edit Cargo'}>
+                                                {userRole === 'viewer' ? (
+                                                  <svg className="w-3.5 h-3.5" fill="none" stroke="currentColor" viewBox="0 0 24 24"><path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M15 12a3 3 0 11-6 0 3 3 0 016 0z" /><path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M2.458 12C3.732 7.943 7.523 5 12 5c4.478 0 8.268 2.943 9.542 7-1.274 4.057-5.064 7-9.542 7-4.477 0-8.268-2.943-9.542-7z" /></svg>
+                                                ) : (
+                                                  <svg className="w-3.5 h-3.5" fill="none" stroke="currentColor" viewBox="0 0 24 24"><path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M11 5H6a2 2 0 00-2 2v11a2 2 0 002 2h11a2 2 0 002-2v-5m-1.414-9.414a2 2 0 112.828 2.828L11.828 15H9v-2.828l8.586-8.586z" /></svg>
+                                                )}
+                                              </button>
+                                              {userRole !== 'viewer' && (
+                                                <button onClick={() => onDelete(p.id)} className="p-1 text-slate-400 hover:text-rose-600 hover:bg-rose-50 rounded" title="Delete Cargo"><svg className="w-3.5 h-3.5" fill="none" stroke="currentColor" viewBox="0 0 24 24"><path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M19 7l-.867 12.142A2 2 0 0116.138 21H7.862a2 2 0 01-1.995-1.858L5 7m5 4v6m4-6v6m1-10V4a1 1 0 00-1-1h-4a1 1 0 00-1 1v3M4 7h16" /></svg></button>
+                                              )}
                                           </div>
                                       </div>
                                   );
@@ -987,8 +1044,12 @@ export const CargoList: React.FC<CargoListProps> = ({
                         <div className="pt-2 border-t border-slate-100 flex justify-between items-center text-[10px]">
                           <span className="text-slate-400 font-medium">ETA: {p.deliveryDate || '-'}</span>
                           <div className="flex gap-4">
-                            <button onClick={(e) => { e.stopPropagation(); onDelete(p.id); }} className="text-rose-500 font-bold uppercase">Delete</button>
-                            <button className="text-blue-600 font-bold uppercase">Edit</button>
+                            {userRole !== 'viewer' && (
+                              <button onClick={(e) => { e.stopPropagation(); onDelete(p.id); }} className="text-rose-500 font-bold uppercase transition-colors hover:text-rose-600">Delete</button>
+                            )}
+                            <button className="text-blue-600 font-bold uppercase transition-colors hover:text-blue-700">
+                              {userRole === 'viewer' ? 'View' : 'Edit'}
+                            </button>
                           </div>
                         </div>
                       </motion.div>

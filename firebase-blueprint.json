@@ -1,0 +1,81 @@
+{
+  "entities": {
+    "UserProfile": {
+      "title": "User Profile",
+      "description": "User specific settings and metadata",
+      "type": "object",
+      "properties": {
+        "uid": { "type": "string" },
+        "email": { "type": "string", "format": "email" },
+        "displayName": { "type": "string" },
+        "photoURL": { "type": "string" },
+        "preferredYear": { "type": "string" },
+        "lastLogin": { "type": "string", "format": "date-time" }
+      },
+      "required": ["uid", "email"]
+    },
+    "CargoProfile": {
+      "title": "Cargo Profile",
+      "description": "Details of a specific cargo trade",
+      "type": "object",
+      "properties": {
+        "id": { "type": "string" },
+        "strategyName": { "type": "string" },
+        "buyer": { "type": "string" },
+        "source": { "type": "string" },
+        "deliveryDate": { "type": "string" },
+        "loadingDate": { "type": "string" },
+        "isTieredPricing": { "type": "boolean" },
+        "tierLimit": { "type": "number" },
+        "totalLoadedVolume": { "type": "number" },
+        "totalDeliveredVolume": { "type": "number" },
+        "loadedVolume": { "type": "number" },
+        "deliveredVolume": { "type": "number" },
+        "tier2LoadedVolume": { "type": "number" },
+        "tier2DeliveredVolume": { "type": "number" },
+        "buyFormula": { "type": "string" },
+        "sellFormula": { "type": "string" },
+        "tier2BuyFormula": { "type": "string" },
+        "tier2SellFormula": { "type": "string" },
+        "absoluteBuyPrice": { "type": "number" },
+        "absoluteSellPrice": { "type": "number" },
+        "absoluteTier2BuyPrice": { "type": "number" },
+        "absoluteTier2SellPrice": { "type": "number" },
+        "incoterms": { "type": "string" },
+        "pnlBucket": { "type": "string" },
+        "userId": { "type": "string" },
+        "isShared": { "type": "boolean" },
+        "isBuyPriceManual": { "type": "boolean" },
+        "isSellPriceManual": { "type": "boolean" },
+        "buyPriceRounding": { "type": "number" },
+        "sellPriceRounding": { "type": "number" }
+      },
+      "required": ["id", "strategyName", "userId"]
+    },
+    "ForwardCurve": {
+      "title": "Forward Curve",
+      "description": "Market forward curve data",
+      "type": "object",
+      "properties": {
+        "asOfDate": { "type": "string" },
+        "curves": { "type": "array" },
+        "userId": { "type": "string" }
+      },
+      "required": ["asOfDate", "userId"]
+    }
+  },
+  "firestore": {
+    "/users/{userId}": {
+      "schema": "UserProfile",
+      "description": "User profile document"
+    },
+    "/users/{userId}/cargo_profiles/{profileId}": {
+      "schema": "CargoProfile",
+      "description": "Collection of cargo profiles for a user"
+    },
+    "/users/{userId}/forward_curves/{date}": {
+      "schema": "ForwardCurve",
+      "description": "Collection of forward curves for a user"
+    }
+  }
+}

@@ -49,33 +49,86 @@ self.onmessage = (e: MessageEvent) => {
         return stringCache.get(val);
     };
 
+    const extractedRows: any[] = [];
+    const targetColumns = [
+      'Deal Num', 'Reference', 'Internal Portfolio', 'External Legal Entity',
+      'Trade Date', 'Start Date', 'End Date', 'Buy_Sell', 'Price', 'Strike', 
+      'Base_Total_Value_USD', 'Change_in_Total_PnL', 'Payment Date', 
+      'Plsb Year Bucket', 'Volume', 'Unit', 'Strategy Name', 'Ins Type', 
+      'Event Source', 'Settlement Type', 'Cflow Type', 'Volume Type', 
+      'Price Status', 'EOD Date', 'Tran_Status', 'Yday_Tran_Status', 
+      'Incoterm', 'BU_L1', 'BU_L2', 'BU_L3', 'BU_L4', 'BU_L5', 'BU_L6', 
+      'Trader', 'IndexName_ProjectionMethod'
+    ];
+
     rawData.forEach((row: any) => {
-      const rawY = findValue(row, ['Plsb Year Bucket', 'Year', 'Year Bucket']);
+      // Find internal portfolio
+      const rawPort = findValue(row, ['Internal Portfolio', 'InternalPortfolio', 'Internal_Portfolio', 'Portfolio']);
+      const iPort = typeof rawPort === 'string' ? rawPort.trim() : (rawPort !== undefined ? String(rawPort).trim() : '');
+      const allowedPortfolios = ['Base LNG', 'NTLB LNG', 'Optimization LNG', 'DH LNG', 'Hedging LNG', 'DFT LNG'];
+      const isAllowedPortfolio = allowedPortfolios.some(p => p.toLowerCase() === iPort.toLowerCase());
+
+      // Find PLSB Year Bucket
+      const rawY = findValue(row, ['Plsb Year Bucket', 'Plsb_Year_Bucket', 'Year Bucket', 'Year', 'PlsbYearBucket']);
       const y = typeof rawY === 'number' ? rawY : parseInt(String(rawY || '').replace(/[^0-9]/g, ''));
-      if (isNaN(y) || y < 2024) return;
-      
+      const allowedYears = [2026, 2027, 2028];
+      const isAllowedYear = allowedYears.includes(y);
+
+      // Filter: if not matching both, completely discard the row
+      if (!isAllowedPortfolio || !isAllowedYear) return;
+
       if (portfolioYear === 'Unknown') portfolioYear = String(y);
-      
+
       const sName = intern(String(findValue(row, ['Strategy Name', 'Strategy', 'Deal Name']) || '').trim());
       if (!sName || sName.includes("GLNG") || (sName.includes("CSPA") && !sName.includes("CSPA Opt"))) return;
-      
-      const iPort = intern(String(row['Internal Portfolio'] || '').trim());
+
       if (portfolioName === 'Unknown' && iPort && iPort !== 'Hedging LNG' && iPort !== 'DH LNG' && iPort !== 'DFT LNG') {
           portfolioName = iPort;
       }
 
       // Create whitelisted row immediately to save memory (discard unused columns)
       const cleanRow: any = {};
-      whitelistColumns.forEach((col: string) => {
-        if (row[col] !== undefined) {
-          if (row[col] instanceof Date) { 
-              const d = row[col]; 
-              cleanRow[col] = intern(`${d.getUTCFullYear()}-${String(d.getUTCMonth()+1).padStart(2,'0')}-${String(d.getUTCDate()).padStart(2,'0')}`); 
+      targetColumns.forEach((col: string) => {
+        let val = row[col];
+        if (val === undefined) {
+          // try aliases
+          if (col === 'Deal Num') {
+             val = findValue(row, ['Deal_No', 'Deal No', 'Deal_Num', 'Deal Num', 'Deal ID', 'DealId', 'Deal_ID']);
+          } else if (col === 'EOD Date') {
+             val = findValue(row, ['EOD_Date', 'EOD Date', 'EODDate']);
+          } else if (col === 'Base_Total_Value_USD') {
+             val = findValue(row, ['Base_Total_Value_USD', 'Base Total Value USD', 'Total_Value_USD', 'Total Value USD']);
+          } else if (col === 'Change_in_Total_PnL') {
+             val = findValue(row, ['Change_in_Total_PnL', 'Change in Total PnL', 'Change_in_PnL', 'Change in PnL']);
+          } else if (col === 'Buy_Sell') {
+             val = findValue(row, ['BuySell', 'Buy/Sell', 'Buy_Sell', 'Buy_or_Sell']);
+          } else if (col === 'Plsb Year Bucket') {
+             val = findValue(row, ['Plsb Year Bucket', 'Plsb_Year_Bucket', 'Year Bucket', 'Year', 'PlsbYearBucket']);
+          } else if (col === 'IndexName_ProjectionMethod') {
+             val = findValue(row, ['IndexName_ProjectionMethod', 'IndexName ProjectionMethod', 'IndexName_Projection_Method', 'Projection Method', 'Index Name', 'IndexName']);
           } else {
-              cleanRow[col] = intern(row[col]);
+             const normCol = col.toLowerCase().replace(/[\s_]/g, '');
+             for (const key of Object.keys(row)) {
+                 if (key.toLowerCase().replace(/[\s_]/g, '') === normCol) {
+                     val = row[key];
+                     break;
+                 }
+             }
           }
         }
+
+        if (val !== undefined) {
+          if (val instanceof Date) { 
+              cleanRow[col] = intern(`${val.getUTCFullYear()}-${String(val.getUTCMonth()+1).padStart(2,'0')}-${String(val.getUTCDate()).padStart(2,'0')}`); 
+          } else {
+              cleanRow[col] = intern(val);
+          }
+        } else {
+          cleanRow[col] = '';
+        }
       });
+
+      extractedRows.push(cleanRow);
 
       if (!trmsAgg[sName]) {
           trmsAgg[sName] = { 
@@ -99,7 +152,7 @@ self.onmessage = (e: MessageEvent) => {
           };
       }
       
-      // Store whitelisted row for deep dive
+      // Store clean row for deep dive
       trmsAgg[sName].rawRows.push(cleanRow);
 
       // Extract reconciled values if present (Jarvis Master Sheet)
@@ -124,7 +177,7 @@ self.onmessage = (e: MessageEvent) => {
       if (recPurchase > 0) trmsAgg[sName].reconciledPurchaseCost = recPurchase;
       if (recSales > 0) trmsAgg[sName].reconciledSalesRevenue = recSales;
 
-      const rowSettlementType = intern(String(row['Settlement Type'] || '').trim());
+      const rowSettlementType = intern(String(cleanRow['Settlement Type'] || row['Settlement Type'] || '').trim());
 
       const getRowValue = (keys: string[]) => {
           for (const k of keys) {
@@ -138,27 +191,27 @@ self.onmessage = (e: MessageEvent) => {
           return 0;
       };
 
-      const cType = intern(String(row['Cflow Type'] || '').trim());
+      const cType = intern(String(cleanRow['Cflow Type'] || row['Cflow Type'] || '').trim());
       const cTypeLower = cType.toLowerCase();
       const valUSD = getRowValue(['Base_Total_Value_USD', 'Base Total Value USD', 'Total_Value_USD', 'Total Value USD', 'Base_Total_Value', 'Total_Value']);
       
       if (cTypeLower === "commodity" || cTypeLower === "physical" || cTypeLower === "base value" || cTypeLower === "cargo value") {
           trmsAgg[sName].commodityValue += valUSD;
-          const buySell = intern(String(row['Buy_Sell'] || '').trim());
+          const buySell = intern(String(cleanRow['Buy_Sell'] || row['Buy_Sell'] || '').trim());
           if (buySell === 'Buy') trmsAgg[sName].trmsPurchaseValue += Math.abs(valUSD);
           if (buySell === 'Sell') trmsAgg[sName].trmsSalesValue += Math.abs(valUSD);
       }
-      const pnlChange = Number(row['Change_in_Total_PnL'] || 0);
-      const ref = intern(String(row['Reference'] || ''));
+      const pnlChange = Number(cleanRow['Change_in_Total_PnL'] || row['Change_in_Total_PnL'] || 0);
+      const ref = intern(String(cleanRow['Reference'] || row['Reference'] || ''));
 
       const formatDate = (val: any) => {
           if (val instanceof Date) return intern(val.toISOString().split('T')[0]);
           return intern(String(val || ''));
       };
 
-      const sDate = formatDate(row['Start Date'] || row['Comm Window Start Date']);
-      const eDate = formatDate(row['End Date'] || row['Comm Window End Date']);
-      const commWindowEndDate = formatDate(row['Comm Window End Date']);
+      const sDate = formatDate(cleanRow['Start Date'] || row['Start Date'] || row['Comm Window Start Date']);
+      const eDate = formatDate(cleanRow['End Date'] || row['End Date'] || row['Comm Window End Date']);
+      const commWindowEndDate = formatDate(row['Comm Window End Date'] || row['End Date']);
       
       if (commWindowEndDate) {
           trmsAgg[sName].commWindowEndDate = commWindowEndDate;
@@ -169,16 +222,16 @@ self.onmessage = (e: MessageEvent) => {
           trmsAgg[sName].srcValue += absVal;
           trmsAgg[sName].srcLegs.push({ 
               value: absVal, 
-              description: intern(String(row['Cflow Type'] || 'SRC')),
+              description: intern(cType || 'SRC'),
               rawRow: cleanRow
           });
       } else if (cTypeLower === "commodity" || cTypeLower === "physical") {
-          const buySell = intern(String(row['Buy_Sell'] || '').trim());
-          const priceStatus = intern(String(row['Price Status'] || 'Unknown'));
-          const volumeType = intern(String(row['Volume Type'] || 'Estimate'));
+          const buySell = intern(String(cleanRow['Buy_Sell'] || row['Buy_Sell'] || '').trim());
+          const priceStatus = intern(String(cleanRow['Price Status'] || row['Price Status'] || 'Unknown'));
+          const volumeType = intern(String(cleanRow['Volume Type'] || row['Volume Type'] || 'Estimate'));
           trmsAgg[sName].commodityLegs.push({ 
-              price: Number(row['Price'] || 0), 
-              vol: Math.abs(Number(row['Volume'] || 0)), 
+              price: Number(cleanRow['Price'] || row['Price'] || 0), 
+              vol: Math.abs(Number(cleanRow['Volume'] || row['Volume'] || 0)), 
               buySell,
               startDate: sDate,
               endDate: eDate,
@@ -196,11 +249,15 @@ self.onmessage = (e: MessageEvent) => {
       }
 
       if (iPort === "Hedging LNG") {
-          trmsAgg[sName].hedgingPnL += pnlChange;
-          trmsAgg[sName].hedgingTrades += 1;
-          const idx = intern(extractIndexFromRef(ref));
-          if (!trmsAgg[sName].hedgingIndices.includes(idx)) {
-              trmsAgg[sName].hedgingIndices.push(idx);
+          const dealStatus = String(row['Deal Status'] || '').trim().toLowerCase();
+          // Only count live/active hedging trades as "Open Trades"
+          if (dealStatus === 'live' || dealStatus === 'open' || dealStatus === 'active' || !dealStatus) {
+              trmsAgg[sName].hedgingPnL += pnlChange;
+              trmsAgg[sName].hedgingTrades += 1;
+              const idx = intern(extractIndexFromRef(ref));
+              if (!trmsAgg[sName].hedgingIndices.includes(idx)) {
+                  trmsAgg[sName].hedgingIndices.push(idx);
+              }
           }
       }
       
@@ -321,6 +378,7 @@ self.onmessage = (e: MessageEvent) => {
       hedging: hedgingRows,
       paper: paperRows,
       trmsAgg,
+      extractedRows,
       forwardCurve: forwardCurveData,
       debugInfo: {
         sheetNames: wb.SheetNames,

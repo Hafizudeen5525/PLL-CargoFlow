@@ -11,13 +11,15 @@ interface BulkImportModalProps {
 }
 
 const COLUMN_MAPPING: Record<string, string[]> = {
-  strategyName: ['strategy', 'name', 'deal', 'id', 'ref'],
+  strategyName: ['strategy', 'name', 'deal', 'id', 'ref', 'sn'],
   source: ['source', 'origin', 'load port', 'loading port'],
   buyer: ['buyer', 'customer', 'client', 'destination', 'disport'],
   deliveryDate: ['delivery date', 'arrival', 'end date', 'del date', 'delivery'],
   loadingDate: ['loading date', 'load date', 'bl date', 'loading'],
-  deliveredVolume: ['volume', 'vol', 'quantity', 'qty', 'mmbtu', 'bbl', 'delivered volume'],
-  loadedVolume: ['loaded volume', 'load vol'],
+  deliveredVolume: ['volume', 'vol', 'quantity', 'qty', 'mmbtu', 'bbl', 'delivered volume', 'tier 1 volume', 't1 vol'],
+  tier2DeliveredVolume: ['tier 2 volume', 't2 vol', 'tier 2 delivered volume'],
+  loadedVolume: ['loaded volume', 'load vol', 't1 load vol'],
+  tier2LoadedVolume: ['t2 load vol', 'tier 2 loaded volume'],
   sellFormula: ['sell formula', 'sales formula'],
   absoluteSellPrice: ['sell price', 'sales price', 'unit price', 'final price'],
   buyFormula: ['buy formula', 'purchase formula'],
@@ -155,7 +157,35 @@ export const BulkImportModal: React.FC<BulkImportModalProps> = ({ existingProfil
             });
 
             const strategyName = parsedFields.strategyName;
-            const existingMatch = strategyName ? existingProfiles.find(p => p.strategyName?.toLowerCase() === strategyName.toLowerCase()) : undefined;
+            
+            // Smart Match Logic
+            const normalizeSN = (name: string) => {
+                if (!name) return "";
+                // Remove 't' suffix that indicates tiered pricing but keep a,b,c which indicate splits
+                // Example: 2026-LNGC_33t(PLL) -> 2026-LNGC_33(PLL)
+                return name.toLowerCase().replace(/(\d+)t(\W|$)/, '$1$2').trim();
+            };
+
+            let existingMatch = strategyName ? existingProfiles.find(p => p.strategyName?.toLowerCase() === strategyName.toLowerCase()) : undefined;
+
+            if (!existingMatch && strategyName) {
+                const incomingNormalized = normalizeSN(strategyName);
+                existingMatch = existingProfiles.find(p => {
+                    const existingNormalized = normalizeSN(p.strategyName || '');
+                    const sameYear = p.deliveryDate?.startsWith(strategyName.slice(0, 4)) || 
+                                   p.loadingDate?.startsWith(strategyName.slice(0, 4));
+                    return existingNormalized === incomingNormalized && sameYear;
+                });
+            }
+
+            // Fallback: Date + Source + Buyer match
+            if (!existingMatch && parsedFields.deliveryDate && parsedFields.source && parsedFields.buyer) {
+                existingMatch = existingProfiles.find(p => 
+                    p.deliveryDate === parsedFields.deliveryDate && 
+                    p.source?.toLowerCase().includes(parsedFields.source!.toLowerCase().slice(0,3)) &&
+                    p.buyer?.toLowerCase().includes(parsedFields.buyer!.toLowerCase().slice(0,3))
+                );
+            }
 
             let finalProfile: CargoProfile;
             let status: 'New' | 'Update' | 'No Change' = 'New';
@@ -168,26 +198,44 @@ export const BulkImportModal: React.FC<BulkImportModalProps> = ({ existingProfil
                 if (existingMatch.isTieredPricing) {
                     // Purchase Volume Split
                     if (parsedFields.loadedVolume !== undefined) {
-                        const incomingTotal = parsedFields.loadedVolume;
-                        const t1Threshold = existingMatch.loadedVolume || 0;
-                        if (t1Threshold > 0 && incomingTotal > t1Threshold) {
-                            merged.loadedVolume = t1Threshold;
-                            merged.tier2LoadedVolume = incomingTotal - t1Threshold;
+                        const incomingT1 = parsedFields.loadedVolume;
+                        const incomingT2 = parsedFields.tier2LoadedVolume || 0;
+                        const incomingTotal = incomingT1 + incomingT2;
+                        
+                        // If user explicitly provided T2 in sheet, use that. 
+                        // Otherwise, use existing threshold to split the provided T1 (if it represents a total).
+                        if (parsedFields.tier2LoadedVolume !== undefined) {
+                            merged.loadedVolume = incomingT1;
+                            merged.tier2LoadedVolume = incomingT2;
                         } else {
-                            merged.loadedVolume = incomingTotal;
-                            merged.tier2LoadedVolume = 0;
+                            const t1Threshold = existingMatch.loadedVolume || 0;
+                            if (t1Threshold > 0 && incomingTotal > t1Threshold) {
+                                merged.loadedVolume = t1Threshold;
+                                merged.tier2LoadedVolume = incomingTotal - t1Threshold;
+                            } else {
+                                merged.loadedVolume = incomingTotal;
+                                merged.tier2LoadedVolume = 0;
+                            }
                         }
                     }
                     // Sales Volume Split
                     if (parsedFields.deliveredVolume !== undefined) {
-                        const incomingTotal = parsedFields.deliveredVolume;
-                        const t1Threshold = existingMatch.deliveredVolume || 0;
-                        if (t1Threshold > 0 && incomingTotal > t1Threshold) {
-                            merged.deliveredVolume = t1Threshold;
-                            merged.tier2DeliveredVolume = incomingTotal - t1Threshold;
+                        const incomingT1 = parsedFields.deliveredVolume;
+                        const incomingT2 = parsedFields.tier2DeliveredVolume || 0;
+                        const incomingTotal = incomingT1 + incomingT2;
+
+                        if (parsedFields.tier2DeliveredVolume !== undefined) {
+                            merged.deliveredVolume = incomingT1;
+                            merged.tier2DeliveredVolume = incomingT2;
                         } else {
-                            merged.deliveredVolume = incomingTotal;
-                            merged.tier2DeliveredVolume = 0;
+                            const t1Threshold = existingMatch.deliveredVolume || 0;
+                            if (t1Threshold > 0 && incomingTotal > t1Threshold) {
+                                merged.deliveredVolume = t1Threshold;
+                                merged.tier2DeliveredVolume = incomingTotal - t1Threshold;
+                            } else {
+                                merged.deliveredVolume = incomingTotal;
+                                merged.tier2DeliveredVolume = 0;
+                            }
                         }
                     }
                 }
@@ -326,9 +374,23 @@ export const BulkImportModal: React.FC<BulkImportModalProps> = ({ existingProfil
                                     </td>
                                     <td className="px-4 py-3 text-right">
                                         <div className="flex flex-col gap-1">
-                                            <DiffCell row={row} rowIndex={i} field="totalLoadedVolume" format={(v) => v?.toLocaleString()} isIgnored={ignoredChanges[i]?.has("totalLoadedVolume")} onToggle={(idx, f) => { const s = new Set(ignoredChanges[idx] || []); if (s.has(f)) s.delete(f); else s.add(f); setIgnoredChanges({ ...ignoredChanges, [idx]: s }); }} className="font-mono" />
+                                            <div>
+                                                <DiffCell row={row} rowIndex={i} field="totalLoadedVolume" format={(v) => v?.toLocaleString()} isIgnored={ignoredChanges[i]?.has("totalLoadedVolume")} onToggle={(idx, f) => { const s = new Set(ignoredChanges[idx] || []); if (s.has(f)) s.delete(f); else s.add(f); setIgnoredChanges({ ...ignoredChanges, [idx]: s }); }} className="font-mono" />
+                                                {row.isTieredPricing && (
+                                                    <div className="text-[8px] text-slate-400 font-mono mt-0.5">
+                                                        ({row.loadedVolume?.toLocaleString()} / {row.tier2LoadedVolume?.toLocaleString()})
+                                                    </div>
+                                                )}
+                                            </div>
                                             <div className="h-px bg-slate-100 my-0.5" />
-                                            <DiffCell row={row} rowIndex={i} field="totalDeliveredVolume" format={(v) => v?.toLocaleString()} isIgnored={ignoredChanges[i]?.has("totalDeliveredVolume")} onToggle={(idx, f) => { const s = new Set(ignoredChanges[idx] || []); if (s.has(f)) s.delete(f); else s.add(f); setIgnoredChanges({ ...ignoredChanges, [idx]: s }); }} className="font-mono" />
+                                            <div>
+                                                <DiffCell row={row} rowIndex={i} field="totalDeliveredVolume" format={(v) => v?.toLocaleString()} isIgnored={ignoredChanges[i]?.has("totalDeliveredVolume")} onToggle={(idx, f) => { const s = new Set(ignoredChanges[idx] || []); if (s.has(f)) s.delete(f); else s.add(f); setIgnoredChanges({ ...ignoredChanges, [idx]: s }); }} className="font-mono" />
+                                                {row.isTieredPricing && (
+                                                    <div className="text-[8px] text-slate-400 font-mono mt-0.5">
+                                                        ({row.deliveredVolume?.toLocaleString()} / {row.tier2DeliveredVolume?.toLocaleString()})
+                                                    </div>
+                                                )}
+                                            </div>
                                         </div>
                                     </td>
                                     <td className="px-4 py-3 text-right">

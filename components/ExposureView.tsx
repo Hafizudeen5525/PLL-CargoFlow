@@ -2,7 +2,8 @@
 import React, { useState, useEffect, useMemo } from 'react';
 import { CargoProfile, PnLBucket } from '../types';
 import { motion, AnimatePresence } from 'framer-motion';
-import { getFixationDate, getIndexType, getHistoricalCurve, generateHistoricalShocks, getExposureMultiplier, getPricingMonths, ForwardCurveRow } from '../services/calculationService';
+import { getFixationDate, getIndexType, getHistoricalCurve, getHistoricalCurveSync, generateHistoricalShocks, getExposureMultiplier, getPricingMonths, ForwardCurveRow, formatCurrency, formatPrice } from '../services/calculationService';
+import { MDDAnalyzer } from './MDDAnalyzer';
 
 interface ExposureViewProps {
     profiles: CargoProfile[];
@@ -45,6 +46,7 @@ interface PricingExposure {
 }
 
 export const ExposureView: React.FC<ExposureViewProps> = ({ profiles, onCargoClick, portfolioYear }) => {
+    const [subView, setSubView] = useState<'delta' | 'mdd'>('delta');
     const [tableYear, setTableYear] = useState<number>(new Date().getFullYear());
     const [drillDownCell, setDrillDownCell] = useState<{ month: string, index: string } | null>(null);
     const [auditOpen, setAuditOpen] = useState(false);
@@ -110,7 +112,7 @@ export const ExposureView: React.FC<ExposureViewProps> = ({ profiles, onCargoCli
     }, [profilePricingExposures, tableYear, simDate, holidays]);
 
     const riskMetrics = useMemo(() => {
-        const historical = getHistoricalCurve();
+        const historical = getHistoricalCurveSync();
         const netDeltaPerIndex: Record<string, number> = {};
         profilePricingExposures.forEach((exp: PricingExposure) => {
             const fixD = getFixationDate(exp.index, exp.pricingMonth, holidays);
@@ -173,153 +175,202 @@ export const ExposureView: React.FC<ExposureViewProps> = ({ profiles, onCargoCli
 
     return (
         <div className="flex-1 flex flex-col min-h-0 gap-6 p-2">
-            <div className="grid grid-cols-1 md:grid-cols-4 gap-4 shrink-0">
-                <motion.div whileHover={{ scale: 1.02 }} onClick={() => setAuditOpen(true)} className="bg-slate-900 p-6 rounded-2xl border border-slate-800 shadow-xl flex flex-col justify-between overflow-hidden relative group cursor-pointer">
-                    <div className="absolute top-0 right-0 p-4 opacity-10 group-hover:opacity-30 transition-opacity">
-                        <svg className="w-16 h-16 text-white" fill="none" stroke="currentColor" viewBox="0 0 24 24"><path strokeLinecap="round" strokeLinejoin="round" strokeWidth={1} d="M9 5H7a2 2 0 00-2 2v12a2 2 0 002 2h10a2 2 0 002-2V7a2 2 0 00-2-2h-2M9 5a2 2 0 002 2h2a2 2 0 002-2M9 5a2 2 0 012-2h2a2 2 0 002-2M9 5a2 2 0 012 2h2a2 2 0 012 2" /></svg>
-                    </div>
-                    <div className="relative z-10">
-                        <span className="text-[10px] font-black text-rose-400 uppercase tracking-widest block mb-1">Daily VaR (Hist Sim)</span>
-                        <h3 className="text-3xl font-black text-white font-mono">{formatUSD(riskMetrics.var)}</h3>
-                        <p className="text-[10px] text-slate-500 font-bold uppercase mt-2">Worst 5% Probability Outcome</p>
-                    </div>
-                </motion.div>
+            {/* Top View Selector Tab Bar */}
+            <div className="flex items-center justify-between border-b border-slate-200 pb-3 mb-1 shrink-0">
+                <div className="flex bg-slate-100 p-1 rounded-xl">
+                    <button 
+                        onClick={() => setSubView('delta')}
+                        className={`px-5 py-2 text-xs font-bold rounded-lg transition-all flex items-center gap-2 ${
+                            subView === 'delta' 
+                            ? 'bg-white text-indigo-600 shadow-sm font-extrabold' 
+                            : 'text-slate-500 hover:text-slate-800'
+                        }`}
+                    >
+                        <svg className="w-4 h-4" fill="none" stroke="currentColor" viewBox="0 0 24 24">
+                          <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M9 19v-6a2 2 0 00-2 2v12a2 2 0 00-2 2v6a2 2 0 002 2h2a2 2 0 002-2zm0 0V9a2 2 0 012-2h2a2 2 0 012 2v10m-6 0a2 2 0 002 2h2a2 2 0 002-2m0 0V5a2 2 0 012-2h2a2 2 0 012 2v14a2 2 0 002 2h2a2 2 0 002-2" />
+                        </svg>
+                        Portfolio VaR & Monthly Delta Exposure
+                    </button>
+                    <button 
+                        onClick={() => setSubView('mdd')}
+                        className={`px-5 py-2 text-xs font-bold rounded-lg transition-all flex items-center gap-2 ${
+                            subView === 'mdd' 
+                            ? 'bg-white text-indigo-600 shadow-sm font-extrabold' 
+                            : 'text-slate-500 hover:text-slate-800'
+                        }`}
+                    >
+                        <svg className="w-4 h-4 text-rose-500" fill="none" stroke="currentColor" viewBox="0 0 24 24">
+                          <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M13 17h8m0 0V9m0 8l-8-8-4 4-6-6" />
+                        </svg>
+                        Maximum Drawdown (MDD) Analyzer
+                    </button>
+                </div>
                 
-                <motion.div whileHover={{ scale: 1.02 }} onClick={() => setAuditOpen(true)} className="bg-slate-900 p-6 rounded-2xl border border-slate-800 shadow-xl flex flex-col justify-between overflow-hidden relative group cursor-pointer">
-                    <div className="absolute top-0 right-0 p-4 opacity-10 group-hover:opacity-30 transition-opacity">
-                        <svg className="w-16 h-16 text-white" fill="none" stroke="currentColor" viewBox="0 0 24 24"><path strokeLinecap="round" strokeLinejoin="round" strokeWidth={1} d="M13 7h8m0 0v8m0-8l-8 8-4-4-6 6" /></svg>
-                    </div>
-                    <div className="relative z-10">
-                        <span className="text-[10px] font-black text-amber-400 uppercase tracking-widest block mb-1">Expected Shortfall</span>
-                        <h3 className="text-3xl font-black text-white font-mono">{formatUSD(riskMetrics.cvar)}</h3>
-                        <p className="text-[10px] text-slate-500 font-bold uppercase mt-2">Avg loss in extreme tail</p>
-                    </div>
-                </motion.div>
-
-                <div className="bg-white p-6 rounded-2xl border border-slate-200 shadow-sm flex flex-col justify-between">
-                    <div>
-                        <span className="text-[10px] font-black text-slate-400 uppercase tracking-widest block mb-1">Diversification Benefit</span>
-                        <div className="flex items-baseline gap-2">
-                             <h3 className="text-3xl font-black text-indigo-600">{(riskMetrics.diversification || 0).toFixed(1)}%</h3>
-                        </div>
-                        <p className="text-[10px] text-slate-400 mt-2 font-bold uppercase tracking-tighter">Correlation risk reduction</p>
-                    </div>
-                </div>
-
-                <div className="bg-white p-6 rounded-2xl border border-slate-200 shadow-sm flex flex-col justify-between">
-                    <div>
-                        <span className="text-[10px] font-black text-slate-400 uppercase tracking-widest block mb-1">Risk Methodology</span>
-                        <div className="flex flex-col gap-1">
-                            <span className="text-xs font-bold text-slate-700">Historical Simulation</span>
-                            <div className="text-[9px] font-black uppercase px-2 py-0.5 rounded bg-blue-100 text-blue-700 w-max">
-                                {riskMetrics.confidence}
-                            </div>
-                        </div>
-                    </div>
-                </div>
+                {subView === 'delta' && (
+                    <span className="text-[10px] uppercase font-black tracking-widest text-slate-400 font-mono hidden md:inline">
+                        Historical Simulation Lookback Loaded
+                    </span>
+                )}
+                {subView === 'mdd' && (
+                    <span className="text-[10px] uppercase font-black tracking-widest text-slate-400 font-mono hidden md:inline">
+                        Money Management Allocation
+                    </span>
+                )}
             </div>
 
-            <div className="grid grid-cols-1 xl:grid-cols-4 gap-6 flex-1 min-h-0">
-                <AnimatePresence>
-                    {showInfo && (
-                        <motion.aside initial={{ opacity: 0, width: 0 }} animate={{ opacity: 1, width: 'auto' }} exit={{ opacity: 0, width: 0 }} className="xl:col-span-1 bg-slate-900 text-slate-300 p-6 rounded-2xl border border-slate-800 shadow-xl overflow-hidden hidden xl:flex flex-col">
-                            <div className="flex justify-between items-center mb-6 shrink-0">
-                                <h3 className="font-bold text-white uppercase tracking-widest text-[10px] flex items-center gap-2">HistSim Intelligence</h3>
-                                <button onClick={() => setShowInfo(false)} className="text-slate-500 hover:text-white"><svg className="w-4 h-4" fill="none" stroke="currentColor" viewBox="0 0 24 24"><path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M6 18L18 6M6 6l12 12" /></svg></button>
+            {subView === 'delta' ? (
+                <>
+                    <div className="grid grid-cols-1 md:grid-cols-4 gap-4 shrink-0">
+                        <motion.div whileHover={{ scale: 1.02 }} onClick={() => setAuditOpen(true)} className="bg-slate-900 p-6 rounded-2xl border border-slate-800 shadow-xl flex flex-col justify-between overflow-hidden relative group cursor-pointer">
+                            <div className="absolute top-0 right-0 p-4 opacity-10 group-hover:opacity-30 transition-opacity">
+                                <svg className="w-16 h-16 text-white" fill="none" stroke="currentColor" viewBox="0 0 24 24"><path strokeLinecap="round" strokeLinejoin="round" strokeWidth={1} d="M9 5H7a2 2 0 00-2 2v12a2 2 0 002 2h10a2 2 0 002-2V7a2 2 0 00-2-2h-2M9 5a2 2 0 002 2h2a2 2 0 002-2M9 5a2 2 0 012-2h2a2 2 0 002-2M9 5a2 2 0 012 2h2a2 2 0 012 2" /></svg>
                             </div>
-                            <div className="space-y-6 overflow-y-auto custom-scrollbar flex-1 pr-2">
-                                <ExpiryItem title="Net Floating Value" rule="The matrix now displays the remaining floating volume based on business days, rather than the total gross cargo volume." />
-                                <ExpiryItem title="Lookback" rule="Past 256 daily forward curve shifts applied to today's portfolio." />
-                                <ExpiryItem title="Confidence" rule="Uses 95% threshold (approx. the 13th worst day in current history)." />
-                                <ExpiryItem title="Non-Linearity" rule="Captures fat-tails and skewed volatility distributions better than parametric VaR." />
+                            <div className="relative z-10">
+                                <span className="text-[10px] font-black text-rose-400 uppercase tracking-widest block mb-1">Daily VaR (Hist Sim)</span>
+                                <h3 className="text-3xl font-black text-white font-mono">{formatUSD(riskMetrics.var)}</h3>
+                                <p className="text-[10px] text-slate-500 font-bold uppercase mt-2">Worst 5% Probability Outcome</p>
                             </div>
-                        </motion.aside>
-                    )}
-                </AnimatePresence>
-
-                <div className={`${showInfo ? 'xl:col-span-3' : 'xl:col-span-4'} flex flex-col gap-6 min-h-0`}>
-                    <section className="bg-white rounded-2xl border border-slate-200 shadow-sm overflow-hidden flex flex-col flex-1 min-h-0">
-                        <div className="p-5 border-b border-slate-100 flex justify-between items-center bg-slate-50/30">
-                            <div className="flex items-center gap-3">
-                                <h2 className="text-lg font-bold text-slate-800 flex items-center gap-2">
-                                    Floating Open Exposure
-                                    <button onClick={() => setShowInfo(!showInfo)} className={`p-1 rounded-full transition-colors ${showInfo ? 'bg-indigo-100 text-indigo-600' : 'bg-slate-200 text-slate-500 hover:bg-slate-300'}`} title="Show Guide">
-                                        <svg className="w-4 h-4" fill="none" stroke="currentColor" viewBox="0 0 24 24"><path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2.5} d="M13 16h-1v-4h-1m1-4h.01M21 12a9 9 0 11-18 0 9 9 0 0118 0z" /></svg>
-                                    </button>
-                                </h2>
-                                <div className="ml-4 flex items-center gap-2 bg-slate-100 p-1 rounded-lg border border-slate-200">
-                                    <button onClick={() => setShowGross(false)} className={`px-3 py-1 rounded text-[10px] font-black uppercase transition-all ${!showGross ? 'bg-white shadow-sm text-indigo-600' : 'text-slate-400'}`}>Net Open</button>
-                                    <button onClick={() => setShowGross(true)} className={`px-3 py-1 rounded text-[10px] font-black uppercase transition-all ${showGross ? 'bg-white shadow-sm text-indigo-600' : 'text-slate-400'}`}>Gross Vol</button>
-                                </div>
-                            </div>
-                            <div className="flex items-center gap-3">
-                                <button onClick={() => setShowHolidayManager(true)} className="px-4 py-2 flex items-center gap-2 text-xs font-bold rounded-lg transition-all border border-slate-200 hover:bg-white text-slate-600">
-                                    <svg className="w-4 h-4 text-amber-500" fill="none" stroke="currentColor" viewBox="0 0 24 24"><path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M8 7V3m8 4V3m-9 8h10M5 21h14a2 2 0 002-2V7a2 2 0 00-2-2H5a2 2 0 00-2 2v12a2 2 0 002 2z" /></svg>
-                                    Trading Calendar
-                                </button>
-                                <div className="flex bg-slate-200/60 p-1 rounded-xl shadow-inner ml-2">
-                                    {[2025, 2026, 2027].map((year: number) => (
-                                        <button key={year} onClick={() => setTableYear(year)} className={`px-4 py-1.5 text-xs font-bold rounded-lg transition-all ${tableYear === year ? 'bg-white text-indigo-600 shadow-sm' : 'text-slate-500 hover:text-slate-700'}`}>{year}</button>
-                                    ))}
-                                </div>
-                            </div>
-                        </div>
+                        </motion.div>
                         
-                        <div className="flex-1 overflow-auto custom-scrollbar">
-                            <table className="w-full text-xs text-left border-collapse min-w-[1200px]">
-                                <thead>
-                                    <tr className="bg-slate-50 text-slate-500 font-bold uppercase tracking-wider text-[10px] border-b border-slate-200">
-                                        <th className="px-6 py-4 sticky left-0 bg-slate-50 z-10 w-[180px]">Pricing Month</th>
-                                        {INDICES.map((idx: string) => (<th key={idx} className="px-4 py-4 text-center">{idx}</th>))}
-                                        <th className="px-6 py-4 text-right bg-slate-100/50 sticky right-0 z-10">Row {showGross ? 'Gross' : 'Net'}</th>
-                                    </tr>
-                                </thead>
-                                <tbody className="divide-y divide-slate-100">
-                                    {tableData.months.map((m: string) => {
-                                        const [y, mon] = m.split('-');
-                                        const monthName = new Date(parseInt(y), parseInt(mon)-1, 1).toLocaleString('en-US', { month: 'short' });
-                                        return (
-                                            <tr key={m} className="hover:bg-indigo-50/30 transition-colors group">
-                                                <td className="px-6 py-3 font-bold sticky left-0 group-hover:bg-indigo-50/30 bg-white text-slate-700 border-r border-slate-50">
-                                                    <div className="flex items-center gap-2"><span className="text-[10px] font-mono opacity-50">{y}</span><span className="uppercase tracking-tight">{monthName}</span></div>
-                                                </td>
-                                                {INDICES.map((idx: string) => {
-                                                    const cell = tableData.grid[m][idx];
-                                                    const hasValue = Math.abs(cell.base) > 0.1;
-                                                    const isFixed = Math.abs(cell.floating) < 0.1;
-                                                    
-                                                    const colorClass = isFixed 
-                                                        ? (cell.base < 0 ? 'text-rose-200' : 'text-slate-200')
-                                                        : (cell.floating < 0 ? 'text-rose-600 font-bold' : 'text-indigo-600 font-bold');
+                        <motion.div whileHover={{ scale: 1.02 }} onClick={() => setAuditOpen(true)} className="bg-slate-900 p-6 rounded-2xl border border-slate-800 shadow-xl flex flex-col justify-between overflow-hidden relative group cursor-pointer">
+                            <div className="absolute top-0 right-0 p-4 opacity-10 group-hover:opacity-30 transition-opacity">
+                                <svg className="w-16 h-16 text-white" fill="none" stroke="currentColor" viewBox="0 0 24 24"><path strokeLinecap="round" strokeLinejoin="round" strokeWidth={1} d="M13 7h8m0 0v8m0-8l-8 8-4-4-6 6" /></svg>
+                            </div>
+                            <div className="relative z-10">
+                                <span className="text-[10px] font-black text-amber-400 uppercase tracking-widest block mb-1">Expected Shortfall</span>
+                                <h3 className="text-3xl font-black text-white font-mono">{formatUSD(riskMetrics.cvar)}</h3>
+                                <p className="text-[10px] text-slate-500 font-bold uppercase mt-2">Avg loss in extreme tail</p>
+                            </div>
+                        </motion.div>
 
-                                                    const displayVal = showGross ? cell.base : cell.floating;
-
-                                                    return (
-                                                        <td key={idx} onClick={() => hasValue && setDrillDownCell({ month: m, index: idx })} className={`px-4 py-3 text-center font-mono transition-all ${hasValue ? 'cursor-pointer hover:bg-white hover:shadow-inner' : 'text-slate-50'}`}>
-                                                            {hasValue ? (
-                                                                <div className={`flex flex-col ${colorClass} relative`}>
-                                                                    <span>{(displayVal / 1000).toLocaleString(undefined, { maximumFractionDigits: 0 })}k</span>
-                                                                    {!isFixed && !showGross && <div className="absolute -top-1 -right-1 w-1.5 h-1.5 rounded-full bg-indigo-400 animate-pulse"></div>}
-                                                                </div>
-                                                            ) : '—'}
-                                                        </td>
-                                                    );
-                                                })}
-                                                <td className="px-6 py-3 text-right font-bold bg-slate-50/30 group-hover:bg-indigo-100/30 sticky right-0 z-10 text-slate-400">
-                                                    {(() => {
-                                                        const rowVal = INDICES.reduce((acc: number, idx: string) => acc + (showGross ? tableData.grid[m][idx].base : tableData.grid[m][idx].floating), 0);
-                                                        return Math.abs(rowVal) > 0.1 ? (rowVal / 1000).toLocaleString(undefined, { maximumFractionDigits: 0 }) + 'k' : '0k';
-                                                    })()}
-                                                </td>
-                                            </tr>
-                                        );
-                                    })}
-                                </tbody>
-                            </table>
+                        <div className="bg-white p-6 rounded-2xl border border-slate-200 shadow-sm flex flex-col justify-between">
+                            <div>
+                                <span className="text-[10px] font-black text-slate-400 uppercase tracking-widest block mb-1">Diversification Benefit</span>
+                                <div className="flex items-baseline gap-2">
+                                     <h3 className="text-3xl font-black text-indigo-600">{(riskMetrics.diversification || 0).toFixed(1)}%</h3>
+                                </div>
+                                <p className="text-[10px] text-slate-400 mt-2 font-bold uppercase tracking-tighter">Correlation risk reduction</p>
+                            </div>
                         </div>
-                    </section>
-                </div>
-            </div>
+
+                        <div className="bg-white p-6 rounded-2xl border border-slate-200 shadow-sm flex flex-col justify-between">
+                            <div>
+                                <span className="text-[10px] font-black text-slate-400 uppercase tracking-widest block mb-1">Risk Methodology</span>
+                                <div className="flex flex-col gap-1">
+                                    <span className="text-xs font-bold text-slate-700">Historical Simulation</span>
+                                    <div className="text-[9px] font-black uppercase px-2 py-0.5 rounded bg-blue-100 text-blue-700 w-max">
+                                        {riskMetrics.confidence}
+                                    </div>
+                                </div>
+                            </div>
+                        </div>
+                    </div>
+
+                    <div className="grid grid-cols-1 xl:grid-cols-4 gap-6 flex-1 min-h-0">
+                        <AnimatePresence>
+                            {showInfo && (
+                                <motion.aside initial={{ opacity: 0, width: 0 }} animate={{ opacity: 1, width: 'auto' }} exit={{ opacity: 0, width: 0 }} className="xl:col-span-1 bg-slate-900 text-slate-300 p-6 rounded-2xl border border-slate-800 shadow-xl overflow-hidden hidden xl:flex flex-col">
+                                    <div className="flex justify-between items-center mb-6 shrink-0">
+                                        <h3 className="font-bold text-white uppercase tracking-widest text-[10px] flex items-center gap-2">HistSim Intelligence</h3>
+                                        <button onClick={() => setShowInfo(false)} className="text-slate-500 hover:text-white"><svg className="w-4 h-4" fill="none" stroke="currentColor" viewBox="0 0 24 24"><path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M6 18L18 6M6 6l12 12" /></svg></button>
+                                    </div>
+                                    <div className="space-y-6 overflow-y-auto custom-scrollbar flex-1 pr-2">
+                                        <ExpiryItem title="Net Floating Value" rule="The matrix now displays the remaining floating volume based on business days, rather than the total gross cargo volume." />
+                                        <ExpiryItem title="Lookback" rule="Past 256 daily forward curve shifts applied to today's portfolio." />
+                                        <ExpiryItem title="Confidence" rule="Uses 95% threshold (approx. the 13th worst day in current history)." />
+                                        <ExpiryItem title="Non-Linearity" rule="Captures fat-tails and skewed volatility distributions better than parametric VaR." />
+                                    </div>
+                                </motion.aside>
+                            )}
+                        </AnimatePresence>
+
+                        <div className={`${showInfo ? 'xl:col-span-3' : 'xl:col-span-4'} flex flex-col gap-6 min-h-0`}>
+                            <section className="bg-white rounded-2xl border border-slate-200 shadow-sm overflow-hidden flex flex-col flex-1 min-h-0">
+                                <div className="p-5 border-b border-slate-100 flex justify-between items-center bg-slate-50/30">
+                                    <div className="flex items-center gap-3">
+                                        <h2 className="text-lg font-bold text-slate-800 flex items-center gap-2">
+                                            Floating Open Exposure
+                                            <button onClick={() => setShowInfo(!showInfo)} className={`p-1 rounded-full transition-colors ${showInfo ? 'bg-indigo-100 text-indigo-600' : 'bg-slate-200 text-slate-500 hover:bg-slate-300'}`} title="Show Guide">
+                                                <svg className="w-4 h-4" fill="none" stroke="currentColor" viewBox="0 0 24 24"><path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2.5} d="M13 16h-1v-4h-1m1-4h.01M21 12a9 9 0 11-18 0 9 9 0 0118 0z" /></svg>
+                                            </button>
+                                        </h2>
+                                        <div className="ml-4 flex items-center gap-2 bg-slate-100 p-1 rounded-lg border border-slate-200">
+                                            <button onClick={() => setShowGross(false)} className={`px-3 py-1 rounded text-[10px] font-black uppercase transition-all ${!showGross ? 'bg-white shadow-sm text-indigo-600' : 'text-slate-400'}`}>Net Open</button>
+                                            <button onClick={() => setShowGross(true)} className={`px-3 py-1 rounded text-[10px] font-black uppercase transition-all ${showGross ? 'bg-white shadow-sm text-indigo-600' : 'text-slate-400'}`}>Gross Vol</button>
+                                        </div>
+                                    </div>
+                                    <div className="flex items-center gap-3">
+                                        <button onClick={() => setShowHolidayManager(true)} className="px-4 py-2 flex items-center gap-2 text-xs font-bold rounded-lg transition-all border border-slate-200 hover:bg-white text-slate-600">
+                                            <svg className="w-4 h-4 text-amber-500" fill="none" stroke="currentColor" viewBox="0 0 24 24"><path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M8 7V3m8 4V3m-9 8h10M5 21h14a2 2 0 002-2V7a2 2 0 00-2-2H5a2 2 0 00-2 2v12a2 2 0 002 2z" /></svg>
+                                            Trading Calendar
+                                        </button>
+                                        <div className="flex bg-slate-200/60 p-1 rounded-xl shadow-inner ml-2">
+                                            {[2025, 2026, 2027].map((year: number) => (
+                                                <button key={year} onClick={() => setTableYear(year)} className={`px-4 py-1.5 text-xs font-bold rounded-lg transition-all ${tableYear === year ? 'bg-white text-indigo-600 shadow-sm' : 'text-slate-500 hover:text-slate-700'}`}>{year}</button>
+                                            ))}
+                                        </div>
+                                    </div>
+                                </div>
+                                
+                                <div className="flex-1 overflow-auto custom-scrollbar">
+                                    <table className="w-full text-xs text-left border-collapse min-w-[1200px]">
+                                        <thead>
+                                            <tr className="bg-slate-50 text-slate-500 font-bold uppercase tracking-wider text-[10px] border-b border-slate-200">
+                                                <th className="px-6 py-4 sticky left-0 bg-slate-50 z-10 w-[180px]">Pricing Month</th>
+                                                {INDICES.map((idx: string) => (<th key={idx} className="px-4 py-4 text-center">{idx}</th>))}
+                                                <th className="px-6 py-4 text-right bg-slate-100/50 sticky right-0 z-10">Row {showGross ? 'Gross' : 'Net'}</th>
+                                            </tr>
+                                        </thead>
+                                        <tbody className="divide-y divide-slate-100">
+                                            {tableData.months.map((m: string) => {
+                                                const [y, mon] = m.split('-');
+                                                const monthName = new Date(parseInt(y), parseInt(mon)-1, 1).toLocaleString('en-US', { month: 'short' });
+                                                return (
+                                                    <tr key={m} className="hover:bg-indigo-50/30 transition-colors group">
+                                                        <td className="px-6 py-3 font-bold sticky left-0 group-hover:bg-indigo-50/30 bg-white text-slate-700 border-r border-slate-50">
+                                                            <div className="flex items-center gap-2"><span className="text-[10px] font-mono opacity-50">{y}</span><span className="uppercase tracking-tight">{monthName}</span></div>
+                                                        </td>
+                                                        {INDICES.map((idx: string) => {
+                                                            const cell = tableData.grid[m][idx];
+                                                            const hasValue = Math.abs(cell.base) > 0.1;
+                                                            const isFixed = Math.abs(cell.floating) < 0.1;
+                                                            
+                                                            const colorClass = isFixed 
+                                                                ? (cell.base < 0 ? 'text-rose-200' : 'text-slate-200')
+                                                                : (cell.floating < 0 ? 'text-rose-600 font-bold' : 'text-indigo-600 font-bold');
+        
+                                                            const displayVal = showGross ? cell.base : cell.floating;
+        
+                                                            return (
+                                                                <td key={idx} onClick={() => hasValue && setDrillDownCell({ month: m, index: idx })} className={`px-4 py-3 text-center font-mono transition-all ${hasValue ? 'cursor-pointer hover:bg-white hover:shadow-inner' : 'text-slate-50'}`}>
+                                                                    {hasValue ? (
+                                                                        <div className={`flex flex-col ${colorClass} relative`}>
+                                                                            <span>{(displayVal / 1000).toLocaleString(undefined, { maximumFractionDigits: 0 })}k</span>
+                                                                            {!isFixed && !showGross && <div className="absolute -top-1 -right-1 w-1.5 h-1.5 rounded-full bg-indigo-400 animate-pulse"></div>}
+                                                                        </div>
+                                                                    ) : '—'}
+                                                                </td>
+                                                            );
+                                                        })}
+                                                        <td className="px-6 py-3 text-right font-bold bg-slate-50/30 group-hover:bg-indigo-100/30 sticky right-0 z-10 text-slate-400">
+                                                            {(() => {
+                                                                const rowVal = INDICES.reduce((acc: number, idx: string) => acc + (showGross ? tableData.grid[m][idx].base : tableData.grid[m][idx].floating), 0);
+                                                                return Math.abs(rowVal) > 0.1 ? (rowVal / 1000).toLocaleString(undefined, { maximumFractionDigits: 0 }) + 'k' : '0k';
+                                                            })()}
+                                                        </td>
+                                                    </tr>
+                                                );
+                                            })}
+                                        </tbody>
+                                    </table>
+                                </div>
+                            </section>
+                        </div>
+                    </div>
+                </>
+            ) : (
+                <MDDAnalyzer />
+            )}
 
             <AnimatePresence>
                 {auditOpen && <RiskAuditModal onClose={() => setAuditOpen(false)} metrics={riskMetrics} />}
