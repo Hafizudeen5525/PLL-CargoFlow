@@ -65,8 +65,14 @@ self.onmessage = (e: MessageEvent) => {
       // Find internal portfolio
       const rawPort = findValue(row, ['Internal Portfolio', 'InternalPortfolio', 'Internal_Portfolio', 'Portfolio']);
       const iPort = typeof rawPort === 'string' ? rawPort.trim() : (rawPort !== undefined ? String(rawPort).trim() : '');
-      const allowedPortfolios = ['Base LNG', 'NTLB LNG', 'Optimization LNG', 'DH LNG', 'Hedging LNG', 'DFT LNG'];
-      const isAllowedPortfolio = allowedPortfolios.some(p => p.toLowerCase() === iPort.toLowerCase());
+      const iPortUpper = iPort.toUpperCase();
+      const isAllowedPortfolio = 
+          iPortUpper === 'BASE LNG' || 
+          iPortUpper === 'NTLB LNG' || 
+          iPortUpper === 'OPTIMIZATION LNG' || 
+          iPortUpper === 'DH LNG' || 
+          iPortUpper === 'DFT LNG' || 
+          iPortUpper === 'HEDGING LNG';
 
       // Find PLSB Year Bucket
       const rawY = findValue(row, ['Plsb Year Bucket', 'Plsb_Year_Bucket', 'Year Bucket', 'Year', 'PlsbYearBucket']);
@@ -82,7 +88,7 @@ self.onmessage = (e: MessageEvent) => {
       const sName = intern(String(findValue(row, ['Strategy Name', 'Strategy', 'Deal Name']) || '').trim());
       if (!sName || sName.includes("GLNG") || (sName.includes("CSPA") && !sName.includes("CSPA Opt"))) return;
 
-      if (portfolioName === 'Unknown' && iPort && iPort !== 'Hedging LNG' && iPort !== 'DH LNG' && iPort !== 'DFT LNG') {
+      if (portfolioName === 'Unknown' && iPort && iPortUpper !== 'HEDGING LNG' && iPortUpper !== 'DH LNG' && iPortUpper !== 'DFT LNG') {
           portfolioName = iPort;
       }
 
@@ -248,7 +254,7 @@ self.onmessage = (e: MessageEvent) => {
           }
       }
 
-      if (iPort === "Hedging LNG") {
+      if (iPortUpper === "HEDGING LNG") {
           const dealStatus = String(row['Deal Status'] || '').trim().toLowerCase();
           // Only count live/active hedging trades as "Open Trades"
           if (dealStatus === 'live' || dealStatus === 'open' || dealStatus === 'active' || !dealStatus) {
@@ -261,9 +267,9 @@ self.onmessage = (e: MessageEvent) => {
           }
       }
       
-      if (cType === "SRC- Shipping Related Cost") srcRows.push(cleanRow);
-      if (iPort === "Hedging LNG") hedgingRows.push(cleanRow);
-      if (iPort === "DH LNG" || iPort === "DFT LNG") paperRows.push(cleanRow);
+      if (cTypeLower.includes("src") || cTypeLower.includes("shipping")) srcRows.push(cleanRow);
+      if (iPortUpper === "HEDGING LNG") hedgingRows.push(cleanRow);
+      if (iPortUpper === "DH LNG" || iPortUpper === "DFT LNG") paperRows.push(cleanRow);
     });
 
     // Post-process trmsAgg to set final volumeType and priceStatus based on both legs

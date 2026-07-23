@@ -82,7 +82,15 @@ export const BulkImportModal: React.FC<BulkImportModalProps> = ({ existingProfil
   const [parsedRows, setParsedRows] = useState<any[]>([]);
   const [step, setStep] = useState<'paste' | 'preview'>('paste');
   const [selectedIndices, setSelectedIndices] = useState<Set<number>>(new Set());
-  const [ignoredChanges, setIgnoredChanges] = useState<Record<number, Set<string>>>({});
+  const [ignoredChanges, setIgnoredChanges] = useState<Record<number, Set<string>>>( {});
+
+  const toggleFieldChange = (rowIndex: number, field: string) => {
+      setIgnoredChanges(prev => {
+          const rowSet = new Set(prev[rowIndex] || []);
+          if (rowSet.has(field)) rowSet.delete(field); else rowSet.add(field);
+          return { ...prev, [rowIndex]: rowSet };
+      });
+  };
 
   const parseDate = (raw: string): string => {
     if (!raw) return '';
@@ -150,6 +158,9 @@ export const BulkImportModal: React.FC<BulkImportModalProps> = ({ existingProfil
                         const val = rawVal.toLowerCase();
                         if (val.includes('unreal')) parsedFields.pnlBucket = PnLBucket.Unrealized;
                         else if (val.includes('real')) parsedFields.pnlBucket = PnLBucket.Realized;
+                    } else if (key === 'strategyName') {
+                        const cleanVal = String(rawVal).trim();
+                        (parsedFields as any)[key] = cleanVal.replace(/t\(/i, '(').replace(/t$/i, '');
                     } else {
                         (parsedFields as any)[key] = rawVal;
                     }
@@ -345,37 +356,62 @@ export const BulkImportModal: React.FC<BulkImportModalProps> = ({ existingProfil
                     onChange={(e) => setInputText(e.target.value)}
                 />
             ) : (
-                <div className="border border-slate-200 rounded-xl overflow-hidden bg-white shadow-sm min-w-max">
-                    <table className="w-full text-xs text-left border-collapse">
-                        <thead className="bg-slate-100 text-slate-500 uppercase font-black text-[10px] tracking-widest border-b border-slate-200">
+                <div className="border border-slate-200 rounded-xl overflow-x-auto bg-white shadow-sm max-w-full">
+                    <table className="w-full text-xs text-left border-collapse min-w-[1200px]">
+                        <thead className="bg-slate-100 text-slate-500 uppercase font-black text-[10px] tracking-widest border-b border-slate-200 sticky top-0 z-10">
                             <tr>
-                                <th className="px-4 py-4 text-center w-12"><input type="checkbox" checked={isAllSelected} onChange={() => { if (isAllSelected) setSelectedIndices(new Set()); else setSelectedIndices(new Set(parsedRows.map((_, i) => i))); }} /></th>
+                                <th className="px-4 py-4 text-center w-12 sticky left-0 bg-slate-100 z-20">
+                                    <input type="checkbox" checked={isAllSelected} onChange={() => { if (isAllSelected) setSelectedIndices(new Set()); else setSelectedIndices(new Set(parsedRows.map((_, i) => i))); }} className="rounded border-slate-300 text-indigo-600 focus:ring-indigo-500 cursor-pointer" />
+                                </th>
                                 <th className="px-4 py-4 text-center w-24">Status</th>
-                                <th className="px-6 py-4 w-48">Strategy Name</th>
+                                <th className="px-6 py-4 w-48 sticky left-12 bg-slate-100 z-20 border-r border-slate-200">Strategy Name</th>
+                                <th className="px-4 py-4">Buyer/Source</th>
                                 <th className="px-4 py-4">Loading Date</th>
                                 <th className="px-4 py-4">Delivery Date</th>
                                 <th className="px-4 py-4 text-right">Total Vol (MT/U)</th>
+                                <th className="px-4 py-4">Formula</th>
+                                <th className="px-4 py-4 text-right">Price</th>
+                                <th className="px-4 py-4">P&L Bucket</th>
+                                <th className="px-4 py-4 text-right">Reconciled Cost/Rev</th>
+                                <th className="px-4 py-4">Incoterms</th>
                                 <th className="px-4 py-4 text-right">P&L</th>
                             </tr>
                         </thead>
                         <tbody className="divide-y divide-slate-100">
                             {parsedRows.map((row: any, i: number) => (
-                                <tr key={i} className={`hover:bg-indigo-50/20 group ${!selectedIndices.has(i) ? 'opacity-40 grayscale' : ''}`}>
-                                    <td className="px-4 py-3 text-center"><input type="checkbox" checked={selectedIndices.has(i)} onChange={() => { const s = new Set(selectedIndices); if (s.has(i)) s.delete(i); else s.add(i); setSelectedIndices(s); }} /></td>
+                                <tr key={i} className={`hover:bg-indigo-50/20 transition-colors group ${!selectedIndices.has(i) ? 'opacity-40 grayscale' : ''}`}>
+                                    <td className="px-4 py-3 text-center sticky left-0 bg-white group-hover:bg-indigo-50/20 z-10">
+                                        <input type="checkbox" checked={selectedIndices.has(i)} onChange={() => { const s = new Set(selectedIndices); if (s.has(i)) s.delete(i); else s.add(i); setSelectedIndices(s); }} className="rounded border-slate-300 text-indigo-600 focus:ring-indigo-500 cursor-pointer" />
+                                    </td>
                                     <td className="px-4 py-3 text-center">
-                                        <span className={`px-2 py-0.5 rounded text-[9px] font-black uppercase border ${row._status === 'Update' ? 'bg-blue-50 text-blue-700 border-blue-100' : 'bg-emerald-50 text-emerald-700 border-emerald-100'}`}>{row._status}</span>
+                                        <span className={`px-2 py-0.5 rounded text-[9px] font-black uppercase border ${
+                                            row._status === 'Update' ? 'bg-blue-50 text-blue-700 border-blue-100' : 
+                                            row._status === 'New' ? 'bg-emerald-50 text-emerald-700 border-emerald-100' : 
+                                            'bg-slate-50 text-slate-400 border-slate-100'
+                                        }`}>
+                                            {row._status}
+                                        </span>
                                     </td>
-                                    <td className="px-6 py-3 font-bold text-slate-700">{row.strategyName}</td>
-                                    <td className="px-4 py-3 font-mono">
-                                        <DiffCell row={row} rowIndex={i} field="loadingDate" isIgnored={ignoredChanges[i]?.has("loadingDate")} onToggle={(idx, f) => { const s = new Set(ignoredChanges[idx] || []); if (s.has(f)) s.delete(f); else s.add(f); setIgnoredChanges({ ...ignoredChanges, [idx]: s }); }} className="font-mono" />
+                                    <td className="px-6 py-3 font-bold text-slate-700 sticky left-12 bg-white group-hover:bg-indigo-50/20 z-10 border-r border-slate-200">
+                                        {row.strategyName}
                                     </td>
-                                    <td className="px-4 py-3 font-mono">
-                                        <DiffCell row={row} rowIndex={i} field="deliveryDate" isIgnored={ignoredChanges[i]?.has("deliveryDate")} onToggle={(idx, f) => { const s = new Set(ignoredChanges[idx] || []); if (s.has(f)) s.delete(f); else s.add(f); setIgnoredChanges({ ...ignoredChanges, [idx]: s }); }} className="font-mono" />
+                                    <td className="px-4 py-3">
+                                        <div className="flex flex-col gap-1">
+                                            <DiffCell row={row} rowIndex={i} field="source" isIgnored={ignoredChanges[i]?.has("source")} onToggle={toggleFieldChange} />
+                                            <div className="h-px bg-slate-100 my-0.5" />
+                                            <DiffCell row={row} rowIndex={i} field="buyer" isIgnored={ignoredChanges[i]?.has("buyer")} onToggle={toggleFieldChange} />
+                                        </div>
+                                    </td>
+                                    <td className="px-4 py-3">
+                                        <DiffCell row={row} rowIndex={i} field="loadingDate" isIgnored={ignoredChanges[i]?.has("loadingDate")} onToggle={toggleFieldChange} className="font-mono" />
+                                    </td>
+                                    <td className="px-4 py-3">
+                                        <DiffCell row={row} rowIndex={i} field="deliveryDate" isIgnored={ignoredChanges[i]?.has("deliveryDate")} onToggle={toggleFieldChange} className="font-mono" />
                                     </td>
                                     <td className="px-4 py-3 text-right">
                                         <div className="flex flex-col gap-1">
                                             <div>
-                                                <DiffCell row={row} rowIndex={i} field="totalLoadedVolume" format={(v) => v?.toLocaleString()} isIgnored={ignoredChanges[i]?.has("totalLoadedVolume")} onToggle={(idx, f) => { const s = new Set(ignoredChanges[idx] || []); if (s.has(f)) s.delete(f); else s.add(f); setIgnoredChanges({ ...ignoredChanges, [idx]: s }); }} className="font-mono" />
+                                                <DiffCell row={row} rowIndex={i} field="totalLoadedVolume" format={(v) => v?.toLocaleString()} isIgnored={ignoredChanges[i]?.has("totalLoadedVolume")} onToggle={toggleFieldChange} className="font-mono" />
                                                 {row.isTieredPricing && (
                                                     <div className="text-[8px] text-slate-400 font-mono mt-0.5">
                                                         ({row.loadedVolume?.toLocaleString()} / {row.tier2LoadedVolume?.toLocaleString()})
@@ -384,7 +420,7 @@ export const BulkImportModal: React.FC<BulkImportModalProps> = ({ existingProfil
                                             </div>
                                             <div className="h-px bg-slate-100 my-0.5" />
                                             <div>
-                                                <DiffCell row={row} rowIndex={i} field="totalDeliveredVolume" format={(v) => v?.toLocaleString()} isIgnored={ignoredChanges[i]?.has("totalDeliveredVolume")} onToggle={(idx, f) => { const s = new Set(ignoredChanges[idx] || []); if (s.has(f)) s.delete(f); else s.add(f); setIgnoredChanges({ ...ignoredChanges, [idx]: s }); }} className="font-mono" />
+                                                <DiffCell row={row} rowIndex={i} field="totalDeliveredVolume" format={(v) => v?.toLocaleString()} isIgnored={ignoredChanges[i]?.has("totalDeliveredVolume")} onToggle={toggleFieldChange} className="font-mono" />
                                                 {row.isTieredPricing && (
                                                     <div className="text-[8px] text-slate-400 font-mono mt-0.5">
                                                         ({row.deliveredVolume?.toLocaleString()} / {row.tier2DeliveredVolume?.toLocaleString()})
@@ -393,8 +429,46 @@ export const BulkImportModal: React.FC<BulkImportModalProps> = ({ existingProfil
                                             </div>
                                         </div>
                                     </td>
+                                    <td className="px-4 py-3">
+                                        <div className="flex flex-col gap-1">
+                                            <DiffCell row={row} rowIndex={i} field="buyFormula" isIgnored={ignoredChanges[i]?.has("buyFormula")} onToggle={toggleFieldChange} className="text-[10px]" />
+                                            <div className="h-px bg-slate-100 my-0.5" />
+                                            <DiffCell row={row} rowIndex={i} field="sellFormula" isIgnored={ignoredChanges[i]?.has("sellFormula")} onToggle={toggleFieldChange} className="text-[10px]" />
+                                        </div>
+                                    </td>
                                     <td className="px-4 py-3 text-right">
-                                        <DiffCell row={row} rowIndex={i} field="finalTotalPnL" format={(v) => Number(v).toLocaleString()} isIgnored={ignoredChanges[i]?.has("finalTotalPnL")} onToggle={(idx, f) => { const s = new Set(ignoredChanges[idx] || []); if (s.has(f)) s.delete(f); else s.add(f); setIgnoredChanges({ ...ignoredChanges, [idx]: s }); }} className={`font-mono font-bold ${row.finalTotalPnL >= 0 ? 'text-emerald-600' : 'text-rose-600'}`} />
+                                        <div className="flex flex-col gap-1">
+                                            <DiffCell row={row} rowIndex={i} field="absoluteBuyPrice" format={(v) => Number(v || 0).toFixed(row.buyPriceRounding || 3)} isIgnored={ignoredChanges[i]?.has("absoluteBuyPrice")} onToggle={toggleFieldChange} className="font-mono" />
+                                            <div className="h-px bg-slate-100 my-0.5" />
+                                            <DiffCell row={row} rowIndex={i} field="absoluteSellPrice" format={(v) => Number(v || 0).toFixed(row.sellPriceRounding || 3)} isIgnored={ignoredChanges[i]?.has("absoluteSellPrice")} onToggle={toggleFieldChange} className="font-mono" />
+                                        </div>
+                                    </td>
+                                    <td className="px-4 py-3">
+                                        <DiffCell 
+                                            row={row} 
+                                            rowIndex={i} 
+                                            field="pnlBucket" 
+                                            isIgnored={ignoredChanges[i]?.has("pnlBucket")} 
+                                            onToggle={toggleFieldChange} 
+                                            format={(v) => (
+                                                <span className={`px-2 py-0.5 rounded-full font-bold text-[8px] uppercase ${v === PnLBucket.Realized ? 'bg-blue-100 text-blue-700' : 'bg-amber-100 text-amber-700'}`}>
+                                                    {v}
+                                                </span>
+                                            )}
+                                        />
+                                    </td>
+                                    <td className="px-4 py-3 text-right">
+                                        <div className="flex flex-col gap-1">
+                                            <DiffCell row={row} rowIndex={i} field="reconciledPurchaseCost" format={(v) => v > 0 ? v.toLocaleString() : '-'} isIgnored={ignoredChanges[i]?.has("reconciledPurchaseCost")} onToggle={toggleFieldChange} className="font-mono" />
+                                            <div className="h-px bg-slate-100 my-0.5" />
+                                            <DiffCell row={row} rowIndex={i} field="reconciledSalesRevenue" format={(v) => v > 0 ? v.toLocaleString() : '-'} isIgnored={ignoredChanges[i]?.has("reconciledSalesRevenue")} onToggle={toggleFieldChange} className="font-mono" />
+                                        </div>
+                                    </td>
+                                    <td className="px-4 py-3">
+                                        <DiffCell row={row} rowIndex={i} field="incoterms" isIgnored={ignoredChanges[i]?.has("incoterms")} onToggle={toggleFieldChange} />
+                                    </td>
+                                    <td className="px-4 py-3 text-right">
+                                        <DiffCell row={row} rowIndex={i} field="finalTotalPnL" format={(v) => Number(v).toLocaleString()} isIgnored={ignoredChanges[i]?.has("finalTotalPnL")} onToggle={toggleFieldChange} className={`font-mono font-bold ${row.finalTotalPnL >= 0 ? 'text-emerald-600' : 'text-rose-600'}`} />
                                     </td>
                                 </tr>
                             ))}

@@ -260,8 +260,8 @@ export const CargoList: React.FC<CargoListProps> = ({
                             const count = (seenInSheetCount.get(cleanStratName) || 0) + 1;
                             seenInSheetCount.set(cleanStratName, count);
 
-                            const isTier2Leg = count > 1 || cleanStratName.includes('t(') || cleanStratName.endsWith('t');
-                            const lookupName = cleanStratName.replace('t(', '(').replace(/t$/, '');
+                            const isTier2Leg = count > 1 || cleanStratName.toLowerCase().includes('t(') || cleanStratName.toLowerCase().endsWith('t');
+                            const lookupName = cleanStratName.replace(/t\(/i, '(').replace(/t$/i, '');
 
                             if (!mergedData[lookupName]) mergedData[lookupName] = { strategyName: lookupName };
                             
@@ -322,6 +322,8 @@ export const CargoList: React.FC<CargoListProps> = ({
                                              (mergedData[lookupName] as any)[profileKey] = `${y}-${m}-${d}`;
                                          } else if (profileKey === 'optimized') {
                                              mergedData[lookupName].optimized = String(rawVal).toLowerCase().includes('yes') || rawVal === true;
+                                         } else if (profileKey === 'strategyName') {
+                                             (mergedData[lookupName] as any)[profileKey] = lookupName;
                                          } else {
                                              (mergedData[lookupName] as any)[profileKey] = val;
                                          }

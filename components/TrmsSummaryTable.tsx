@@ -1,4 +1,4 @@
-import React, { useState, useMemo, useRef, useEffect } from 'react';
+import React, { useState, useMemo, useRef, useEffect, useCallback } from 'react';
 import { motion, AnimatePresence } from 'framer-motion';
 import { 
   Layers, 
@@ -12,6 +12,7 @@ import {
   SlidersHorizontal,
   ChevronUp,
   AlertCircle, 
+  AlertTriangle,
   HelpCircle, 
   TrendingUp, 
   TrendingDown,
@@ -46,7 +47,9 @@ import {
   ResponsiveContainer, 
   XAxis, 
   YAxis, 
-  CartesianGrid 
+  CartesianGrid,
+  ComposedChart,
+  Line
 } from 'recharts';
 import { ReconciliationData, ColumnFilterPopover } from './DiscrepancyCheck';
 import { toast } from 'react-hot-toast';
@@ -95,14 +98,240 @@ const getTrmsGroupName = (strategyName: string = ''): string => {
   return 'Others';
 };
 
+const getRowPriceIndex = (row: any) => {
+  const indexVal = row['IndexName_ProjectionMethod'] || row['IndexName ProjectionMethod'] || row['IndexName_Projection_Method'] || row['Index Name'] || row['IndexName'] || row['Reference'] || '';
+  const str = String(indexVal).toUpperCase();
+  if (str.includes('HH') || str.includes('HENRY')) return 'Henry Hub';
+  if (str.includes('TTF')) return 'TTF';
+  if (str.includes('JKM')) return 'JKM';
+  if (str.includes('NBP')) return 'NBP';
+  if (str.includes('BRENT') || str.includes('CO1')) return 'Brent';
+  if (str.includes('JCC')) return 'JCC';
+  return 'Fixed / Other';
+};
+
+const getRowTraderName = (row: any) => {
+  return String(row['Trader'] || row['Trader Name'] || 'Unassigned').trim();
+};
+
+const convertVolume = (vol: number, unit?: string): number => {
+  if (isNaN(vol) || vol === null) return 0;
+  return vol;
+};
+
+const addUnitVolume = (acc: { [unit: string]: number }, vol: number, unit?: string): { [unit: string]: number } => {
+  if (isNaN(vol) || !vol) return acc;
+  const u = String(unit || 'MMBtu').trim().toUpperCase();
+  let normUnit = 'MMBtu';
+  if (u === 'BBL' || u === 'BBLS' || u === 'BARREL' || u === 'BARRELS') {
+    normUnit = 'Bbl';
+  } else if (u === 'MMBTU' || u === 'MMBTUS') {
+    normUnit = 'MMBtu';
+  } else if (u === 'MWH' || u === 'MWHS' || u === 'MEGAWATT HOUR' || u === 'MEGAWATT HOURS') {
+    normUnit = 'MWh';
+  } else if (u === 'GJ' || u === 'GJS' || u === 'GIGAJOULE' || u === 'GIGAJOULES') {
+    normUnit = 'GJ';
+  } else if (u === 'CARGO' || u === 'CARGOES') {
+    normUnit = 'Cargo';
+  } else if (u === 'CURRENCY' || u === 'USD' || u === 'EUR' || u === '$') {
+    return acc;
+  } else if (unit) {
+    normUnit = unit.trim();
+  }
+  acc[normUnit] = (acc[normUnit] || 0) + vol;
+  return acc;
+};
+
+const sumUnitVolumesList = (items: { [unit: string]: number }[]): { [unit: string]: number } => {
+  const result: { [unit: string]: number } = {};
+  items.forEach(item => {
+    if (!item) return;
+    Object.entries(item).forEach(([unit, val]) => {
+      result[unit] = (result[unit] || 0) + val;
+    });
+  });
+  return result;
+};
+
+const maxUnitVolumesList = (items: Array<{ purchase: { [unit: string]: number }, sales: { [unit: string]: number } }>): { [unit: string]: number } => {
+  const result: { [unit: string]: number } = {};
+  items.forEach(item => {
+    const allUnits = new Set([
+      ...Object.keys(item.purchase || {}),
+      ...Object.keys(item.sales || {})
+    ]);
+    allUnits.forEach(unit => {
+      const p = item.purchase?.[unit] || 0;
+      const s = item.sales?.[unit] || 0;
+      result[unit] = (result[unit] || 0) + Math.max(p, s);
+    });
+  });
+  return result;
+};
+
 interface TrmsSummaryTableProps {
   trmsData: ReconciliationData;
   viewModeOnly?: 'grid' | 'dashboard';
 }
 
+const validateReferenceFormat = (ref: string): { isValid: boolean; error?: string } => {
+  if (!ref) {
+    return { isValid: false, error: 'Reference is empty' };
+  }
+  const parts = ref.split('_');
+  if (parts.length < 3) {
+    return { isValid: false, error: 'Reference must have at least 3 underscore-separated segments (Index_Buyer_ExpMonthYear)' };
+  }
+
+  const [index, buyer, exp] = parts;
+
+  // 1. Price index check
+  const allowedIndices = ['AECO', 'SLOPE', 'BRI', 'DTB', 'HH', 'JKM', 'JCC', 'NBP', 'TFU', 'TTF'];
+  if (!allowedIndices.includes(index.toUpperCase())) {
+    return { isValid: false, error: `Invalid price index "${index}". Expected one of: ${allowedIndices.join(', ')}` };
+  }
+
+  // 2. Buyer symbol check
+  if (!/^[A-Za-z0-9]+$/.test(buyer)) {
+    return { isValid: false, error: `Buyer symbol "${buyer}" must be alphanumeric (no spaces/special chars)` };
+  }
+
+  // 3. Exposure month & year check
+  if (exp.length !== 3) {
+    return { isValid: false, error: `Exposure segment "${exp}" must be exactly 3 characters (e.g., M26)` };
+  }
+
+  const monthChar = exp[0].toUpperCase();
+  const yearStr = exp.substring(1);
+
+  const allowedMonths = ['F', 'G', 'H', 'J', 'K', 'M', 'N', 'Q', 'U', 'V', 'X', 'Z'];
+  if (!allowedMonths.includes(monthChar)) {
+    return { isValid: false, error: `Invalid month symbol "${monthChar}". Expected one of: ${allowedMonths.join(', ')}` };
+  }
+
+  if (!/^\d{2}$/.test(yearStr)) {
+    return { isValid: false, error: `Invalid year suffix "${yearStr}". Expected 2 digits (e.g. 26)` };
+  }
+
+  return { isValid: true };
+};
+
+const parseIndexFromReference = (ref: string): string => {
+  if (!ref) return '—';
+  const parts = ref.split('_');
+  if (parts.length > 0 && parts[0]) {
+    return parts[0].toUpperCase();
+  }
+  return '—';
+};
+
+const parseBuyerFromReference = (ref: string): string => {
+  if (!ref) return '—';
+  const parts = ref.split('_');
+  if (parts.length > 1 && parts[1]) {
+    return parts[1].toUpperCase();
+  }
+  return '—';
+};
+
+const parseExpiryFromReference = (ref: string): string => {
+  if (!ref) return '—';
+  const parts = ref.split('_');
+  if (parts.length > 2 && parts[2]) {
+    return parts[2].toUpperCase();
+  }
+  return '—';
+};
+
+const getReadableIndexName = (idx: string): string => {
+  const upper = idx.trim().toUpperCase();
+  switch (upper) {
+    case 'BRI': return 'Brent';
+    case 'DTB': return 'Dated Brent';
+    case 'HH': return 'HH';
+    case 'NBP': return 'NBP';
+    case 'TTF': return 'TTF';
+    case 'JKM': return 'JKM';
+    case 'AECO': return 'AECO';
+    case 'SLOPE': return 'Slope';
+    case 'JCC': return 'JCC';
+    case 'TFU': return 'TFU';
+    default: return idx;
+  }
+};
+
+const decodeExposureMonth = (expCode: string): string => {
+  if (!expCode || expCode.length !== 3) return expCode || '—';
+  const m = expCode[0].toUpperCase();
+  const y = expCode.substring(1);
+  const monthMap: Record<string, string> = {
+    F: 'Jan',
+    G: 'Feb',
+    H: 'Mar',
+    J: 'Apr',
+    K: 'May',
+    M: 'Jun',
+    N: 'Jul',
+    Q: 'Aug',
+    U: 'Sep',
+    V: 'Oct',
+    X: 'Nov',
+    Z: 'Dec'
+  };
+  const monthName = monthMap[m];
+  if (!monthName || !/^\d{2}$/.test(y)) return expCode;
+  return `${monthName} 20${y}`;
+};
+
+const sortExposureMonths = (months: string[]): string[] => {
+  const monthsList = ['Jan', 'Feb', 'Mar', 'Apr', 'May', 'Jun', 'Jul', 'Aug', 'Sep', 'Oct', 'Nov', 'Dec'];
+  return [...months].sort((a, b) => {
+    const parse = (str: string) => {
+      const parts = str.split(' ');
+      if (parts.length < 2) return { monthIdx: -1, year: 0 };
+      const mIdx = monthsList.indexOf(parts[0]);
+      const yr = parseInt(parts[1], 10);
+      return { monthIdx: mIdx, year: isNaN(yr) ? 0 : yr };
+    };
+    const pa = parse(a);
+    const pb = parse(b);
+    if (pa.year !== pb.year) return pa.year - pb.year;
+    return pa.monthIdx - pb.monthIdx;
+  });
+};
+
+const renderIndexPill = (idx: string) => {
+  const cleanIdx = idx.trim().toUpperCase();
+  const readable = getReadableIndexName(idx);
+  let colorClasses = 'bg-slate-950/45 text-slate-300 border-slate-900';
+  if (cleanIdx === 'TTF') {
+    colorClasses = 'bg-indigo-950/45 text-indigo-300 border-indigo-900/30';
+  } else if (cleanIdx === 'JKM') {
+    colorClasses = 'bg-amber-950/45 text-amber-300 border-amber-900/30';
+  } else if (cleanIdx === 'HH' || cleanIdx === 'HENRY HUB') {
+    colorClasses = 'bg-emerald-950/45 text-emerald-300 border-emerald-900/30';
+  } else if (cleanIdx === 'NBP') {
+    colorClasses = 'bg-blue-950/45 text-blue-300 border-blue-900/30';
+  } else if (cleanIdx === 'AECO') {
+    colorClasses = 'bg-violet-950/45 text-violet-300 border-violet-900/30';
+  } else if (cleanIdx === 'SLOPE') {
+    colorClasses = 'bg-rose-950/45 text-rose-300 border-rose-900/30';
+  } else if (cleanIdx === 'JCC') {
+    colorClasses = 'bg-teal-950/45 text-teal-300 border-teal-900/30';
+  } else if (cleanIdx === 'BRI' || cleanIdx === 'DTB' || cleanIdx === 'TFU') {
+    colorClasses = 'bg-cyan-950/45 text-cyan-300 border-cyan-900/30';
+  }
+
+  return (
+    <span className={`px-2 py-0.5 rounded text-[10px] font-extrabold uppercase border tracking-wider font-mono ${colorClasses}`}>
+      {readable}
+    </span>
+  );
+};
+
 export const TrmsSummaryTable: React.FC<TrmsSummaryTableProps> = ({ trmsData, viewModeOnly }) => {
   const [viewMode, setViewMode] = useState<'dashboard' | 'grid'>(viewModeOnly || 'dashboard');
-  const [dashboardTab, setDashboardTab] = useState<'overview' | 'optimizations' | 'breakdowns'>('overview');
+  const [dashboardTab, setDashboardTab] = useState<'overview' | 'optimizations' | 'breakdowns' | 'volume_exposure'>('overview');
 
   useEffect(() => {
     if (viewModeOnly) {
@@ -112,7 +341,46 @@ export const TrmsSummaryTable: React.FC<TrmsSummaryTableProps> = ({ trmsData, vi
 
   const [activeTrmsGroup, setActiveTrmsGroup] = useState<string>('All');
   const [selectedDrillDownStrategy, setSelectedDrillDownStrategy] = useState<string | null>(null);
+  const [selectedTraderFilter, setSelectedTraderFilter] = useState<string | null>(null);
+  const [selectedIndexFilter, setSelectedIndexFilter] = useState<string | null>(null);
+  const [drilldownSubFilter, setDrilldownSubFilter] = useState<'all' | 'base' | 'optimized'>('all');
+
+  useEffect(() => {
+    setDrilldownSubFilter('all');
+  }, [selectedDrillDownStrategy]);
   const [activeBreakdownCategory, setActiveBreakdownCategory] = useState<string>('PL9SB');
+  const [selectedUnit, setSelectedUnit] = useState<string>('ALL');
+  const [indexBreakdownUnit, setIndexBreakdownUnit] = useState<'MMBtu' | 'Bbl' | 'Ratio'>('MMBtu');
+
+  const formatUnitVolumes = useCallback((
+    volumes: { [unit: string]: number } | undefined, 
+    separator: string = ' | ',
+    type: 'buy' | 'sell' | 'neutral' = 'neutral'
+  ): string => {
+    if (!volumes) return '—';
+    const entries = Object.entries(volumes).filter(([_, val]) => Math.abs(val) > 0.0001);
+    if (entries.length === 0) return '—';
+
+    const signPrefix = type === 'buy' ? '+' : type === 'sell' ? '-' : '';
+
+    if (selectedUnit !== 'ALL') {
+      const match = entries.find(([unit]) => unit.toUpperCase() === selectedUnit.toUpperCase());
+      if (match) {
+        const absoluteVal = Math.abs(match[1]);
+        const formattedVal = absoluteVal.toLocaleString(undefined, { maximumFractionDigits: 0 });
+        return `${signPrefix}${formattedVal} ${match[0]}`;
+      }
+      return '—';
+    }
+
+    return entries
+      .map(([unit, val]) => {
+        const absoluteVal = Math.abs(val);
+        const formattedVal = absoluteVal.toLocaleString(undefined, { maximumFractionDigits: 0 });
+        return `${signPrefix}${formattedVal} ${unit}`;
+      })
+      .join(separator);
+  }, [selectedUnit]);
   const [searchTerm, setSearchTerm] = useState('');
   const [selectedEodDate, setSelectedEodDate] = useState<string>('all');
   const [selectedYear, setSelectedYear] = useState<string>('all');
@@ -146,11 +414,29 @@ export const TrmsSummaryTable: React.FC<TrmsSummaryTableProps> = ({ trmsData, vi
   const [subTableSearches, setSubTableSearches] = useState<Record<string, string>>({});
   const [subTableBuySellFilters, setSubTableBuySellFilters] = useState<Record<string, string>>({});
   const [subTablePortfolioFilters, setSubTablePortfolioFilters] = useState<Record<string, string>>({});
+  const [subTableRefFilters, setSubTableRefFilters] = useState<Record<string, string>>({});
+  const [subTableIndexFilters, setSubTableIndexFilters] = useState<Record<string, string>>({});
+  const [subTableExposureMonthFilters, setSubTableExposureMonthFilters] = useState<Record<string, string>>({});
+
+  // Sub-table per-column filter state and popovers indexed by Strategy Name
+  const [subTableColumnFilters, setSubTableColumnFilters] = useState<Record<string, Record<string, {
+    selectedValues: Set<string>;
+    condition: string;
+    conditionValue1: string;
+    conditionValue2: string;
+  }>>>({});
+  const [activeSubFilterMenu, setActiveSubFilterMenu] = useState<string | null>(null);
+  const [subFilterSearchTerms, setSubFilterSearchTerms] = useState<Record<string, Record<string, string>>>({});
+  const [subTableSortConfig, setSubTableSortConfig] = useState<Record<string, { column: string; direction: 'asc' | 'desc' | null }>>({});
+
+  const [alertsCollapsed, setAlertsCollapsed] = useState<boolean>(true);
 
   const rows = useMemo(() => trmsData.extractedRows || [], [trmsData.extractedRows]);
 
   // Click outside handling for menus
   const menuRef = useRef<HTMLDivElement>(null);
+  const subMenuRef = useRef<HTMLDivElement>(null);
+  const tableContainerRef = useRef<HTMLDivElement>(null);
 
   useEffect(() => {
     const handleClickOutside = (event: MouseEvent) => {
@@ -158,10 +444,82 @@ export const TrmsSummaryTable: React.FC<TrmsSummaryTableProps> = ({ trmsData, vi
       if (menuRef.current && !menuRef.current.contains(target)) {
         setActiveFilterMenu(null);
       }
+      if (subMenuRef.current && !subMenuRef.current.contains(target)) {
+        setActiveSubFilterMenu(null);
+      }
     };
     document.addEventListener('mousedown', handleClickOutside);
     return () => {
       document.removeEventListener('mousedown', handleClickOutside);
+    };
+  }, []);
+
+  // Right-click drag scrolling for the main TRMS summary table
+  useEffect(() => {
+    const container = tableContainerRef.current;
+    if (!container) return;
+
+    let isDragging = false;
+    let startX = 0;
+    let startY = 0;
+    let scrollLeft = 0;
+    let scrollTop = 0;
+
+    const handleMouseDown = (e: MouseEvent) => {
+      // Right click only (button === 2)
+      if (e.button !== 2) return;
+      
+      isDragging = true;
+      startX = e.clientX;
+      startY = e.clientY;
+      scrollLeft = container.scrollLeft;
+      scrollTop = container.scrollTop;
+
+      container.style.cursor = 'grabbing';
+      
+      // Prevent text selection inside table during drag
+      document.body.style.userSelect = 'none';
+    };
+
+    const handleMouseMove = (e: MouseEvent) => {
+      if (!isDragging) return;
+      
+      const dx = e.clientX - startX;
+      const dy = e.clientY - startY;
+
+      container.scrollLeft = scrollLeft - dx;
+      container.scrollTop = scrollTop - dy;
+    };
+
+    const handleMouseUp = () => {
+      if (!isDragging) return;
+      isDragging = false;
+      
+      container.style.cursor = 'auto';
+      document.body.style.userSelect = '';
+    };
+
+    const handleContextMenu = (e: MouseEvent) => {
+      // Allow standard context menu if user has highlighted/selected text
+      const selectedText = window.getSelection()?.toString();
+      if (selectedText && selectedText.trim().length > 0) {
+        return;
+      }
+      // Always prevent context menu on right-click within the table container 
+      // so the browser popup doesn't block the screen while scrolling
+      e.preventDefault();
+    };
+
+    container.addEventListener('mousedown', handleMouseDown);
+    container.addEventListener('contextmenu', handleContextMenu);
+    document.addEventListener('mousemove', handleMouseMove);
+    document.addEventListener('mouseup', handleMouseUp);
+
+    return () => {
+      container.removeEventListener('mousedown', handleMouseDown);
+      container.removeEventListener('contextmenu', handleContextMenu);
+      document.removeEventListener('mousemove', handleMouseMove);
+      document.removeEventListener('mouseup', handleMouseUp);
     };
   }, []);
 
@@ -296,8 +654,11 @@ export const TrmsSummaryTable: React.FC<TrmsSummaryTableProps> = ({ trmsData, vi
 
       // Calculations D: Extra aggregated values
       let purchaseVolume = 0;
+      const purchaseVolumeByUnit: { [unit: string]: number } = {};
       let salesVolume = 0;
+      const salesVolumeByUnit: { [unit: string]: number } = {};
       let totalVolume = 0;
+      const totalVolumeByUnit: { [unit: string]: number } = {};
       let totalValueUSD = 0;
       let totalPnL = 0;
 
@@ -306,6 +667,10 @@ export const TrmsSummaryTable: React.FC<TrmsSummaryTableProps> = ({ trmsData, vi
 
       // Hedging P&L sum: Base Value USD of all items with portfolio "Hedging LNG"
       let hedgingPnL = 0;
+      let hedgingVolume = 0;
+      const hedgingVolumeByUnit: { [unit: string]: number } = {};
+      let paperVolume = 0;
+      const paperVolumeByUnit: { [unit: string]: number } = {};
 
       // Buy price weighting calculations
       let weightedBuyPriceSum = 0;
@@ -458,16 +823,55 @@ export const TrmsSummaryTable: React.FC<TrmsSummaryTableProps> = ({ trmsData, vi
         }
       }
 
+      // Filter buyCalcRows / sellCalcRows to prefer "Actual" line items over "Nominated" if "Actual" items exist to prevent duplication
+      const getVolType = (r: any) => String(r['Volume Type'] || r['Vol Type'] || r['VolType'] || r['Volume_Type'] || '').trim();
+
+      if (buyCalcRows.some(r => getVolType(r) === 'Actual')) {
+        buyCalcRows = buyCalcRows.filter(r => getVolType(r) === 'Actual');
+      }
+      if (sellCalcRows.some(r => getVolType(r) === 'Actual')) {
+        sellCalcRows = sellCalcRows.filter(r => getVolType(r) === 'Actual');
+      }
+
+      // Turn cargo status (physicalPnLStatus) to Realized if all relevant line items are Actual
+      const relevantCalcRows = [...buyCalcRows, ...sellCalcRows];
+      if (relevantCalcRows.length > 0) {
+        const allActual = relevantCalcRows.every(r => getVolType(r) === 'Actual');
+        physicalPnLStatus = allActual ? 'Realized' : 'Unrealized';
+      }
+
       // 1. Calculate General Metrics from all underlying rows (hedging, shipping, total volume, etc.)
       underlyingRows.forEach(r => {
-        const vol = Number(String(r['Volume'] || '').replace(/[^0-9.-]/g, ''));
+        const rawVol = Number(String(r['Volume'] || '').replace(/[^0-9.-]/g, ''));
+        const unit = r['Unit'] || r['unit'];
         const val = Number(String(r['Base_Total_Value_USD'] || '').replace(/[^0-9.-]/g, ''));
 
         const cflowType = String(r['Cflow Type'] || '').trim().toLowerCase();
         const internalPortfolio = String(r['Internal Portfolio'] || r['Portfolio'] || '').trim().toLowerCase();
+        const insType = String(r['Ins Type'] || r['Instrument Type'] || '').trim().toUpperCase();
 
-        if (!isNaN(vol)) {
-          totalVolume += vol;
+        const isCommodity = cflowType === 'commodity' && insType === 'COMM-PHYS';
+        const isHedgingLng = internalPortfolio === 'hedging lng';
+        const isPaperLng = internalPortfolio === 'dh lng' || internalPortfolio === 'dft lng';
+
+        // Avoid double counting volume if a Nominated commodity row was excluded in favor of an Actual row
+        let includeCommodityVol = true;
+        if (isCommodity) {
+          if (!buyCalcRows.includes(r) && !sellCalcRows.includes(r)) {
+            includeCommodityVol = false;
+          }
+        }
+
+        if (!isNaN(rawVol) && includeCommodityVol) {
+          totalVolume += rawVol;
+          addUnitVolume(totalVolumeByUnit, rawVol, unit);
+          if (isHedgingLng) {
+            hedgingVolume += Math.abs(rawVol);
+            addUnitVolume(hedgingVolumeByUnit, Math.abs(rawVol), unit);
+          } else if (isPaperLng) {
+            paperVolume += Math.abs(rawVol);
+            addUnitVolume(paperVolumeByUnit, Math.abs(rawVol), unit);
+          }
         }
         if (!isNaN(val)) {
           // Shipping Related Costs check
@@ -483,7 +887,7 @@ export const TrmsSummaryTable: React.FC<TrmsSummaryTableProps> = ({ trmsData, vi
           }
 
           // Hedging LNG P&L check (Sums of Base_Value_USD as specified)
-          if (internalPortfolio === 'hedging lng' || internalPortfolio.includes('hedging')) {
+          if (isHedgingLng) {
             hedgingPnL += val;
           }
         }
@@ -502,7 +906,7 @@ export const TrmsSummaryTable: React.FC<TrmsSummaryTableProps> = ({ trmsData, vi
         const internalPortfolio = String(r['Internal Portfolio'] || r['Portfolio'] || '').trim().toLowerCase();
         
         const isShipping = cflowType === 'src- shipping related cost' || cflowType.includes('shipping related cost');
-        const isHedging = internalPortfolio === 'hedging lng' || internalPortfolio.includes('hedging');
+        const isHedging = internalPortfolio === 'hedging lng';
         
         if (isShipping || isHedging) {
           if (!correctFilteredRows.includes(r)) {
@@ -515,10 +919,48 @@ export const TrmsSummaryTable: React.FC<TrmsSummaryTableProps> = ({ trmsData, vi
         }
       });
 
+      // Track Change in P&L for each specific category
+      let purchaseCostPnLChange = 0;
+      buyCalcRows.forEach(r => {
+        const pnl = Number(String(r['Change_in_Total_PnL'] || r['Change_in_PnL'] || '').replace(/[^0-9.-]/g, ''));
+        if (!isNaN(pnl)) purchaseCostPnLChange += pnl;
+      });
+
+      let salesRevenuePnLChange = 0;
+      sellCalcRows.forEach(r => {
+        const pnl = Number(String(r['Change_in_Total_PnL'] || r['Change_in_PnL'] || '').replace(/[^0-9.-]/g, ''));
+        if (!isNaN(pnl)) salesRevenuePnLChange += pnl;
+      });
+
+      let shippingCostPnLChange = 0;
+      let hedgingPnLChange = 0;
+
+      underlyingRows.forEach(r => {
+        const cflowType = String(r['Cflow Type'] || '').trim().toLowerCase();
+        const internalPortfolio = String(r['Internal Portfolio'] || r['Portfolio'] || '').trim().toLowerCase();
+        const pnl = Number(String(r['Change_in_Total_PnL'] || r['Change_in_PnL'] || '').replace(/[^0-9.-]/g, ''));
+
+        const isShipping = cflowType === 'src- shipping related cost' || cflowType.includes('shipping related cost');
+        const isHedging = internalPortfolio === 'hedging lng';
+
+        if (isShipping) {
+          if (hasOpt) {
+            const isOptRow = internalPortfolio === 'optimization lng' || internalPortfolio.includes('optimization');
+            if (isOptRow && !isNaN(pnl)) shippingCostPnLChange += pnl;
+          } else {
+            if (!isNaN(pnl)) shippingCostPnLChange += pnl;
+          }
+        }
+
+        if (isHedging) {
+          if (!isNaN(pnl)) hedgingPnLChange += pnl;
+        }
+      });
+
       // Sum up Base_Total_Value_USD and Change_in_Total_PnL for these correctly filtered line items
       correctFilteredRows.forEach(r => {
         const val = Number(String(r['Base_Total_Value_USD'] || '').replace(/[^0-9.-]/g, ''));
-        const pnl = Number(String(r['Change_in_Total_PnL'] || '').replace(/[^0-9.-]/g, ''));
+        const pnl = Number(String(r['Change_in_Total_PnL'] || r['Change_in_PnL'] || '').replace(/[^0-9.-]/g, ''));
         
         if (!isNaN(val)) {
           totalValueUSD += val;
@@ -532,11 +974,13 @@ export const TrmsSummaryTable: React.FC<TrmsSummaryTableProps> = ({ trmsData, vi
       let buyTiers: any[] = [];
       if (buyCalcRows.length === 2) {
         buyTiers = buyCalcRows.map(r => {
-          const vol = Number(String(r['Volume'] || '').replace(/[^0-9.-]/g, ''));
+          const rawVol = Number(String(r['Volume'] || '').replace(/[^0-9.-]/g, ''));
+          const unit = String(r['Unit'] || r['unit'] || 'MMBtu').trim();
           const val = Number(String(r['Base_Total_Value_USD'] || '').replace(/[^0-9.-]/g, ''));
           const price = Number(String(r['Price'] || '').replace(/[^0-9.-]/g, ''));
           return {
-            vol: isNaN(vol) ? 0 : vol,
+            vol: isNaN(rawVol) ? 0 : rawVol,
+            unit,
             val: isNaN(val) ? 0 : val,
             price: isNaN(price) ? 0 : price
           };
@@ -544,20 +988,22 @@ export const TrmsSummaryTable: React.FC<TrmsSummaryTableProps> = ({ trmsData, vi
       }
 
       buyCalcRows.forEach(r => {
-        const vol = Number(String(r['Volume'] || '').replace(/[^0-9.-]/g, ''));
+        const rawVol = Number(String(r['Volume'] || '').replace(/[^0-9.-]/g, ''));
+        const unit = r['Unit'] || r['unit'];
         const val = Number(String(r['Base_Total_Value_USD'] || '').replace(/[^0-9.-]/g, ''));
         const price = Number(String(r['Price'] || '').replace(/[^0-9.-]/g, ''));
 
-        if (!isNaN(vol)) {
-          purchaseVolume += vol;
+        if (!isNaN(rawVol)) {
+          purchaseVolume += rawVol;
+          addUnitVolume(purchaseVolumeByUnit, rawVol, unit);
         }
         if (!isNaN(val)) {
           purchaseCost += Math.abs(val);
         }
         if (!isNaN(price)) {
-          if (!isNaN(vol) && vol > 0) {
-            weightedBuyPriceSum += price * vol;
-            buyPriceVolSum += vol;
+          if (!isNaN(rawVol) && rawVol > 0) {
+            weightedBuyPriceSum += price * rawVol;
+            buyPriceVolSum += rawVol;
           }
           simpleBuyPriceSum += price;
           buyPriceCount++;
@@ -568,11 +1014,13 @@ export const TrmsSummaryTable: React.FC<TrmsSummaryTableProps> = ({ trmsData, vi
       let sellTiers: any[] = [];
       if (sellCalcRows.length === 2) {
         sellTiers = sellCalcRows.map(r => {
-          const vol = Number(String(r['Volume'] || '').replace(/[^0-9.-]/g, ''));
+          const rawVol = Number(String(r['Volume'] || '').replace(/[^0-9.-]/g, ''));
+          const unit = String(r['Unit'] || r['unit'] || 'MMBtu').trim();
           const val = Number(String(r['Base_Total_Value_USD'] || '').replace(/[^0-9.-]/g, ''));
           const price = Number(String(r['Price'] || '').replace(/[^0-9.-]/g, ''));
           return {
-            vol: isNaN(vol) ? 0 : vol,
+            vol: isNaN(rawVol) ? 0 : rawVol,
+            unit,
             val: isNaN(val) ? 0 : val,
             price: isNaN(price) ? 0 : price
           };
@@ -580,20 +1028,22 @@ export const TrmsSummaryTable: React.FC<TrmsSummaryTableProps> = ({ trmsData, vi
       }
 
       sellCalcRows.forEach(r => {
-        const vol = Number(String(r['Volume'] || '').replace(/[^0-9.-]/g, ''));
+        const rawVol = Number(String(r['Volume'] || '').replace(/[^0-9.-]/g, ''));
+        const unit = r['Unit'] || r['unit'];
         const val = Number(String(r['Base_Total_Value_USD'] || '').replace(/[^0-9.-]/g, ''));
         const price = Number(String(r['Price'] || '').replace(/[^0-9.-]/g, ''));
 
-        if (!isNaN(vol)) {
-          salesVolume += vol;
+        if (!isNaN(rawVol)) {
+          salesVolume += rawVol;
+          addUnitVolume(salesVolumeByUnit, rawVol, unit);
         }
         if (!isNaN(val)) {
           salesRevenue += Math.abs(val);
         }
         if (!isNaN(price)) {
-          if (!isNaN(vol) && vol > 0) {
-            weightedSellPriceSum += price * vol;
-            sellPriceVolSum += vol;
+          if (!isNaN(rawVol) && rawVol > 0) {
+            weightedSellPriceSum += price * rawVol;
+            sellPriceVolSum += rawVol;
           }
           simpleSellPriceSum += price;
           sellPriceCount++;
@@ -682,6 +1132,17 @@ export const TrmsSummaryTable: React.FC<TrmsSummaryTableProps> = ({ trmsData, vi
 
       let basePnL = 0;
       let baseValueUSD = 0;
+      let basePurchaseCost = 0;
+      let baseSalesRevenue = 0;
+      let baseShippingRelatedCosts = 0;
+      let basePurchaseVolume = 0;
+      const basePurchaseVolumeByUnit: { [unit: string]: number } = {};
+      let baseSalesVolume = 0;
+      const baseSalesVolumeByUnit: { [unit: string]: number } = {};
+      let basePurchasePrice = 0;
+      let baseSalesPrice = 0;
+      let baseBuyTiers: any[] = [];
+      let baseSellTiers: any[] = [];
       if (optimisationStatus === 'Yes') {
         let buyBaseCalcRows: any[] = [];
         let sellBaseCalcRows: any[] = [];
@@ -779,6 +1240,121 @@ export const TrmsSummaryTable: React.FC<TrmsSummaryTableProps> = ({ trmsData, vi
           if (!isNaN(val)) baseValueUSD += val;
           if (!isNaN(pnl)) basePnL += pnl;
         });
+
+        // Calculate specific base values for Uplift calculation
+        buyBaseCalcRows.forEach(r => {
+          const val = Number(String(r['Base_Total_Value_USD'] || '').replace(/[^0-9.-]/g, ''));
+          if (!isNaN(val)) {
+            basePurchaseCost += Math.abs(val);
+          }
+        });
+
+        sellBaseCalcRows.forEach(r => {
+          const val = Number(String(r['Base_Total_Value_USD'] || '').replace(/[^0-9.-]/g, ''));
+          if (!isNaN(val)) {
+            baseSalesRevenue += Math.abs(val);
+          }
+        });
+
+        underlyingRows.forEach(r => {
+          const cflowType = String(r['Cflow Type'] || '').trim().toLowerCase();
+          const internalPortfolio = String(r['Internal Portfolio'] || r['Portfolio'] || '').trim().toLowerCase();
+          const isShipping = cflowType === 'src- shipping related cost' || cflowType.includes('shipping related cost');
+          if (isShipping) {
+            const isBaseRow = internalPortfolio === 'base lng' || internalPortfolio.includes('base');
+            if (isBaseRow) {
+              const val = Number(String(r['Base_Total_Value_USD'] || '').replace(/[^0-9.-]/g, ''));
+              if (!isNaN(val)) {
+                baseShippingRelatedCosts += Math.abs(val);
+              }
+            }
+          }
+        });
+
+        // Calculate specific base volumes and prices
+        let baseWeightedBuyPriceSum = 0;
+        let baseBuyPriceVolSum = 0;
+        let baseBuyPriceCount = 0;
+        let baseSimpleBuyPriceSum = 0;
+
+        buyBaseCalcRows.forEach(r => {
+          const rawVol = Number(String(r['Volume'] || r['Unsigned Volume'] || '').replace(/[^0-9.-]/g, ''));
+          const unit = r['Unit'] || r['unit'];
+          const price = Number(String(r['Price'] || '').replace(/[^0-9.-]/g, ''));
+          if (!isNaN(rawVol)) {
+            basePurchaseVolume += rawVol;
+            addUnitVolume(basePurchaseVolumeByUnit, rawVol, unit);
+          }
+          if (!isNaN(price)) {
+            if (!isNaN(rawVol) && rawVol > 0) {
+              baseWeightedBuyPriceSum += price * rawVol;
+              baseBuyPriceVolSum += rawVol;
+            }
+            baseSimpleBuyPriceSum += price;
+            baseBuyPriceCount++;
+          }
+        });
+
+        let baseWeightedSellPriceSum = 0;
+        let baseSellPriceVolSum = 0;
+        let baseSellPriceCount = 0;
+        let baseSimpleSellPriceSum = 0;
+
+        sellBaseCalcRows.forEach(r => {
+          const rawVol = Number(String(r['Volume'] || r['Unsigned Volume'] || '').replace(/[^0-9.-]/g, ''));
+          const unit = r['Unit'] || r['unit'];
+          const price = Number(String(r['Price'] || '').replace(/[^0-9.-]/g, ''));
+          if (!isNaN(rawVol)) {
+            baseSalesVolume += rawVol;
+            addUnitVolume(baseSalesVolumeByUnit, rawVol, unit);
+          }
+          if (!isNaN(price)) {
+            if (!isNaN(rawVol) && rawVol > 0) {
+              baseWeightedSellPriceSum += price * rawVol;
+              baseSellPriceVolSum += rawVol;
+            }
+            baseSimpleSellPriceSum += price;
+            baseSellPriceCount++;
+          }
+        });
+
+        basePurchasePrice = baseBuyPriceVolSum > 0 
+          ? baseWeightedBuyPriceSum / baseBuyPriceVolSum 
+          : (baseBuyPriceCount > 0 ? baseSimpleBuyPriceSum / baseBuyPriceCount : 0);
+
+        baseSalesPrice = baseSellPriceVolSum > 0 
+          ? baseWeightedSellPriceSum / baseSellPriceVolSum 
+          : (baseSellPriceCount > 0 ? baseSimpleSellPriceSum / baseSellPriceCount : 0);
+
+        if (buyBaseCalcRows.length > 0) {
+          baseBuyTiers = buyBaseCalcRows.map(r => {
+            const rawVol = Number(String(r['Volume'] || r['Unsigned Volume'] || '').replace(/[^0-9.-]/g, ''));
+            const unit = String(r['Unit'] || r['unit'] || 'MMBtu').trim();
+            const val = Number(String(r['Base_Total_Value_USD'] || '').replace(/[^0-9.-]/g, ''));
+            const price = Number(String(r['Price'] || '').replace(/[^0-9.-]/g, ''));
+            return {
+              vol: isNaN(rawVol) ? 0 : rawVol,
+              unit,
+              val: isNaN(val) ? 0 : val,
+              price: isNaN(price) ? 0 : price
+            };
+          });
+        }
+
+        if (sellBaseCalcRows.length > 0) {
+          baseSellTiers = sellBaseCalcRows.map(r => {
+            const rawVol = Number(String(r['Volume'] || r['Unsigned Volume'] || '').replace(/[^0-9.-]/g, ''));
+            const unit = String(r['Unit'] || r['unit'] || 'MMBtu').trim();
+            const val = Number(String(r['Base_Total_Value_USD'] || '').replace(/[^0-9.-]/g, ''));
+            const price = Number(String(r['Price'] || '').replace(/[^0-9.-]/g, ''));
+            return {
+              vol: isNaN(rawVol) ? 0 : rawVol,
+              unit,
+              val: isNaN(val) ? 0 : val,
+              price: isNaN(price) ? 0 : price
+            };
+          });
+        }
       }
 
       return {
@@ -791,23 +1367,110 @@ export const TrmsSummaryTable: React.FC<TrmsSummaryTableProps> = ({ trmsData, vi
         deliveryMonth,
         basePnL,
         baseValueUSD,
+        basePurchaseCost,
+        baseSalesRevenue,
+        baseShippingRelatedCosts,
+        basePurchaseVolume,
+        basePurchaseVolumeByUnit,
+        baseSalesVolume,
+        baseSalesVolumeByUnit,
+        basePurchasePrice,
+        baseSalesPrice,
+        baseBuyTiers,
+        baseSellTiers,
+        optimizationUplift: optimisationStatus === 'Yes'
+          ? (salesRevenue - purchaseCost - Math.abs(shippingRelatedCosts)) - (baseSalesRevenue - basePurchaseCost - Math.abs(baseShippingRelatedCosts))
+          : 0,
         purchaseVolume,
+        purchaseVolumeByUnit,
         salesVolume,
+        salesVolumeByUnit,
         purchasePrice,
         salesPrice,
         purchaseCost,
         salesRevenue,
         shippingRelatedCosts,
         hedgingPnL,
+        hedgingVolume,
+        hedgingVolumeByUnit,
+        paperVolume,
+        paperVolumeByUnit,
+        hedgingVolumePct: (() => {
+          const physBbl = Math.max(purchaseVolumeByUnit['Bbl'] || 0, salesVolumeByUnit['Bbl'] || 0);
+          const hedgeBbl = hedgingVolumeByUnit['Bbl'] || 0;
+
+          const physMMBtu = Math.max(purchaseVolumeByUnit['MMBtu'] || 0, salesVolumeByUnit['MMBtu'] || 0);
+          const hedgeMMBtu = hedgingVolumeByUnit['MMBtu'] || 0;
+
+          const ratios: number[] = [];
+
+          if (physBbl > 0) {
+            ratios.push((hedgeBbl / physBbl) * 100);
+          }
+          if (physMMBtu > 0) {
+            ratios.push((hedgeMMBtu / physMMBtu) * 100);
+          }
+
+          if (ratios.length === 0) {
+            const totalPhys = Math.max(purchaseVolume, salesVolume);
+            if (totalPhys > 0) {
+              return (hedgingVolume / totalPhys) * 100;
+            }
+            return 0;
+          }
+
+          return ratios.reduce((a, b) => a + b, 0) / ratios.length;
+        })(),
+        paperVolumePct: Math.max(purchaseVolume, salesVolume) > 0
+          ? (paperVolume / Math.max(purchaseVolume, salesVolume)) * 100
+          : 0,
         totalVolume,
+        totalVolumeByUnit,
         totalValueUSD,
         totalPnL,
+        purchaseCostPnLChange,
+        salesRevenuePnLChange,
+        shippingCostPnLChange,
+        hedgingPnLChange,
         dealCount: underlyingRows.length,
         buyTiers,
         sellTiers,
         underlyingRows
       };
     });
+  }, [dateAndYearFilteredRows]);
+
+  const allAvailableUnits = useMemo(() => {
+    const unitsSet = new Set<string>();
+    summaryData.forEach((item: any) => {
+      if (item.purchaseVolumeByUnit) {
+        Object.keys(item.purchaseVolumeByUnit).forEach(u => unitsSet.add(u));
+      }
+      if (item.salesVolumeByUnit) {
+        Object.keys(item.salesVolumeByUnit).forEach(u => unitsSet.add(u));
+      }
+    });
+    return Array.from(unitsSet).sort();
+  }, [summaryData]);
+
+  const referenceValidationAlerts = useMemo(() => {
+    const list: { row: any; error: string; strategyName: string }[] = [];
+    dateAndYearFilteredRows.forEach((r: any) => {
+      const port = String(r['Internal Portfolio'] || r['Portfolio'] || '').trim().toLowerCase();
+      const isTargetPort = port === 'hedging lng' || port === 'dh lng' || port === 'dft lng';
+      if (isTargetPort) {
+        const ref = r['Reference'] || '';
+        const validation = validateReferenceFormat(ref);
+        if (!validation.isValid) {
+          list.push({
+            row: r,
+            error: validation.error || 'Invalid Reference Format',
+            strategyName: String(r['Strategy Name'] || r['Strategy'] || 'Unknown').trim()
+          });
+        }
+      }
+    });
+    return list;
   }, [dateAndYearFilteredRows]);
 
   const columns = useMemo(() => {
@@ -887,6 +1550,20 @@ export const TrmsSummaryTable: React.FC<TrmsSummaryTableProps> = ({ trmsData, vi
     // Filter by TRMS Group (PL9SB, FLNG1, FLNG2, LNGC, Spot, Cheniere, Others)
     if (activeTrmsGroup !== 'All') {
       result = result.filter(item => getTrmsGroupName(item.strategyName) === activeTrmsGroup);
+    }
+
+    // Filter by Trader (if active)
+    if (selectedTraderFilter) {
+      result = result.filter(item => {
+        return item.underlyingRows && item.underlyingRows.some((row: any) => getRowTraderName(row) === selectedTraderFilter);
+      });
+    }
+
+    // Filter by Price Index (if active)
+    if (selectedIndexFilter) {
+      result = result.filter(item => {
+        return item.underlyingRows && item.underlyingRows.some((row: any) => getRowPriceIndex(row) === selectedIndexFilter);
+      });
     }
 
     // 1. Global text search
@@ -1039,7 +1716,175 @@ export const TrmsSummaryTable: React.FC<TrmsSummaryTableProps> = ({ trmsData, vi
     }
 
     return result;
-  }, [summaryData, searchTerm, columnFilters, sortConfig, numCols, activeTrmsGroup]);
+  }, [summaryData, searchTerm, columnFilters, sortConfig, numCols, activeTrmsGroup, selectedTraderFilter, selectedIndexFilter]);
+
+  const indexHedgeBreakdown = useMemo(() => {
+    const indices = ['Henry Hub', 'TTF', 'JKM', 'NBP', 'Brent', 'JCC', 'Fixed / Other'];
+    const dataMap = indices.reduce((acc, idx) => {
+      acc[idx] = {
+        physBbl: 0,
+        physMMBtu: 0,
+        // DH LNG
+        dhBbl: 0,
+        dhMMBtu: 0,
+        dhPnL: 0,
+        // DFT LNG
+        dftBbl: 0,
+        dftMMBtu: 0,
+        dftPnL: 0,
+        // Hedging LNG
+        hedgingBbl: 0,
+        hedgingMMBtu: 0,
+        hedgingPnL: 0
+      };
+      return acc;
+    }, {} as Record<string, {
+      physBbl: number;
+      physMMBtu: number;
+      dhBbl: number;
+      dhMMBtu: number;
+      dhPnL: number;
+      dftBbl: number;
+      dftMMBtu: number;
+      dftPnL: number;
+      hedgingBbl: number;
+      hedgingMMBtu: number;
+      hedgingPnL: number;
+    }>);
+
+    filteredAndSortedSummaryData.forEach(item => {
+      item.underlyingRows.forEach((r: any) => {
+        const idxName = getRowPriceIndex(r);
+        if (!dataMap[idxName]) {
+          dataMap[idxName] = {
+            physBbl: 0,
+            physMMBtu: 0,
+            dhBbl: 0,
+            dhMMBtu: 0,
+            dhPnL: 0,
+            dftBbl: 0,
+            dftMMBtu: 0,
+            dftPnL: 0,
+            hedgingBbl: 0,
+            hedgingMMBtu: 0,
+            hedgingPnL: 0
+          };
+        }
+
+        const rawVol = Math.abs(Number(String(r['Volume'] || r['Unsigned Volume'] || r['UnsignedVolume'] || '').replace(/[^0-9.-]/g, '')) || 0);
+        const val = Number(String(r['Base_Total_Value_USD'] || r['Value'] || r['BaseValue'] || '').replace(/[^0-9.-]/g, ''));
+        const unit = r['Unit'] || r['unit'];
+        const u = String(unit || 'MMBtu').trim().toUpperCase();
+        
+        let normUnit = '';
+        if (u === 'BBL' || u === 'BBLS' || u === 'BARREL' || u === 'BARRELS') {
+          normUnit = 'Bbl';
+        } else if (u === 'MMBTU' || u === 'MMBTUS') {
+          normUnit = 'MMBtu';
+        }
+
+        const internalPortfolio = String(r['Internal Portfolio'] || r['Portfolio'] || '').trim().toLowerCase();
+        const isHedgingLng = internalPortfolio === 'hedging lng';
+        const isDhLng = internalPortfolio === 'dh lng';
+        const isDftLng = internalPortfolio === 'dft lng';
+        const isTargetPort = isHedgingLng || isDhLng || isDftLng;
+        const cflowType = String(r['Cflow Type'] || '').trim().toLowerCase();
+        const insType = String(r['Ins Type'] || r['Instrument Type'] || '').trim().toUpperCase();
+        
+        if (isTargetPort) {
+          if (!isNaN(rawVol)) {
+            if (isDhLng) {
+              if (normUnit === 'Bbl') dataMap[idxName].dhBbl += rawVol;
+              if (normUnit === 'MMBtu') dataMap[idxName].dhMMBtu += rawVol;
+            } else if (isDftLng) {
+              if (normUnit === 'Bbl') dataMap[idxName].dftBbl += rawVol;
+              if (normUnit === 'MMBtu') dataMap[idxName].dftMMBtu += rawVol;
+            } else if (isHedgingLng) {
+              if (normUnit === 'Bbl') dataMap[idxName].hedgingBbl += rawVol;
+              if (normUnit === 'MMBtu') dataMap[idxName].hedgingMMBtu += rawVol;
+            }
+          }
+          if (!isNaN(val)) {
+            if (isDhLng) dataMap[idxName].dhPnL += val;
+            else if (isDftLng) dataMap[idxName].dftPnL += val;
+            else if (isHedgingLng) dataMap[idxName].hedgingPnL += val;
+          }
+        } else {
+          // Physical commodity
+          const isCommodity = cflowType === 'commodity' || cflowType === 'physical';
+          const isPhys = insType === 'COMM-PHYS';
+          const isBaseOrOpt = internalPortfolio === 'base lng' || internalPortfolio.includes('base') ||
+                              internalPortfolio === 'optimization lng' || internalPortfolio.includes('optimization');
+          
+          if (isCommodity && isPhys && isBaseOrOpt) {
+            if (!isNaN(rawVol)) {
+              if (normUnit === 'Bbl') dataMap[idxName].physBbl += rawVol;
+              if (normUnit === 'MMBtu') dataMap[idxName].physMMBtu += rawVol;
+            }
+          }
+        }
+      });
+    });
+
+    return Object.entries(dataMap).map(([index, stats]) => {
+      // DH Ratio
+      const dhRatios: number[] = [];
+      if (stats.physBbl > 0) dhRatios.push((stats.dhBbl / stats.physBbl) * 100);
+      if (stats.physMMBtu > 0) dhRatios.push((stats.dhMMBtu / stats.physMMBtu) * 100);
+      const dhRatio = dhRatios.length > 0 ? dhRatios.reduce((a, b) => a + b, 0) / dhRatios.length : 0;
+
+      // DFT Ratio
+      const dftRatios: number[] = [];
+      if (stats.physBbl > 0) dftRatios.push((stats.dftBbl / stats.physBbl) * 100);
+      if (stats.physMMBtu > 0) dftRatios.push((stats.dftMMBtu / stats.physMMBtu) * 100);
+      const dftRatio = dftRatios.length > 0 ? dftRatios.reduce((a, b) => a + b, 0) / dftRatios.length : 0;
+
+      // Hedging Ratio
+      const hedgingRatios: number[] = [];
+      if (stats.physBbl > 0) hedgingRatios.push((stats.hedgingBbl / stats.physBbl) * 100);
+      if (stats.physMMBtu > 0) hedgingRatios.push((stats.hedgingMMBtu / stats.physMMBtu) * 100);
+      const hedgingRatio = hedgingRatios.length > 0 ? hedgingRatios.reduce((a, b) => a + b, 0) / hedgingRatios.length : 0;
+
+      // Combined (Total) Hedging Ratio
+      const totalHedgeBbl = stats.dhBbl + stats.dftBbl + stats.hedgingBbl;
+      const totalHedgeMMBtu = stats.dhMMBtu + stats.dftMMBtu + stats.hedgingMMBtu;
+      
+      const totalRatios: number[] = [];
+      if (stats.physBbl > 0) totalRatios.push((totalHedgeBbl / stats.physBbl) * 100);
+      if (stats.physMMBtu > 0) totalRatios.push((totalHedgeMMBtu / stats.physMMBtu) * 100);
+      const totalHedgeRatio = totalRatios.length > 0 ? totalRatios.reduce((a, b) => a + b, 0) / totalRatios.length : 0;
+
+      return {
+        index,
+        physBbl: stats.physBbl,
+        physMMBtu: stats.physMMBtu,
+        
+        dhBbl: stats.dhBbl,
+        dhMMBtu: stats.dhMMBtu,
+        dhPnL: stats.dhPnL,
+        dhRatio,
+
+        dftBbl: stats.dftBbl,
+        dftMMBtu: stats.dftMMBtu,
+        dftPnL: stats.dftPnL,
+        dftRatio,
+
+        hedgingBbl: stats.hedgingBbl,
+        hedgingMMBtu: stats.hedgingMMBtu,
+        hedgingPnL: stats.hedgingPnL,
+        hedgingRatio,
+
+        totalHedgeBbl,
+        totalHedgeMMBtu,
+        totalHedgePnL: stats.dhPnL + stats.dftPnL + stats.hedgingPnL,
+        totalHedgeRatio
+      };
+    }).filter(d => 
+      d.physBbl > 0 || d.physMMBtu > 0 || 
+      d.dhBbl > 0 || d.dftBbl > 0 || d.hedgingBbl > 0 || 
+      d.dhMMBtu > 0 || d.dftMMBtu > 0 || d.hedgingMMBtu > 0
+    );
+  }, [filteredAndSortedSummaryData]);
 
   const handleApplyConditionFilter = (col: string, condition: string, val1: string, val2: string) => {
     setColumnFilters(prev => {
@@ -1113,6 +1958,111 @@ export const TrmsSummaryTable: React.FC<TrmsSummaryTableProps> = ({ trmsData, vi
     setSortConfig({ column: '', direction: null });
   };
 
+  // Sub-table per-column filter handlers
+  const handleApplySubConditionFilter = (strategyName: string, col: string, condition: string, val1: string, val2: string) => {
+    setSubTableColumnFilters(prev => {
+      const stratFilters = prev[strategyName] || {};
+      const current = stratFilters[col] || { selectedValues: new Set<string>(), condition: 'none', conditionValue1: '', conditionValue2: '' };
+      return {
+        ...prev,
+        [strategyName]: {
+          ...stratFilters,
+          [col]: {
+            ...current,
+            condition,
+            conditionValue1: val1,
+            conditionValue2: val2
+          }
+        }
+      };
+    });
+  };
+
+  const handleToggleSubUniqueValueCheckbox = (strategyName: string, col: string, val: string) => {
+    setSubTableColumnFilters(prev => {
+      const stratFilters = prev[strategyName] || {};
+      const current = stratFilters[col] || { selectedValues: new Set<string>(), condition: 'none', conditionValue1: '', conditionValue2: '' };
+      const newSel = new Set(current.selectedValues);
+      if (newSel.has(val)) {
+        newSel.delete(val);
+      } else {
+        newSel.add(val);
+      }
+      return {
+        ...prev,
+        [strategyName]: {
+          ...stratFilters,
+          [col]: {
+            ...current,
+            selectedValues: newSel
+          }
+        }
+      };
+    });
+  };
+
+  const handleSelectAllSubUniqueValues = (
+    strategyName: string,
+    col: string,
+    uniqueVals: { value: string; count: number }[],
+    selectAll: boolean
+  ) => {
+    setSubTableColumnFilters(prev => {
+      const stratFilters = prev[strategyName] || {};
+      const current = stratFilters[col] || { selectedValues: new Set<string>(), condition: 'none', conditionValue1: '', conditionValue2: '' };
+      const newSel = new Set<string>();
+      if (!selectAll) {
+        const term = (subFilterSearchTerms[strategyName]?.[col] || '').toLowerCase();
+        uniqueVals.forEach(uv => {
+          if (uv.value.toLowerCase().includes(term)) {
+            newSel.add(uv.value);
+          }
+        });
+      }
+      return {
+        ...prev,
+        [strategyName]: {
+          ...stratFilters,
+          [col]: {
+            ...current,
+            selectedValues: newSel
+          }
+        }
+      };
+    });
+  };
+
+  const handleClearSubColumnFilter = (strategyName: string, col: string) => {
+    setSubTableColumnFilters(prev => {
+      const stratFilters = { ...(prev[strategyName] || {}) };
+      delete stratFilters[col];
+      return {
+        ...prev,
+        [strategyName]: stratFilters
+      };
+    });
+  };
+
+  const handleSubSortChange = (strategyName: string, col: string, dir: 'asc' | 'desc' | null) => {
+    setSubTableSortConfig(prev => ({
+      ...prev,
+      [strategyName]: { column: col, direction: dir }
+    }));
+  };
+
+  const handleSubSortToggle = (strategyName: string, col: string) => {
+    setSubTableSortConfig(prev => {
+      const current = prev[strategyName];
+      if (!current || current.column !== col) {
+        return { ...prev, [strategyName]: { column: col, direction: 'asc' } };
+      }
+      if (current.direction === 'asc') {
+        return { ...prev, [strategyName]: { column: col, direction: 'desc' } };
+      }
+      return { ...prev, [strategyName]: { column: col, direction: null } };
+    });
+  };
+
   // Dashboard calculations for KPIs in view
   const kpis = useMemo(() => {
     const total = filteredAndSortedSummaryData.length;
@@ -1122,14 +2072,27 @@ export const TrmsSummaryTable: React.FC<TrmsSummaryTableProps> = ({ trmsData, vi
     let matchedCargo = 0;
     let openSell = 0;
     let openBuy = 0;
-    let aggregatePnL = 0;
 
     let aggregatePurchaseVolume = 0;
+    const aggregatePurchaseVolumeByUnit: { [unit: string]: number } = {};
     let aggregateSalesVolume = 0;
+    const aggregateSalesVolumeByUnit: { [unit: string]: number } = {};
     let aggregatePurchaseCost = 0;
+    let aggregatePurchaseCostPnLChange = 0;
+
     let aggregateSalesRevenue = 0;
+    let aggregateSalesRevenuePnLChange = 0;
+
     let aggregateShippingCosts = 0;
+    let aggregateShippingCostPnLChange = 0;
+
     let aggregateHedgingPnL = 0;
+    let aggregateHedgingPnLChange = 0;
+
+    let aggregateTotalPnLChange = 0;
+
+    let aggregateHedgingVolume = 0;
+    const aggregateHedgingVolumeByUnit: { [unit: string]: number } = {};
 
     filteredAndSortedSummaryData.forEach(item => {
       if (item.physicalPnLStatus === 'Realized') realized++;
@@ -1138,15 +2101,40 @@ export const TrmsSummaryTable: React.FC<TrmsSummaryTableProps> = ({ trmsData, vi
       if (item.unallocatedCargo === 'Matched') matchedCargo++;
       else if (item.unallocatedCargo === 'Open on Sell Leg') openSell++;
       else if (item.unallocatedCargo === 'Open on Buy Leg') openBuy++;
-      aggregatePnL += item.totalPnL;
 
       aggregatePurchaseVolume += item.purchaseVolume;
+      Object.entries(item.purchaseVolumeByUnit || {}).forEach(([unit, val]) => {
+        aggregatePurchaseVolumeByUnit[unit] = (aggregatePurchaseVolumeByUnit[unit] || 0) + val;
+      });
       aggregateSalesVolume += item.salesVolume;
+      Object.entries(item.salesVolumeByUnit || {}).forEach(([unit, val]) => {
+        aggregateSalesVolumeByUnit[unit] = (aggregateSalesVolumeByUnit[unit] || 0) + val;
+      });
+
       aggregatePurchaseCost += item.purchaseCost;
+      aggregatePurchaseCostPnLChange += (item.purchaseCostPnLChange || 0);
+
       aggregateSalesRevenue += item.salesRevenue;
+      aggregateSalesRevenuePnLChange += (item.salesRevenuePnLChange || 0);
+
       aggregateShippingCosts += item.shippingRelatedCosts;
+      aggregateShippingCostPnLChange += (item.shippingCostPnLChange || 0);
+
       aggregateHedgingPnL += item.hedgingPnL;
+      aggregateHedgingPnLChange += (item.hedgingPnLChange || 0);
+
+      aggregateTotalPnLChange += (item.totalPnL || 0);
+
+      aggregateHedgingVolume += item.hedgingVolume || 0;
+      Object.entries(item.hedgingVolumeByUnit || {}).forEach(([unit, val]) => {
+        aggregateHedgingVolumeByUnit[unit] = (aggregateHedgingVolumeByUnit[unit] || 0) + val;
+      });
     });
+
+    // Aggregate P&L tracks Revenue - Cost - SRC - Hedging
+    const aggregatePnL = aggregateSalesRevenue - aggregatePurchaseCost - aggregateShippingCosts - aggregateHedgingPnL;
+
+    const maxAggPhysicalVol = Math.max(aggregatePurchaseVolume, aggregateSalesVolume) || aggregatePurchaseVolume || aggregateSalesVolume || 1;
 
     return {
       total,
@@ -1159,11 +2147,21 @@ export const TrmsSummaryTable: React.FC<TrmsSummaryTableProps> = ({ trmsData, vi
       openBuy,
       aggregatePnL,
       aggregatePurchaseVolume,
+      aggregatePurchaseVolumeByUnit,
       aggregateSalesVolume,
+      aggregateSalesVolumeByUnit,
       aggregatePurchaseCost,
+      aggregatePurchaseCostPnLChange,
       aggregateSalesRevenue,
+      aggregateSalesRevenuePnLChange,
       aggregateShippingCosts,
-      aggregateHedgingPnL
+      aggregateShippingCostPnLChange,
+      aggregateHedgingPnL,
+      aggregateHedgingPnLChange,
+      aggregateHedgingVolume,
+      aggregateHedgingVolumeByUnit,
+      aggregateHedgingVolumePct: (aggregateHedgingVolume / maxAggPhysicalVol) * 100,
+      aggregateTotalPnLChange
     };
   }, [filteredAndSortedSummaryData]);
 
@@ -1265,10 +2263,12 @@ export const TrmsSummaryTable: React.FC<TrmsSummaryTableProps> = ({ trmsData, vi
     toast.success(`Showing ${targetMode.replace('_', ' ').toUpperCase()} details in the trade logs!`);
   };
 
-  const toggleRowExpansion = (sn: string) => {
+  const toggleRowExpansion = (sn: string, forceOpen?: boolean) => {
     setExpandedStrategies(prev => {
       const next = new Set(prev);
-      if (next.has(sn)) {
+      if (forceOpen) {
+        next.add(sn);
+      } else if (next.has(sn)) {
         next.delete(sn);
       } else {
         next.add(sn);
@@ -1378,8 +2378,8 @@ export const TrmsSummaryTable: React.FC<TrmsSummaryTableProps> = ({ trmsData, vi
         `"${(item.exposureMonths || '').replace(/"/g, '""')}"`,
         `"${(item.loadingMonth || '').replace(/"/g, '""')}"`,
         `"${(item.deliveryMonth || '').replace(/"/g, '""')}"`,
-        item.purchaseVolume,
-        item.salesVolume,
+        `"${formatUnitVolumes(item.purchaseVolumeByUnit, ' | ', 'buy')}"`,
+        `"${formatUnitVolumes(item.salesVolumeByUnit, ' | ', 'sell')}"`,
         item.purchasePrice,
         item.salesPrice,
         item.purchaseCost,
@@ -1429,17 +2429,19 @@ export const TrmsSummaryTable: React.FC<TrmsSummaryTableProps> = ({ trmsData, vi
       ) {
         if (col === 'Purchase Volume') {
           const v1 = item.buyTiers[0].vol;
+          const u1 = item.buyTiers[0].unit || 'MMBtu';
           const v2 = item.buyTiers[1].vol;
+          const u2 = item.buyTiers[1].unit || 'MMBtu';
           return (
             <div className="flex flex-col items-end text-right">
               <span className="text-[10px] text-slate-300 font-medium">
-                {v1.toLocaleString(undefined, { maximumFractionDigits: 0 })} <span className="text-[9px] text-slate-500 font-normal">(T1)</span>
+                +{v1.toLocaleString(undefined, { maximumFractionDigits: 0 })} {u1} <span className="text-[9px] text-slate-500 font-normal">(T1)</span>
               </span>
               <span className="text-[10px] text-slate-300 font-medium">
-                {v2.toLocaleString(undefined, { maximumFractionDigits: 0 })} <span className="text-[9px] text-slate-500 font-normal">(T2)</span>
+                +{v2.toLocaleString(undefined, { maximumFractionDigits: 0 })} {u2} <span className="text-[9px] text-slate-500 font-normal">(T2)</span>
               </span>
               <span className="text-[9px] text-indigo-400 font-bold border-t border-slate-800/80 mt-0.5 pt-0.5 w-full">
-                Σ {val.toLocaleString(undefined, { maximumFractionDigits: 0 })}
+                Σ {formatUnitVolumes(item.purchaseVolumeByUnit, ' | ', 'buy')}
               </span>
             </div>
           );
@@ -1489,17 +2491,19 @@ export const TrmsSummaryTable: React.FC<TrmsSummaryTableProps> = ({ trmsData, vi
       ) {
         if (col === 'Sales Volume') {
           const v1 = item.sellTiers[0].vol;
+          const u1 = item.sellTiers[0].unit || 'MMBtu';
           const v2 = item.sellTiers[1].vol;
+          const u2 = item.sellTiers[1].unit || 'MMBtu';
           return (
             <div className="flex flex-col items-end text-right">
               <span className="text-[10px] text-slate-300 font-medium">
-                {v1.toLocaleString(undefined, { maximumFractionDigits: 0 })} <span className="text-[9px] text-slate-500 font-normal">(T1)</span>
+                -{v1.toLocaleString(undefined, { maximumFractionDigits: 0 })} {u1} <span className="text-[9px] text-slate-500 font-normal">(T1)</span>
               </span>
               <span className="text-[10px] text-slate-300 font-medium">
-                {v2.toLocaleString(undefined, { maximumFractionDigits: 0 })} <span className="text-[9px] text-slate-500 font-normal">(T2)</span>
+                -{v2.toLocaleString(undefined, { maximumFractionDigits: 0 })} {u2} <span className="text-[9px] text-slate-500 font-normal">(T2)</span>
               </span>
               <span className="text-[9px] text-indigo-400 font-bold border-t border-slate-800/80 mt-0.5 pt-0.5 w-full">
-                Σ {val.toLocaleString(undefined, { maximumFractionDigits: 0 })}
+                Σ {formatUnitVolumes(item.salesVolumeByUnit, ' | ', 'sell')}
               </span>
             </div>
           );
@@ -1542,7 +2546,14 @@ export const TrmsSummaryTable: React.FC<TrmsSummaryTableProps> = ({ trmsData, vi
       }
 
       if (col === 'Purchase Volume' || col === 'Sales Volume') {
-        return val === 0 ? '—' : val.toLocaleString(undefined, { maximumFractionDigits: 3 });
+        const map = col === 'Purchase Volume' ? item.purchaseVolumeByUnit : item.salesVolumeByUnit;
+        return formatUnitVolumes(map, ' | ', col === 'Purchase Volume' ? 'buy' : 'sell');
+      }
+      if (col === 'Hedging Volume') {
+        return formatUnitVolumes(item.hedgingVolumeByUnit, ' | ', 'neutral');
+      }
+      if (col === 'Hedging Ratio (%)') {
+        return val === 0 ? '0.0%' : `${val.toFixed(1)}%`;
       }
       if (col === 'Purchase Price' || col === 'Sales Price') {
         return val === 0 ? '—' : `$${val.toLocaleString(undefined, { minimumFractionDigits: 2, maximumFractionDigits: 4 })}`;
@@ -1641,223 +2652,401 @@ export const TrmsSummaryTable: React.FC<TrmsSummaryTableProps> = ({ trmsData, vi
           </div>
 
           {/* Drill-Down visual Cargo-Form inspector Layout */}
-          <div className="grid grid-cols-1 lg:grid-cols-2 gap-4">
+          <div className="grid grid-cols-1 gap-4">
             
             {/* Card 1: Identity & Configuration */}
-            <div className="bg-white p-5 rounded-xl border border-slate-200 shadow-sm flex flex-col justify-between">
-              <div>
-                <h3 className="text-xs font-bold text-slate-700 uppercase tracking-wider mb-4 border-b border-slate-100 pb-2">1. Identity &amp; Status</h3>
-                <div className="grid grid-cols-2 gap-3">
-                  <div>
-                    <span className="text-[9px] font-bold text-slate-400 uppercase tracking-wide block mb-1">Strategy Name</span>
-                    <div className="bg-slate-50 border border-slate-200 rounded-lg p-2.5 font-mono text-xs text-slate-700 font-semibold">{item.strategyName}</div>
-                  </div>
-                  <div>
-                    <span className="text-[9px] font-bold text-slate-400 uppercase tracking-wide block mb-1">EOD Portfolio</span>
-                    <div className="bg-slate-50 border border-slate-200 rounded-lg p-2.5 font-mono text-xs text-slate-700 font-semibold">{getTrmsGroupName(item.strategyName)} Group</div>
-                  </div>
-                  <div>
-                    <span className="text-[9px] font-bold text-slate-400 uppercase tracking-wide block mb-1">Optimization Status</span>
-                    <div className="bg-slate-50 border border-slate-200 rounded-lg p-2.5 font-mono text-xs text-slate-700 font-semibold">{item.optimisationStatus || 'No'}</div>
-                  </div>
-                  <div>
-                    <span className="text-[9px] font-bold text-slate-400 uppercase tracking-wide block mb-1">Cargo Matching</span>
-                    <div className="bg-slate-50 border border-slate-200 rounded-lg p-2.5 font-mono text-xs text-slate-700 font-semibold">{item.unallocatedCargo || 'Matched'}</div>
-                  </div>
+            <div className="bg-white p-5 rounded-xl border border-slate-200 shadow-sm">
+              <h3 className="text-xs font-bold text-slate-700 uppercase tracking-wider mb-4 border-b border-slate-100 pb-2">1. Identity &amp; Status</h3>
+              <div className="grid grid-cols-2 sm:grid-cols-6 gap-3">
+                <div>
+                  <span className="text-[9px] font-bold text-slate-400 uppercase tracking-wide block mb-1">Strategy Name</span>
+                  <div className="bg-slate-50 border border-slate-200 rounded-lg p-2.5 font-mono text-xs text-slate-700 font-semibold">{item.strategyName}</div>
+                </div>
+                <div>
+                  <span className="text-[9px] font-bold text-slate-400 uppercase tracking-wide block mb-1">EOD Portfolio</span>
+                  <div className="bg-slate-50 border border-slate-200 rounded-lg p-2.5 font-mono text-xs text-slate-700 font-semibold">{getTrmsGroupName(item.strategyName)} Group</div>
+                </div>
+                <div>
+                  <span className="text-[9px] font-bold text-slate-400 uppercase tracking-wide block mb-1">Optimization Status</span>
+                  <div className="bg-slate-50 border border-slate-200 rounded-lg p-2.5 font-mono text-xs text-slate-700 font-semibold">{item.optimisationStatus || 'No'}</div>
+                </div>
+                <div>
+                  <span className="text-[9px] font-bold text-slate-400 uppercase tracking-wide block mb-1">Cargo Matching</span>
+                  <div className="bg-slate-50 border border-slate-200 rounded-lg p-2.5 font-mono text-xs text-slate-700 font-semibold">{item.unallocatedCargo || 'Matched'}</div>
+                </div>
+                <div>
+                  <span className="text-[9px] font-bold text-slate-400 uppercase tracking-wide block mb-1">Hedging Volume</span>
+                  <div className="bg-slate-50 border border-slate-200 rounded-lg p-2.5 font-mono text-xs text-amber-600 font-bold">{formatUnitVolumes(item.hedgingVolumeByUnit, ' | ', 'neutral')}</div>
+                </div>
+                <div>
+                  <span className="text-[9px] font-bold text-slate-400 uppercase tracking-wide block mb-1">Hedging Ratio</span>
+                  <div className="bg-slate-50 border border-slate-200 rounded-lg p-2.5 font-mono text-xs text-amber-600 font-bold">{(item.hedgingVolumePct || 0).toFixed(1)}%</div>
                 </div>
               </div>
             </div>
 
-            {/* Card 2: Loading / Purchase Leg Details */}
-            <div className="bg-white p-5 rounded-xl border border-slate-200 shadow-sm flex flex-col justify-between">
-              <div>
-                <h3 className="text-xs font-bold text-slate-700 uppercase tracking-wider mb-4 border-b border-slate-100 pb-2">2. Loading / Purchase Details</h3>
-                <div className="grid grid-cols-3 gap-3">
-                  <div>
-                    <span className="text-[9px] font-bold text-slate-400 uppercase tracking-wide block mb-1">Purchase Volume</span>
-                    <div className="bg-slate-50 border border-slate-200 rounded-lg p-2.5 font-mono text-xs text-slate-700 font-semibold">{item.purchaseVolume.toLocaleString()} MMBtu</div>
-                  </div>
-                  <div>
-                    <span className="text-[9px] font-bold text-slate-400 uppercase tracking-wide block mb-1">Weighted Buy Price</span>
-                    <div className="bg-slate-50 border border-slate-200 rounded-lg p-2.5 font-mono text-xs text-slate-700 font-semibold">${item.purchasePrice.toFixed(2)} /MMBtu</div>
-                  </div>
-                  <div>
-                    <span className="text-[9px] font-bold text-slate-400 uppercase tracking-wide block mb-1">Total Purchase Cost</span>
-                    <div className="bg-slate-50 border border-slate-200 rounded-lg p-2.5 font-mono text-xs text-emerald-600 font-bold">${item.purchaseCost.toLocaleString(undefined, { maximumFractionDigits: 0 })}</div>
-                  </div>
+            {/* Comparison Panels for Base vs Optimized Flow */}
+            <div className="grid grid-cols-1 lg:grid-cols-2 gap-4">
+              
+              {/* Card Left: Standard (Base) Scenario Flow Details */}
+              <div 
+                onClick={() => {
+                  setDrilldownSubFilter('base');
+                  toast.success("Filtered trade logs below to Standard (Base) Scenario items!");
+                }}
+                className={`bg-white p-5 rounded-xl border transition-all cursor-pointer shadow-sm relative overflow-hidden group ${
+                  drilldownSubFilter === 'base'
+                    ? 'border-blue-500 ring-2 ring-blue-500/20 bg-blue-50/10'
+                    : 'border-slate-200 hover:border-blue-350 hover:shadow-md'
+                }`}
+              >
+                {/* Header badge */}
+                <div className="absolute top-3 right-3 flex items-center gap-1.5">
+                  <span className={`text-[9px] uppercase font-bold px-1.5 py-0.5 rounded ${
+                    drilldownSubFilter === 'base' ? 'bg-blue-600 text-white font-black' : 'bg-slate-100 text-slate-500 font-mono'
+                  }`}>
+                    {drilldownSubFilter === 'base' ? 'Active Filter' : 'Click to Filter Logs'}
+                  </span>
                 </div>
-                {item.buyTiers && item.buyTiers.length > 0 && (
-                  <div className="mt-3 bg-slate-50 border border-slate-100 rounded-lg p-2">
-                    <span className="text-[8px] uppercase font-bold text-slate-400 block mb-1">Purchase Tier breakdown:</span>
-                    <div className="space-y-1">
-                      {item.buyTiers.map((t: any, idx: number) => (
-                        <div key={idx} className="flex justify-between text-[10px] font-mono text-slate-600">
-                          <span>Tier {idx + 1}: {t.vol.toLocaleString()} MMBtu</span>
-                          <span>Price: ${t.price.toFixed(4)}</span>
+
+                <div>
+                  <div className="flex items-center gap-2 mb-3 pb-2 border-b border-slate-100">
+                    <div className="w-2.5 h-2.5 rounded-full bg-slate-400"></div>
+                    <h3 className="text-xs font-black text-slate-800 uppercase tracking-wider">
+                      Standard (Base) Scenario Flow
+                    </h3>
+                  </div>
+
+                  <div className="space-y-4">
+                    {/* Loading/Purchase section */}
+                    <div className="bg-slate-50 p-3 rounded-lg border border-slate-150">
+                      <span className="text-[9px] font-bold text-slate-450 uppercase tracking-wide block mb-1.5">Loading &amp; Purchase (Buy Leg)</span>
+                      <div className="grid grid-cols-3 gap-2">
+                        <div>
+                          <span className="text-[8px] text-slate-400 uppercase font-mono block">Base Volume</span>
+                          <span className="font-mono text-[11px] font-extrabold text-slate-700">{formatUnitVolumes(item.basePurchaseVolumeByUnit, ' | ', 'buy')}</span>
                         </div>
-                      ))}
-                    </div>
-                  </div>
-                )}
-              </div>
-            </div>
-
-            {/* Card 3: Delivery / Sales Leg Details */}
-            <div className="bg-white p-5 rounded-xl border border-slate-200 shadow-sm flex flex-col justify-between">
-              <div>
-                <h3 className="text-xs font-bold text-slate-700 uppercase tracking-wider mb-4 border-b border-slate-100 pb-2">3. Delivery / Sales Details</h3>
-                <div className="grid grid-cols-3 gap-3">
-                  <div>
-                    <span className="text-[9px] font-bold text-slate-400 uppercase tracking-wide block mb-1">Sales Volume</span>
-                    <div className="bg-slate-50 border border-slate-200 rounded-lg p-2.5 font-mono text-xs text-slate-700 font-semibold">{item.salesVolume.toLocaleString()} MMBtu</div>
-                  </div>
-                  <div>
-                    <span className="text-[9px] font-bold text-slate-400 uppercase tracking-wide block mb-1">Weighted Sell Price</span>
-                    <div className="bg-slate-50 border border-slate-200 rounded-lg p-2.5 font-mono text-xs text-slate-700 font-semibold">${item.salesPrice.toFixed(2)} /MMBtu</div>
-                  </div>
-                  <div>
-                    <span className="text-[9px] font-bold text-slate-400 uppercase tracking-wide block mb-1">Total Sales Revenue</span>
-                    <div className="bg-slate-50 border border-slate-200 rounded-lg p-2.5 font-mono text-xs text-blue-600 font-bold">${item.salesRevenue.toLocaleString(undefined, { maximumFractionDigits: 0 })}</div>
-                  </div>
-                </div>
-                {item.sellTiers && item.sellTiers.length > 0 && (
-                  <div className="mt-3 bg-slate-50 border border-slate-100 rounded-lg p-2">
-                    <span className="text-[8px] uppercase font-bold text-slate-400 block mb-1">Sales Tier breakdown:</span>
-                    <div className="space-y-1">
-                      {item.sellTiers.map((t: any, idx: number) => (
-                        <div key={idx} className="flex justify-between text-[10px] font-mono text-slate-600">
-                          <span>Tier {idx + 1}: {t.vol.toLocaleString()} MMBtu</span>
-                          <span>Price: ${t.price.toFixed(4)}</span>
+                        <div>
+                          <span className="text-[8px] text-slate-400 uppercase font-mono block">Weighted Price</span>
+                          <span className="font-mono text-[11px] font-extrabold text-slate-700">${(item.basePurchasePrice || 0).toFixed(2)}</span>
                         </div>
-                      ))}
+                        <div>
+                          <span className="text-[8px] text-slate-400 uppercase font-mono block">Purchase Cost</span>
+                          <span className="font-mono text-[11px] font-extrabold text-slate-700">${(item.basePurchaseCost || 0).toLocaleString(undefined, { maximumFractionDigits: 0 })}</span>
+                        </div>
+                      </div>
+                      {item.baseBuyTiers && item.baseBuyTiers.length > 0 && (
+                        <div className="mt-2 pt-2 border-t border-slate-200/50">
+                          <span className="text-[8px] uppercase font-bold text-slate-400 block mb-1">Base Purchase Breakdown:</span>
+                          <div className="space-y-0.5">
+                            {item.baseBuyTiers.map((t: any, idx: number) => (
+                              <div key={idx} className="flex justify-between text-[9px] font-mono text-slate-500">
+                                <span>Tier {idx + 1}: {t.vol.toLocaleString()} {t.unit || 'MMBtu'}</span>
+                                <span>Price: ${t.price.toFixed(4)}</span>
+                              </div>
+                            ))}
+                          </div>
+                        </div>
+                      )}
                     </div>
-                  </div>
-                )}
-              </div>
-            </div>
 
-            {/* Card 4: Operations & Performance */}
-            <div className="bg-white p-5 rounded-xl border border-slate-200 shadow-sm flex flex-col justify-between">
-              <div>
-                <h3 className="text-xs font-bold text-slate-700 uppercase tracking-wider mb-4 border-b border-slate-100 pb-2">4. Operations &amp; Performance Overview</h3>
-                <div className="grid grid-cols-2 md:grid-cols-4 gap-3">
-                  <div>
-                    <span className="text-[9px] font-bold text-slate-400 uppercase tracking-wide block mb-1">Shipping Cost</span>
-                    <div className="bg-slate-50 border border-slate-200 rounded-lg p-2.5 font-mono text-xs text-purple-600 font-bold">${item.shippingRelatedCosts.toLocaleString(undefined, { maximumFractionDigits: 0 })}</div>
-                  </div>
-                  <div>
-                    <span className="text-[9px] font-bold text-slate-400 uppercase tracking-wide block mb-1">Hedging P&amp;L</span>
-                    <div className={`bg-slate-50 border border-slate-200 rounded-lg p-2.5 font-mono text-xs font-bold ${item.hedgingPnL >= 0 ? 'text-emerald-600' : 'text-rose-600'}`}>
-                      {item.hedgingPnL >= 0 ? '+' : ''}${item.hedgingPnL.toLocaleString(undefined, { maximumFractionDigits: 0 })}
+                    {/* Delivery/Sales section */}
+                    <div className="bg-slate-50 p-3 rounded-lg border border-slate-150">
+                      <span className="text-[9px] font-bold text-slate-450 uppercase tracking-wide block mb-1.5">Delivery &amp; Sales (Sell Leg)</span>
+                      <div className="grid grid-cols-3 gap-2">
+                        <div>
+                          <span className="text-[8px] text-slate-400 uppercase font-mono block">Base Volume</span>
+                          <span className="font-mono text-[11px] font-extrabold text-slate-700">{formatUnitVolumes(item.baseSalesVolumeByUnit, ' | ', 'sell')}</span>
+                        </div>
+                        <div>
+                          <span className="text-[8px] text-slate-400 uppercase font-mono block">Weighted Price</span>
+                          <span className="font-mono text-[11px] font-extrabold text-slate-700">${(item.baseSalesPrice || 0).toFixed(2)}</span>
+                        </div>
+                        <div>
+                          <span className="text-[8px] text-slate-400 uppercase font-mono block">Sales Revenue</span>
+                          <span className="font-mono text-[11px] font-extrabold text-slate-700">${(item.baseSalesRevenue || 0).toLocaleString(undefined, { maximumFractionDigits: 0 })}</span>
+                        </div>
+                      </div>
+                      {item.baseSellTiers && item.baseSellTiers.length > 0 && (
+                        <div className="mt-2 pt-2 border-t border-slate-200/50">
+                          <span className="text-[8px] uppercase font-bold text-slate-400 block mb-1">Base Sales Breakdown:</span>
+                          <div className="space-y-0.5">
+                            {item.baseSellTiers.map((t: any, idx: number) => (
+                              <div key={idx} className="flex justify-between text-[9px] font-mono text-slate-500">
+                                <span>Tier {idx + 1}: {t.vol.toLocaleString()} {t.unit || 'MMBtu'}</span>
+                                <span>Price: ${t.price.toFixed(4)}</span>
+                              </div>
+                            ))}
+                          </div>
+                        </div>
+                      )}
                     </div>
-                  </div>
-                  <div>
-                    <span className="text-[9px] font-bold text-slate-400 uppercase tracking-wide block mb-1">Sum of Value</span>
-                    <div className="bg-slate-50 border border-slate-200 rounded-lg p-2.5 font-mono text-xs text-slate-700 font-bold">${item.totalValueUSD.toLocaleString(undefined, { maximumFractionDigits: 0 })}</div>
-                  </div>
-                  <div>
-                    <span className="text-[9px] font-bold text-slate-400 uppercase tracking-wide block mb-1">Net Change in P&amp;L</span>
-                    <div className={`bg-slate-50 border border-slate-200 rounded-lg p-2.5 font-mono text-xs font-black ${item.totalPnL >= 0 ? 'text-emerald-600' : 'text-rose-600'}`}>
-                      {item.totalPnL >= 0 ? '▲ +' : '▼ -'}${Math.abs(item.totalPnL).toLocaleString(undefined, { maximumFractionDigits: 0 })}
+
+                    {/* Operations & Net Baseline P&L */}
+                    <div className="bg-slate-100 p-3 rounded-lg border border-slate-200 grid grid-cols-2 gap-4">
+                      <div>
+                        <span className="text-[8px] text-slate-500 block uppercase font-mono font-bold">Shipping Cost</span>
+                        <span className="font-mono text-xs font-semibold text-purple-600">${(item.baseShippingRelatedCosts || 0).toLocaleString(undefined, { maximumFractionDigits: 0 })}</span>
+                      </div>
+                      <div>
+                        <span className="text-[8px] text-slate-500 block uppercase font-mono font-bold">Net P&amp;L Baseline</span>
+                        <span className={`font-mono text-xs font-black ${item.basePnL >= 0 ? 'text-emerald-600' : 'text-rose-600'}`}>
+                          {item.basePnL >= 0 ? '+' : '-'}${Math.abs(item.basePnL).toLocaleString(undefined, { maximumFractionDigits: 0 })}
+                        </span>
+                      </div>
                     </div>
+
                   </div>
                 </div>
               </div>
+
+              {/* Card Right: Optimized Scenario Flow Details */}
+              <div 
+                onClick={() => {
+                  setDrilldownSubFilter('optimized');
+                  toast.success("Filtered trade logs below to Optimized Scenario items!");
+                }}
+                className={`bg-white p-5 rounded-xl border transition-all cursor-pointer shadow-sm relative overflow-hidden group ${
+                  drilldownSubFilter === 'optimized'
+                    ? 'border-emerald-500 ring-2 ring-emerald-500/20 bg-emerald-50/10'
+                    : 'border-slate-200 hover:border-emerald-350 hover:shadow-md'
+                }`}
+              >
+                {/* Header badge */}
+                <div className="absolute top-3 right-3 flex items-center gap-1.5">
+                  <span className={`text-[9px] uppercase font-bold px-1.5 py-0.5 rounded ${
+                    drilldownSubFilter === 'optimized' ? 'bg-emerald-600 text-white font-black' : 'bg-slate-100 text-slate-500 font-mono'
+                  }`}>
+                    {drilldownSubFilter === 'optimized' ? 'Active Filter' : 'Click to Filter Logs'}
+                  </span>
+                </div>
+
+                <div>
+                  <div className="flex items-center gap-2 mb-3 pb-2 border-b border-slate-100">
+                    <div className="w-2.5 h-2.5 rounded-full bg-emerald-500 animate-pulse"></div>
+                    <h3 className="text-xs font-black text-slate-850 uppercase tracking-wider">
+                      Optimized Scenario Flow
+                    </h3>
+                  </div>
+
+                  <div className="space-y-4">
+                    {/* Loading/Purchase section */}
+                    <div className="bg-emerald-50/20 p-3 rounded-lg border border-emerald-100">
+                      <span className="text-[9px] font-bold text-emerald-800 uppercase tracking-wide block mb-1.5">Loading &amp; Purchase (Buy Leg)</span>
+                      <div className="grid grid-cols-3 gap-2">
+                        <div>
+                          <span className="text-[8px] text-emerald-600 uppercase font-mono block">Optimized Volume</span>
+                          <span className="font-mono text-[11px] font-extrabold text-slate-700">{formatUnitVolumes(item.purchaseVolumeByUnit, ' | ', 'buy')}</span>
+                        </div>
+                        <div>
+                          <span className="text-[8px] text-emerald-600 uppercase font-mono block">Weighted Price</span>
+                          <span className="font-mono text-[11px] font-extrabold text-slate-700">${(item.purchasePrice || 0).toFixed(2)}</span>
+                        </div>
+                        <div>
+                          <span className="text-[8px] text-emerald-600 uppercase font-mono block">Purchase Cost</span>
+                          <span className="font-mono text-[11px] font-extrabold text-slate-700">${(item.purchaseCost || 0).toLocaleString(undefined, { maximumFractionDigits: 0 })}</span>
+                        </div>
+                      </div>
+                      {item.buyTiers && item.buyTiers.length > 0 && (
+                        <div className="mt-2 pt-2 border-t border-emerald-100/50">
+                          <span className="text-[8px] uppercase font-bold text-emerald-800 block mb-1">Optimized Purchase Breakdown:</span>
+                          <div className="space-y-0.5">
+                            {item.buyTiers.map((t: any, idx: number) => (
+                              <div key={idx} className="flex justify-between text-[9px] font-mono text-slate-500">
+                                <span>Tier {idx + 1}: {t.vol.toLocaleString()} {t.unit || 'MMBtu'}</span>
+                                <span>Price: ${t.price.toFixed(4)}</span>
+                              </div>
+                            ))}
+                          </div>
+                        </div>
+                      )}
+                    </div>
+
+                    {/* Delivery/Sales section */}
+                    <div className="bg-emerald-50/20 p-3 rounded-lg border border-emerald-100">
+                      <span className="text-[9px] font-bold text-emerald-800 uppercase tracking-wide block mb-1.5">Delivery &amp; Sales (Sell Leg)</span>
+                      <div className="grid grid-cols-3 gap-2">
+                        <div>
+                          <span className="text-[8px] text-emerald-600 uppercase font-mono block">Optimized Volume</span>
+                          <span className="font-mono text-[11px] font-extrabold text-slate-700">{formatUnitVolumes(item.salesVolumeByUnit, ' | ', 'sell')}</span>
+                        </div>
+                        <div>
+                          <span className="text-[8px] text-emerald-600 uppercase font-mono block">Weighted Price</span>
+                          <span className="font-mono text-[11px] font-extrabold text-slate-700">${(item.salesPrice || 0).toFixed(2)}</span>
+                        </div>
+                        <div>
+                          <span className="text-[8px] text-emerald-600 uppercase font-mono block">Sales Revenue</span>
+                          <span className="font-mono text-[11px] font-extrabold text-slate-700">${(item.salesRevenue || 0).toLocaleString(undefined, { maximumFractionDigits: 0 })}</span>
+                        </div>
+                      </div>
+                      {item.sellTiers && item.sellTiers.length > 0 && (
+                        <div className="mt-2 pt-2 border-t border-emerald-100/50">
+                          <span className="text-[8px] uppercase font-bold text-emerald-800 block mb-1">Optimized Sales Breakdown:</span>
+                          <div className="space-y-0.5">
+                            {item.sellTiers.map((t: any, idx: number) => (
+                              <div key={idx} className="flex justify-between text-[9px] font-mono text-slate-500">
+                                <span>Tier {idx + 1}: {t.vol.toLocaleString()} {t.unit || 'MMBtu'}</span>
+                                <span>Price: ${t.price.toFixed(4)}</span>
+                              </div>
+                            ))}
+                          </div>
+                        </div>
+                      )}
+                    </div>
+
+                    {/* Operations & Net Optimized P&L */}
+                    <div className="bg-emerald-50 p-3 rounded-lg border border-emerald-100 grid grid-cols-3 gap-2">
+                      <div>
+                        <span className="text-[8px] text-slate-500 block uppercase font-mono font-bold">Shipping Cost</span>
+                        <span className="font-mono text-xs font-semibold text-purple-600">${(item.shippingRelatedCosts || 0).toLocaleString(undefined, { maximumFractionDigits: 0 })}</span>
+                      </div>
+                      <div>
+                        <span className="text-[8px] text-slate-500 block uppercase font-mono font-bold">Hedging P&amp;L</span>
+                        <span className={`font-mono text-xs font-bold ${(item.hedgingPnL || 0) >= 0 ? 'text-emerald-600' : 'text-rose-600'}`}>
+                          {(item.hedgingPnL || 0) >= 0 ? '+' : ''}${(item.hedgingPnL || 0).toLocaleString(undefined, { maximumFractionDigits: 0 })}
+                        </span>
+                      </div>
+                      <div>
+                        <span className="text-[8px] text-slate-500 block uppercase font-mono font-bold">Net P&amp;L Optimized</span>
+                        <span className={`font-mono text-xs font-black ${item.totalPnL >= 0 ? 'text-emerald-600' : 'text-rose-600'}`}>
+                          {item.totalPnL >= 0 ? '+' : '-'}${Math.abs(item.totalPnL).toLocaleString(undefined, { maximumFractionDigits: 0 })}
+                        </span>
+                      </div>
+                    </div>
+
+                  </div>
+                </div>
+              </div>
+
             </div>
 
           </div>
 
           {/* Drill-down Trade-Level Auditing Table */}
-          <div className="bg-white rounded-xl border border-slate-200 shadow-sm overflow-hidden flex flex-col">
-            <div className="p-4 border-b border-slate-200 bg-slate-50/50 flex flex-col sm:flex-row items-center justify-between gap-3">
-              <div>
-                <h3 className="text-xs font-bold text-slate-750 uppercase tracking-widest flex items-center gap-1.5">
-                  <Database className="w-4 h-4 text-blue-600" />
-                  Trade-Level Audit Trail ({rowsForStrat.length} Records)
-                </h3>
-                <p className="text-[10px] text-slate-500 font-mono mt-0.5">Inspect raw TRMS line item allocations comprising this strategy.</p>
-              </div>
+          {(() => {
+            const filteredRowsForStrat = rowsForStrat.filter(r => {
+              if (drilldownSubFilter === 'all') return true;
+              const portfolio = String(r['Internal Portfolio'] || r['Portfolio'] || '').trim().toLowerCase();
+              const isBase = portfolio === 'base lng' || portfolio.includes('base');
+              if (drilldownSubFilter === 'base') return isBase;
+              if (drilldownSubFilter === 'optimized') return !isBase;
+              return true;
+            });
 
-              {/* Excel Download button for this strategy */}
-              <button
-                onClick={() => {
-                  try {
-                    const ws = XLSX.utils.json_to_sheet(rowsForStrat);
-                    const wb = XLSX.utils.book_new();
-                    XLSX.utils.book_append_sheet(wb, ws, "Audit Trail");
-                    XLSX.writeFile(wb, `TRMS_Audit_${item.strategyName}.xlsx`);
-                    toast.success(`Exported audit trail for ${item.strategyName}`);
-                  } catch (err) {
-                    toast.error("Failed to export Excel");
-                  }
-                }}
-                className="px-3 py-1.5 bg-emerald-600 hover:bg-emerald-700 rounded text-[11px] font-bold text-white flex items-center gap-1.5 transition-colors cursor-pointer"
-              >
-                <Download className="w-3.5 h-3.5" />
-                <span>Export Audit Excel</span>
-              </button>
-            </div>
+            return (
+              <div className="bg-white rounded-xl border border-slate-200 shadow-sm overflow-hidden flex flex-col">
+                <div className="p-4 border-b border-slate-200 bg-slate-50/50 flex flex-col sm:flex-row items-center justify-between gap-3">
+                  <div className="flex flex-wrap items-center gap-3">
+                    <div>
+                      <h3 className="text-xs font-bold text-slate-750 uppercase tracking-widest flex items-center gap-1.5">
+                        <Database className="w-4 h-4 text-blue-600" />
+                        Trade-Level Audit Trail ({filteredRowsForStrat.length} of {rowsForStrat.length} Records)
+                      </h3>
+                      <p className="text-[10px] text-slate-500 font-mono mt-0.5">Inspect raw TRMS line item allocations comprising this strategy.</p>
+                    </div>
 
-            <div className="overflow-x-auto custom-scrollbar">
-              <table className="w-full text-left border-collapse text-[11.5px] font-mono text-slate-700">
-                <thead className="bg-slate-50 border-b border-slate-200 text-[10.5px] uppercase font-bold text-slate-500 tracking-wider">
-                  <tr>
-                    <th className="py-2.5 px-4 text-left">EOD Date</th>
-                    <th className="py-2.5 px-3">Deal ID</th>
-                    <th className="py-2.5 px-3">Buy/Sell</th>
-                    <th className="py-2.5 px-3">Internal Portfolio</th>
-                    <th className="py-2.5 px-3">Instrument</th>
-                    <th className="py-2.5 px-3">Cash/Phys</th>
-                    <th className="py-2.5 px-3 text-right">Volume</th>
-                    <th className="py-2.5 px-3 text-right">Price ($)</th>
-                    <th className="py-2.5 px-3 text-right">Sum of Value ($)</th>
-                    <th className="py-2.5 px-4 text-right">Change in P&amp;L ($)</th>
-                  </tr>
-                </thead>
-                <tbody className="divide-y divide-slate-100">
-                  {rowsForStrat.map((r, i) => {
-                    const dealId = r['Deal No'] || r['DealNo'] || r['Deal_No'] || '—';
-                    const buySell = String(r['Buy_Sell'] || r['BuySell'] || '').trim();
-                    const portfolio = r['Internal Portfolio'] || r['Portfolio'] || '—';
-                    const insType = r['Ins Type'] || r['InstrumentType'] || '—';
-                    const sett = r['Settlement Type'] || '—';
-                    const eodDt = r['EOD Date'] || r['EOD_Date'] || '—';
-                    
-                    // Parsing numeric columns safely
-                    const vol = Number(r['Volume'] || r['Unsigned Volume'] || r['UnsignedVolume'] || 0);
-                    const price = Number(r['Price'] || r['Price_Val'] || 0);
-                    const valUsd = Number(r['Value USD'] || r['Value_USD'] || r['totalValueUSD'] || r['totalPnL'] || 0);
-                    const pnlVal = Number(r['P&L Change'] || r['totalPnL'] || r['PnL'] || 0);
+                    {drilldownSubFilter !== 'all' && (
+                      <div className="flex items-center gap-2">
+                        <span className={`px-2 py-0.5 rounded text-[9px] font-mono font-bold border ${
+                          drilldownSubFilter === 'base' ? 'bg-slate-55 border-slate-300 text-slate-600' : 'bg-emerald-50 border-emerald-200 text-emerald-700'
+                        }`}>
+                          Filter: {drilldownSubFilter === 'base' ? 'Standard (Base) Scenario' : 'Optimized Scenario'}
+                        </span>
+                        <button
+                          onClick={() => {
+                            setDrilldownSubFilter('all');
+                            toast.success("Showing all trade log records!");
+                          }}
+                          className="px-2 py-0.5 bg-slate-100 hover:bg-slate-200 border border-slate-300 rounded text-[9px] font-bold text-slate-600 transition-colors cursor-pointer"
+                        >
+                          Clear Filter
+                        </button>
+                      </div>
+                    )}
+                  </div>
 
-                    const isBuy = buySell.toLowerCase() === 'buy' || buySell.toLowerCase() === 'buys';
+                  {/* Excel Download button for this strategy */}
+                  <button
+                    onClick={() => {
+                      try {
+                        const ws = XLSX.utils.json_to_sheet(filteredRowsForStrat);
+                        const wb = XLSX.utils.book_new();
+                        XLSX.utils.book_append_sheet(wb, ws, "Audit Trail");
+                        XLSX.writeFile(wb, `TRMS_Audit_${item.strategyName}_${drilldownSubFilter}.xlsx`);
+                        toast.success(`Exported ${drilldownSubFilter} audit trail for ${item.strategyName}`);
+                      } catch (err) {
+                        toast.error("Failed to export Excel");
+                      }
+                    }}
+                    className="px-3 py-1.5 bg-emerald-600 hover:bg-emerald-700 rounded text-[11px] font-bold text-white flex items-center gap-1.5 transition-colors cursor-pointer"
+                  >
+                    <Download className="w-3.5 h-3.5" />
+                    <span>Export Audit Excel</span>
+                  </button>
+                </div>
 
-                    return (
-                      <tr key={i} className="hover:bg-slate-50 transition-colors">
-                        <td className="py-2 px-4 text-slate-500">{eodDt}</td>
-                        <td className="py-2 px-3 font-semibold text-blue-600">{dealId}</td>
-                        <td className="py-2 px-3">
-                          <span className={`px-1.5 py-0.5 rounded text-[10px] font-bold ${
-                            isBuy ? 'bg-emerald-50 text-emerald-700 border border-emerald-200' : 'bg-blue-50 text-blue-700 border border-blue-200'
-                          }`}>
-                            {buySell}
-                          </span>
-                        </td>
-                        <td className="py-2 px-3 text-slate-600 truncate max-w-[150px]">{portfolio}</td>
-                        <td className="py-2 px-3 text-slate-600">{insType}</td>
-                        <td className="py-2 px-3 text-slate-500 text-[10px]">{sett}</td>
-                        <td className="py-2 px-3 text-right text-slate-900 font-semibold">{vol.toLocaleString(undefined, { maximumFractionDigits: 0 })}</td>
-                        <td className="py-2 px-3 text-right text-slate-700">${price.toLocaleString(undefined, { minimumFractionDigits: 2, maximumFractionDigits: 4 })}</td>
-                        <td className="py-2 px-3 text-right text-slate-800">${valUsd.toLocaleString(undefined, { maximumFractionDigits: 0 })}</td>
-                        <td className={`py-2 px-4 text-right font-bold ${pnlVal > 0 ? 'text-emerald-600' : pnlVal < 0 ? 'text-rose-600' : 'text-slate-500'}`}>
-                          {pnlVal > 0 ? '+' : pnlVal < 0 ? '-' : ''}${Math.abs(pnlVal).toLocaleString(undefined, { maximumFractionDigits: 0 })}
-                        </td>
+                <div className="overflow-x-auto custom-scrollbar">
+                  <table className="w-full text-left border-collapse text-[11.5px] font-mono text-slate-700">
+                    <thead className="bg-slate-50 border-b border-slate-200 text-[10.5px] uppercase font-bold text-slate-500 tracking-wider">
+                      <tr>
+                        <th className="py-2.5 px-4 text-left">EOD Date</th>
+                        <th className="py-2.5 px-3">Deal ID</th>
+                        <th className="py-2.5 px-3">Buy/Sell</th>
+                        <th className="py-2.5 px-3">Internal Portfolio</th>
+                        <th className="py-2.5 px-3">Instrument</th>
+                        <th className="py-2.5 px-3">Cash/Phys</th>
+                        <th className="py-2.5 px-3 text-right">Volume</th>
+                        <th className="py-2.5 px-3 text-right">Price ($)</th>
+                        <th className="py-2.5 px-3 text-right">Sum of Value ($)</th>
+                        <th className="py-2.5 px-4 text-right">Change in P&amp;L ($)</th>
                       </tr>
-                    );
-                  })}
-                </tbody>
-              </table>
-            </div>
-          </div>
+                    </thead>
+                    <tbody className="divide-y divide-slate-100">
+                      {filteredRowsForStrat.map((r, i) => {
+                        const dealId = r['Deal No'] || r['DealNo'] || r['Deal_No'] || '—';
+                        const buySell = String(r['Buy_Sell'] || r['BuySell'] || '').trim();
+                        const portfolio = r['Internal Portfolio'] || r['Portfolio'] || '—';
+                        const insType = r['Ins Type'] || r['InstrumentType'] || '—';
+                        const sett = r['Settlement Type'] || '—';
+                        const eodDt = r['EOD Date'] || r['EOD_Date'] || '—';
+                        
+                        // Parsing numeric columns safely
+                        const vol = Number(r['Volume'] || r['Unsigned Volume'] || r['UnsignedVolume'] || 0);
+                        const price = Number(r['Price'] || r['Price_Val'] || 0);
+                        const valUsd = Number(r['Value USD'] || r['Value_USD'] || r['totalValueUSD'] || r['totalPnL'] || 0);
+                        const pnlVal = Number(r['P&L Change'] || r['totalPnL'] || r['PnL'] || 0);
+
+                        const isBuy = buySell.toLowerCase() === 'buy' || buySell.toLowerCase() === 'buys';
+
+                        return (
+                          <tr key={i} className="hover:bg-slate-55 transition-colors">
+                            <td className="py-2 px-4 text-slate-500">{eodDt}</td>
+                            <td className="py-2 px-3 font-semibold text-blue-600">{dealId}</td>
+                            <td className="py-2 px-3">
+                              <span className={`px-1.5 py-0.5 rounded text-[10px] font-bold ${
+                                isBuy ? 'bg-emerald-50 text-emerald-700 border border-emerald-200' : 'bg-blue-50 text-blue-700 border border-blue-200'
+                              }`}>
+                                {buySell}
+                              </span>
+                            </td>
+                            <td className="py-2 px-3 text-slate-600 truncate max-w-[150px]">{portfolio}</td>
+                            <td className="py-2 px-3 text-slate-600">{insType}</td>
+                            <td className="py-2 px-3 text-slate-500 text-[10px]">{sett}</td>
+                            <td className="py-2 px-3 text-right text-slate-900 font-semibold">{vol.toLocaleString(undefined, { maximumFractionDigits: 0 })} {r['Unit'] || r['unit'] || ''}</td>
+                            <td className="py-2 px-3 text-right text-slate-700">${price.toLocaleString(undefined, { minimumFractionDigits: 2, maximumFractionDigits: 4 })}</td>
+                            <td className="py-2 px-3 text-right text-slate-800">${valUsd.toLocaleString(undefined, { maximumFractionDigits: 0 })}</td>
+                            <td className={`py-2 px-4 text-right font-bold ${pnlVal > 0 ? 'text-emerald-600' : pnlVal < 0 ? 'text-rose-600' : 'text-slate-500'}`}>
+                              {pnlVal > 0 ? '+' : pnlVal < 0 ? '-' : ''}${Math.abs(pnlVal).toLocaleString(undefined, { maximumFractionDigits: 0 })}
+                            </td>
+                          </tr>
+                        );
+                      })}
+                    </tbody>
+                  </table>
+                </div>
+              </div>
+            );
+          })()}
         </div>
       );
     }
@@ -1867,18 +3056,22 @@ export const TrmsSummaryTable: React.FC<TrmsSummaryTableProps> = ({ trmsData, vi
 
     const optimizationKpis = {
       count: optimizedStrategies.length,
-      totalBasePnL: optimizedStrategies.reduce((acc, item) => acc + (item.basePnL || 0), 0),
-      totalOptimizedPnL: optimizedStrategies.reduce((acc, item) => acc + (item.totalPnL || 0), 0),
-      netUplift: optimizedStrategies.reduce((acc, item) => acc + ((item.totalPnL || 0) - (item.basePnL || 0)), 0),
+      totalBasePnL: optimizedStrategies.reduce((acc, item) => acc + ((item.baseSalesRevenue || 0) - (item.basePurchaseCost || 0) - Math.abs(item.baseShippingRelatedCosts || 0)), 0),
+      totalOptimizedPnL: optimizedStrategies.reduce((acc, item) => acc + ((item.salesRevenue || 0) - (item.purchaseCost || 0) - Math.abs(item.shippingRelatedCosts || 0)), 0),
+      netUplift: optimizedStrategies.reduce((acc, item) => acc + (item.optimizationUplift || 0), 0),
       totalVolume: optimizedStrategies.reduce((acc, item) => acc + (item.purchaseVolume || 0) + (item.salesVolume || 0), 0)
     };
 
-    const optimizationChartData = optimizedStrategies.map(item => ({
-      name: item.strategyName,
-      "Base P&L": item.basePnL || 0,
-      "Optimized P&L": item.totalPnL || 0,
-      "Uplift": (item.totalPnL || 0) - (item.basePnL || 0)
-    }));
+    const optimizationChartData = optimizedStrategies.map(item => {
+      const baseNetVal = (item.baseSalesRevenue || 0) - (item.basePurchaseCost || 0) - Math.abs(item.baseShippingRelatedCosts || 0);
+      const optNetVal = (item.salesRevenue || 0) - (item.purchaseCost || 0) - Math.abs(item.shippingRelatedCosts || 0);
+      return {
+        name: item.strategyName,
+        "Base P&L": baseNetVal,
+        "Optimized P&L": optNetVal,
+        "Uplift": item.optimizationUplift || 0
+      };
+    });
 
     const categoryGroupedData = [
       { key: 'PL9SB', title: 'Train9 (PL9SB)', icon: <Layers className="w-5 h-5 text-indigo-500" />, description: 'Train 9 physical allocations & portfolio optimizations', items: [] as any[], totalPnL: 0, totalVolume: 0, optCount: 0, realizedCount: 0 },
@@ -1949,16 +3142,218 @@ export const TrmsSummaryTable: React.FC<TrmsSummaryTableProps> = ({ trmsData, vi
               <Boxes className="w-3.5 h-3.5 text-indigo-500" />
               <span>Asset &amp; Group Breakdowns</span>
             </button>
+            <button
+              onClick={() => setDashboardTab('volume_exposure')}
+              className={`flex-1 sm:flex-none px-4 py-2 text-center text-xs font-extrabold rounded-lg transition-all cursor-pointer flex items-center justify-center gap-1.5 ${
+                dashboardTab === 'volume_exposure'
+                  ? 'bg-white text-slate-900 shadow-sm'
+                  : 'text-slate-500 hover:text-slate-800'
+              }`}
+            >
+              <Ship className="w-3.5 h-3.5 text-sky-500" />
+              <span>Volume &amp; Seasonal Exposure</span>
+            </button>
           </div>
           
-          <div className="text-[10px] font-mono text-slate-400">
-            EOD Report Active
+          <div className="flex flex-wrap items-center gap-3">
+            <span className="text-[10px] font-bold uppercase tracking-wider text-slate-400 font-mono">EOD Report Active</span>
+            <div className="h-4 w-px bg-slate-300" />
+            <div className="flex items-center gap-1.5 animate-fadeIn">
+              <span className="text-[10px] font-extrabold uppercase tracking-wider text-slate-500 font-mono">Unit Filter:</span>
+              <div className="flex bg-slate-200/80 p-0.5 rounded-lg border border-slate-300/60 shadow-xs">
+                {['ALL', ...allAvailableUnits].map(unit => (
+                  <button
+                    key={unit}
+                    onClick={() => setSelectedUnit(unit)}
+                    className={`px-2.5 py-1 text-[10px] font-mono font-black rounded-md transition-all cursor-pointer ${
+                      selectedUnit === unit
+                        ? 'bg-white text-slate-950 shadow-xs'
+                        : 'text-slate-500 hover:text-slate-800'
+                    }`}
+                  >
+                    {unit}
+                  </button>
+                ))}
+              </div>
+            </div>
           </div>
         </div>
+
+        {/* ACTIVE DASHBOARD FILTERS BANNER */}
+        {(Object.keys(columnFilters).length > 0 || selectedTraderFilter !== null || selectedIndexFilter !== null || searchTerm !== '') && (
+          <div className="bg-blue-50/70 border border-blue-200 rounded-2xl p-3 flex flex-col sm:flex-row gap-3 items-center justify-between shadow-sm animate-fadeIn">
+            <div className="flex flex-wrap items-center gap-2">
+              <span className="text-[10px] font-extrabold text-blue-800 uppercase tracking-wider flex items-center gap-1.5 font-mono">
+                <Filter className="w-3.5 h-3.5 text-blue-600 animate-pulse" />
+                Active Filters:
+              </span>
+              
+              {/* Search text */}
+              {searchTerm && (
+                <span className="text-[10px] bg-white border border-blue-150 text-blue-800 px-2.5 py-1 rounded-xl flex items-center gap-1.5 shadow-xs font-semibold">
+                  <span className="text-slate-400 font-mono text-[9px] uppercase">Search:</span>
+                  <span>"{searchTerm}"</span>
+                  <button 
+                    onClick={() => setSearchTerm('')}
+                    className="p-0.5 hover:bg-slate-100 text-slate-400 hover:text-rose-500 rounded-full transition-colors cursor-pointer"
+                  >
+                    <X className="w-3 h-3" />
+                  </button>
+                </span>
+              )}
+
+              {/* Trader */}
+              {selectedTraderFilter && (
+                <span className="text-[10px] bg-white border border-blue-150 text-blue-800 px-2.5 py-1 rounded-xl flex items-center gap-1.5 shadow-xs font-semibold">
+                  <span className="text-slate-400 font-mono text-[9px] uppercase">Trader:</span>
+                  <span>{selectedTraderFilter}</span>
+                  <button 
+                    onClick={() => setSelectedTraderFilter(null)}
+                    className="p-0.5 hover:bg-slate-100 text-slate-400 hover:text-rose-500 rounded-full transition-colors cursor-pointer"
+                  >
+                    <X className="w-3 h-3" />
+                  </button>
+                </span>
+              )}
+
+              {/* Price Index */}
+              {selectedIndexFilter && (
+                <span className="text-[10px] bg-white border border-blue-150 text-blue-800 px-2.5 py-1 rounded-xl flex items-center gap-1.5 shadow-xs font-semibold">
+                  <span className="text-slate-400 font-mono text-[9px] uppercase">Index Pricing:</span>
+                  <span>{selectedIndexFilter}</span>
+                  <button 
+                    onClick={() => setSelectedIndexFilter(null)}
+                    className="p-0.5 hover:bg-slate-100 text-slate-400 hover:text-rose-500 rounded-full transition-colors cursor-pointer"
+                  >
+                    <X className="w-3 h-3" />
+                  </button>
+                </span>
+              )}
+
+              {/* Column Filters */}
+              {Object.entries(columnFilters).map(([col, filter]) => {
+                const hasCheckedValues = filter.selectedValues.size > 0;
+                const hasCondition = filter.condition !== 'none';
+                if (!hasCheckedValues && !hasCondition) return null;
+                return (
+                  <span key={col} className="text-[10px] bg-white border border-blue-150 text-blue-800 px-2.5 py-1 rounded-xl flex items-center gap-1.5 shadow-xs font-semibold">
+                    <span className="text-slate-400 font-mono text-[9px] uppercase">{col}:</span>
+                    <span>
+                      {hasCondition 
+                        ? `${filter.condition}(${filter.conditionValue1}${filter.conditionValue2 ? `, ${filter.conditionValue2}` : ''})` 
+                        : Array.from(filter.selectedValues).join(', ')}
+                    </span>
+                    <button 
+                      onClick={() => {
+                        setColumnFilters(prev => {
+                          const next = { ...prev };
+                          delete next[col];
+                          return next;
+                        });
+                      }}
+                      className="p-0.5 hover:bg-slate-100 text-slate-400 hover:text-rose-500 rounded-full transition-colors cursor-pointer"
+                    >
+                      <X className="w-3 h-3" />
+                    </button>
+                  </span>
+                );
+              })}
+            </div>
+
+            <button 
+              onClick={() => {
+                setSearchTerm('');
+                setSelectedTraderFilter(null);
+                setSelectedIndexFilter(null);
+                setColumnFilters({});
+                toast.success("All dashboard filters cleared successfully");
+              }}
+              className="text-[10px] font-bold px-3 py-1 bg-blue-100 hover:bg-blue-200 text-blue-800 border border-blue-200 rounded-xl transition-colors cursor-pointer shadow-xs shrink-0 font-mono uppercase"
+            >
+              Clear All Filters
+            </button>
+          </div>
+        )}
 
         {/* TAB CONTENT: OVERVIEW */}
         {dashboardTab === 'overview' && (
           <div className="space-y-4">
+            {/* REFERENCE FORMAT COMPLIANCE ALERTS */}
+            {referenceValidationAlerts.length > 0 && (
+              <div className="bg-amber-950/20 border border-amber-850/45 rounded-xl p-4 shadow-sm animate-fadeIn space-y-3">
+                <div className="flex flex-col sm:flex-row sm:items-center justify-between gap-3">
+                  <div className="flex items-start gap-2.5">
+                    <div className="p-1.5 bg-amber-900/30 rounded-lg border border-amber-800/45 text-amber-400 mt-0.5 animate-pulse">
+                      <AlertTriangle className="w-5 h-5" />
+                    </div>
+                    <div>
+                      <h4 className="text-xs font-extrabold text-amber-400 uppercase tracking-wider font-mono flex items-center gap-2">
+                        <span>Reference Compliance Alerts</span>
+                        <span className="bg-amber-900/40 text-amber-300 text-[10px] font-black px-2 py-0.5 rounded-full border border-amber-800/55">
+                          {referenceValidationAlerts.length} Issues Detected
+                        </span>
+                      </h4>
+                      <p className="text-[10.5px] text-slate-500 font-medium leading-normal mt-0.5">
+                        These trades in <strong className="text-slate-700">DH</strong>, <strong className="text-slate-700">DFT</strong>, or <strong className="text-slate-700">Hedging LNG</strong> portfolios do not match the standard naming pattern: <code>&lt;Index&gt;_&lt;Buyer&gt;_&lt;ExpMonthYear&gt;[_...]</code>.
+                      </p>
+                    </div>
+                  </div>
+                  <button 
+                    onClick={() => setAlertsCollapsed(!alertsCollapsed)}
+                    className="self-start sm:self-center text-[10px] font-black uppercase font-mono text-amber-650 hover:text-amber-800 hover:bg-amber-100/65 px-3 py-1.5 border border-amber-300/60 rounded-lg transition-all cursor-pointer shadow-2xs whitespace-nowrap"
+                  >
+                    {alertsCollapsed ? 'Expand Details' : 'Collapse Details'}
+                  </button>
+                </div>
+
+                {!alertsCollapsed && (
+                  <div className="overflow-x-auto rounded-lg border border-slate-200 bg-white max-h-60 overflow-y-auto custom-scrollbar shadow-inner">
+                    <table className="w-full text-left font-mono text-[10.5px] text-slate-700">
+                      <thead className="bg-slate-50 border-b border-slate-200 text-slate-500 font-bold uppercase select-none sticky top-0 z-10">
+                        <tr>
+                          <th className="py-2 px-3">Deal Num</th>
+                          <th className="py-2 px-3">Strategy</th>
+                          <th className="py-2 px-3">Portfolio</th>
+                          <th className="py-2 px-3">Non-Compliant Reference</th>
+                          <th className="py-2 px-3 text-rose-600">Validation Failure Reason</th>
+                          <th className="py-2 px-3 text-right">Action</th>
+                        </tr>
+                      </thead>
+                      <tbody className="divide-y divide-slate-100 bg-white">
+                        {referenceValidationAlerts.map(({ row, error, strategyName }, idx) => (
+                          <tr key={idx} className="hover:bg-slate-50/70 transition-colors">
+                            <td className="py-1.5 px-3 font-extrabold text-slate-900">{row['Deal Num']}</td>
+                            <td className="py-1.5 px-3 font-semibold text-slate-600">{strategyName}</td>
+                            <td className="py-1.5 px-3 font-bold text-slate-500">{row['Internal Portfolio'] || row['Portfolio'] || '—'}</td>
+                            <td className="py-1.5 px-3 text-amber-700 font-bold break-all max-w-[180px]">{row['Reference'] || '—'}</td>
+                            <td className="py-1.5 px-3 text-rose-600/90 italic font-sans font-medium">{error}</td>
+                            <td className="py-1.5 px-3 text-right">
+                              <button
+                                onClick={() => {
+                                  // Expand the strategy and scroll down
+                                  toggleRowExpansion(strategyName, true);
+                                  // Set expanded detail filter to show all so they can find it
+                                  setExpandedFilters(prev => ({ ...prev, [strategyName]: 'all' }));
+                                  
+                                  // Also enable 'all' ref filter so they can search it
+                                  setSubTableRefFilters(prev => ({ ...prev, [strategyName]: 'invalid' }));
+
+                                  toast.success(`Expanded ${strategyName} & filtered trade logs to alerts!`);
+                                }}
+                                className="text-[10px] bg-blue-50 hover:bg-blue-100 text-blue-700 font-bold px-2.5 py-1 border border-blue-200/60 rounded-md transition-all cursor-pointer whitespace-nowrap"
+                              >
+                                Inspect Deal
+                              </button>
+                            </td>
+                          </tr>
+                        ))}
+                      </tbody>
+                    </table>
+                  </div>
+                )}
+              </div>
+            )}
+
             {/* Visual Bento Grid of Charts */}
             <div className="grid grid-cols-1 lg:grid-cols-12 gap-4">
               
@@ -2082,9 +3477,32 @@ export const TrmsSummaryTable: React.FC<TrmsSummaryTableProps> = ({ trmsData, vi
                               outerRadius={40}
                               paddingAngle={3}
                               dataKey="value"
+                              onClick={(entry) => {
+                                if (entry && entry.name) {
+                                  const statusVal = entry.name.includes('Yes') ? 'Yes' : entry.name.includes('No') ? 'No' : 'Alert';
+                                  setColumnFilters(prev => {
+                                    const next = { ...prev };
+                                    const currentFilter = next['Optimisation'];
+                                    if (currentFilter && currentFilter.selectedValues.has(statusVal)) {
+                                      delete next['Optimisation'];
+                                      toast.success("Cleared Optimisation status filter");
+                                    } else {
+                                      next['Optimisation'] = {
+                                        selectedValues: new Set([statusVal]),
+                                        condition: 'none',
+                                        conditionValue1: '',
+                                        conditionValue2: ''
+                                      };
+                                      toast.success(`Filtering by Optimisation: ${statusVal}`);
+                                    }
+                                    return next;
+                                  });
+                                }
+                              }}
+                              cursor="pointer"
                             >
                               {optimizationData.map((entry, index) => (
-                                <Cell key={`cell-${index}`} fill={entry.color} />
+                                <Cell key={`cell-${index}`} fill={entry.color} className="hover:opacity-80 transition-opacity" />
                               ))}
                             </Pie>
                             <RechartsTooltip contentStyle={{ backgroundColor: '#ffffff', borderColor: '#e2e8f0', fontSize: '9px' }} />
@@ -2120,9 +3538,32 @@ export const TrmsSummaryTable: React.FC<TrmsSummaryTableProps> = ({ trmsData, vi
                               outerRadius={40}
                               paddingAngle={3}
                               dataKey="value"
+                              onClick={(entry) => {
+                                if (entry && entry.name) {
+                                  const statusVal = entry.name.includes('Matched') ? 'Matched' : entry.name.includes('Sell') ? 'Open on Sell Leg' : 'Open on Buy Leg';
+                                  setColumnFilters(prev => {
+                                    const next = { ...prev };
+                                    const currentFilter = next['Unallocated Cargo'];
+                                    if (currentFilter && currentFilter.selectedValues.has(statusVal)) {
+                                      delete next['Unallocated Cargo'];
+                                      toast.success("Cleared cargo matching filter");
+                                    } else {
+                                      next['Unallocated Cargo'] = {
+                                        selectedValues: new Set([statusVal]),
+                                        condition: 'none',
+                                        conditionValue1: '',
+                                        conditionValue2: ''
+                                      };
+                                      toast.success(`Filtering by Cargo Matching: ${statusVal}`);
+                                    }
+                                    return next;
+                                  });
+                                }
+                              }}
+                              cursor="pointer"
                             >
                               {unallocatedData.map((entry, index) => (
-                                <Cell key={`cell-${index}`} fill={entry.color} />
+                                <Cell key={`cell-${index}`} fill={entry.color} className="hover:opacity-80 transition-opacity" />
                               ))}
                             </Pie>
                             <RechartsTooltip contentStyle={{ backgroundColor: '#ffffff', borderColor: '#e2e8f0', fontSize: '9px' }} />
@@ -2143,6 +3584,232 @@ export const TrmsSummaryTable: React.FC<TrmsSummaryTableProps> = ({ trmsData, vi
                 </div>
               </div>
 
+            </div>
+
+            {/* Chart Section: Hedging Volume and Percentage Analytics */}
+            <div className="bg-white rounded-xl border border-slate-200 shadow-sm p-4 mb-4">
+              {/* Card Header */}
+              <div className="flex flex-col sm:flex-row sm:items-center justify-between border-b border-slate-100 pb-3 mb-4 gap-2">
+                <div>
+                  <h3 className="text-xs font-bold text-slate-800 uppercase tracking-widest flex items-center gap-1.5">
+                    <TrendingUp className="w-4 h-4 text-emerald-600" />
+                    Hedging Operations &amp; Paper Volumes per Strategy
+                  </h3>
+                  <p className="text-[10px] text-slate-500 font-mono mt-0.5">
+                    Compares <strong>Hedging LNG</strong> volume and ratio (%) against <strong>Physical Cargo</strong> volume. Keeps paper portfolios (<strong>DH LNG</strong> &amp; <strong>DFT LNG</strong>) clearly separated.
+                  </p>
+                </div>
+                <div className="flex items-center gap-2">
+                  <span className="inline-flex items-center gap-1 px-2 py-0.5 rounded text-[9px] font-medium bg-emerald-50 text-emerald-700 border border-emerald-100">
+                    <span className="w-1.5 h-1.5 rounded bg-emerald-500" />
+                    Hedging LNG (Physical Related)
+                  </span>
+                  <span className="inline-flex items-center gap-1 px-2 py-0.5 rounded text-[9px] font-medium bg-amber-50 text-amber-700 border border-amber-100">
+                    <span className="w-1.5 h-1.5 rounded bg-amber-500" />
+                    DH &amp; DFT LNG (Paper)
+                  </span>
+                </div>
+              </div>
+
+              {/* Chart Content */}
+              <div className="grid grid-cols-1 xl:grid-cols-12 gap-4">
+                {/* Visual Chart: Col-span 8 */}
+                <div className="xl:col-span-8 h-[280px]">
+                  <ResponsiveContainer width="100%" height="100%">
+                    <ComposedChart
+                      data={filteredAndSortedSummaryData.map(item => {
+                        const getChartVol = (byUnit: any) => {
+                          if (!byUnit) return 0;
+                          if (selectedUnit !== 'ALL') {
+                            return byUnit[selectedUnit] || 0;
+                          }
+                          if ('MMBtu' in byUnit) return byUnit['MMBtu'];
+                          const firstKey = Object.keys(byUnit)[0];
+                          return firstKey ? byUnit[firstKey] : 0;
+                        };
+                        const physVol = Math.max(getChartVol(item.purchaseVolumeByUnit), getChartVol(item.salesVolumeByUnit)) || 0;
+                        const hedgingVol = getChartVol(item.hedgingVolumeByUnit) || 0;
+                        const paperVol = getChartVol(item.paperVolumeByUnit) || 0;
+                        return {
+                          name: item.strategyName,
+                          "Physical Volume": physVol,
+                          "Hedging LNG": hedgingVol,
+                          "Paper LNG (DH & DFT)": paperVol,
+                          "Hedging Ratio (%)": parseFloat((item.hedgingVolumePct || 0).toFixed(1)),
+                        };
+                      })}
+                      margin={{ top: 10, right: 10, left: -10, bottom: 0 }}
+                      onClick={(data) => {
+                        if (data && data.activeLabel) {
+                          setSelectedDrillDownStrategy(data.activeLabel);
+                          toast.success(`Opening drill-down details for ${data.activeLabel}`);
+                        }
+                      }}
+                    >
+                      <CartesianGrid strokeDasharray="3 3" vertical={false} stroke="#f1f5f9" />
+                      <XAxis 
+                        dataKey="name" 
+                        stroke="#64748b" 
+                        fontSize={9} 
+                        tickLine={false} 
+                        axisLine={false}
+                        dy={5}
+                      />
+                      <YAxis 
+                        yAxisId="left"
+                        stroke="#64748b" 
+                        fontSize={9} 
+                        tickLine={false} 
+                        axisLine={false}
+                        tickFormatter={(v) => `${(v / 1e3).toFixed(0)}k`}
+                        label={{ value: `Volume (${selectedUnit === 'ALL' ? 'MMBtu/Dominant' : selectedUnit})`, angle: -90, position: 'insideLeft', style: { textAnchor: 'middle', fill: '#64748b', fontSize: 9, dy: 10 } }}
+                      />
+                      <YAxis 
+                        yAxisId="right"
+                        orientation="right"
+                        stroke="#059669" 
+                        fontSize={9} 
+                        tickLine={false} 
+                        axisLine={false}
+                        tickFormatter={(v) => `${v}%`}
+                        label={{ value: 'Hedging Ratio (%)', angle: 90, position: 'insideRight', style: { textAnchor: 'middle', fill: '#059669', fontSize: 9 } }}
+                      />
+                      <RechartsTooltip 
+                        content={({ active, payload, label }) => {
+                          if (active && payload && payload.length) {
+                            const data = payload[0].payload;
+                            const unitLabel = selectedUnit === 'ALL' ? 'Units' : selectedUnit;
+                            return (
+                              <div className="bg-slate-900 text-white p-2.5 rounded-lg shadow-lg border border-slate-800 text-[10px] font-mono space-y-1.5">
+                                <p className="font-bold border-b border-slate-800 pb-1 text-slate-300">{label}</p>
+                                <div className="flex justify-between gap-4">
+                                  <span className="text-slate-400">Physical Volume:</span>
+                                  <span className="font-bold">{(data["Physical Volume"]).toLocaleString()} {unitLabel}</span>
+                                </div>
+                                <div className="flex justify-between gap-4 text-emerald-400">
+                                  <span>Hedging LNG Vol:</span>
+                                  <span className="font-bold">{(data["Hedging LNG"]).toLocaleString()} {unitLabel}</span>
+                                </div>
+                                <div className="flex justify-between gap-4 text-emerald-400 font-bold">
+                                  <span>Hedging Ratio:</span>
+                                  <span>{data["Hedging Ratio (%)"]}%</span>
+                                </div>
+                                <div className="flex justify-between gap-4 text-amber-400 border-t border-slate-800 pt-1">
+                                  <span>Paper LNG (DH &amp; DFT):</span>
+                                  <span className="font-bold">{(data["Paper LNG (DH &amp; DFT)"] || 0).toLocaleString()} {unitLabel}</span>
+                                </div>
+                              </div>
+                            );
+                          }
+                          return null;
+                        }}
+                      />
+                      <RechartsLegend 
+                        verticalAlign="top" 
+                        height={36} 
+                        iconSize={10} 
+                        wrapperStyle={{ fontSize: 9, fontFamily: 'monospace' }}
+                      />
+                      <Bar yAxisId="left" dataKey="Physical Volume" fill="#cbd5e1" name="Phys Cargo Vol" radius={[2, 2, 0, 0]} maxBarSize={25} cursor="pointer" />
+                      <Bar yAxisId="left" dataKey="Hedging LNG" fill="#10b981" name="Hedging LNG" radius={[2, 2, 0, 0]} maxBarSize={25} cursor="pointer" />
+                      <Bar yAxisId="left" dataKey="Paper LNG (DH &amp; DFT)" fill="#f59e0b" name="Paper (DH/DFT)" radius={[2, 2, 0, 0]} maxBarSize={25} cursor="pointer" />
+                      <Line yAxisId="right" type="monotone" dataKey="Hedging Ratio (%)" stroke="#059669" strokeWidth={2} dot={{ r: 3, strokeWidth: 1 }} activeDot={{ r: 5 }} name="Hedging Ratio (%)" cursor="pointer" />
+                    </ComposedChart>
+                  </ResponsiveContainer>
+                </div>
+
+                {/* Analytical summary: Col-span 4 */}
+                <div className="xl:col-span-4 bg-slate-50 rounded-lg p-3.5 border border-slate-150 flex flex-col justify-between">
+                  <div className="space-y-3">
+                    <h4 className="text-[10px] font-bold text-slate-700 uppercase tracking-wider font-mono">Operations Insights</h4>
+                    
+                    {/* Stat Cards */}
+                    <div className="grid grid-cols-2 gap-2">
+                      <div className="bg-white p-2 rounded border border-slate-100 shadow-sm flex flex-col justify-between">
+                        <span className="text-[9px] text-slate-500 block">Total Hedging LNG</span>
+                        <span className="text-xs font-bold text-slate-800 font-mono leading-tight whitespace-pre-line">
+                          {(() => {
+                            const aggregated = filteredAndSortedSummaryData.reduce((acc, curr) => {
+                              Object.entries(curr.hedgingVolumeByUnit || {}).forEach(([unit, val]) => {
+                                acc[unit] = (acc[unit] || 0) + val;
+                              });
+                              return acc;
+                            }, {} as { [unit: string]: number });
+                            return formatUnitVolumes(aggregated, '\n');
+                          })()}
+                        </span>
+                      </div>
+
+                      <div className="bg-white p-2 rounded border border-slate-100 shadow-sm flex flex-col justify-between">
+                        <span className="text-[9px] text-slate-500 block">Total Paper (DH/DFT)</span>
+                        <span className="text-xs font-bold text-slate-800 font-mono leading-tight whitespace-pre-line">
+                          {(() => {
+                            const aggregated = filteredAndSortedSummaryData.reduce((acc, curr) => {
+                              Object.entries(curr.paperVolumeByUnit || {}).forEach(([unit, val]) => {
+                                acc[unit] = (acc[unit] || 0) + val;
+                              });
+                              return acc;
+                            }, {} as { [unit: string]: number });
+                            return formatUnitVolumes(aggregated, '\n');
+                          })()}
+                        </span>
+                      </div>
+                    </div>
+
+                    <div className="bg-white p-2.5 rounded border border-slate-100 shadow-sm space-y-1.5">
+                      <span className="text-[9px] text-slate-500 block font-bold">Hedging Portfolio Coverage</span>
+                      <div className="flex items-center justify-between text-[10px] font-mono">
+                        <span className="text-slate-600">Avg Hedging Ratio:</span>
+                        <span className="font-bold text-emerald-600">
+                          {(() => {
+                            const physTotal = filteredAndSortedSummaryData.reduce((acc, curr) => {
+                              if (selectedUnit !== 'ALL') {
+                                return acc + Math.max(curr.purchaseVolumeByUnit[selectedUnit] || 0, curr.salesVolumeByUnit[selectedUnit] || 0);
+                              }
+                              return acc + Math.max(curr.purchaseVolume, curr.salesVolume);
+                            }, 0);
+                            const hedgeTotal = filteredAndSortedSummaryData.reduce((acc, curr) => {
+                              if (selectedUnit !== 'ALL') {
+                                return acc + (curr.hedgingVolumeByUnit[selectedUnit] || 0);
+                              }
+                              return acc + (curr.hedgingVolume || 0);
+                            }, 0);
+                            return physTotal > 0 ? `${((hedgeTotal / physTotal) * 100).toFixed(1)}%` : '0.0%';
+                          })()}
+                        </span>
+                      </div>
+                      {/* Visual progress bar */}
+                      <div className="w-full bg-slate-100 h-1.5 rounded-full overflow-hidden">
+                        <div 
+                          className="bg-emerald-500 h-full rounded-full transition-all duration-500"
+                          style={{
+                            width: (() => {
+                              const physTotal = filteredAndSortedSummaryData.reduce((acc, curr) => {
+                                if (selectedUnit !== 'ALL') {
+                                  return acc + Math.max(curr.purchaseVolumeByUnit[selectedUnit] || 0, curr.salesVolumeByUnit[selectedUnit] || 0);
+                                }
+                                return acc + Math.max(curr.purchaseVolume, curr.salesVolume);
+                              }, 0);
+                              const hedgeTotal = filteredAndSortedSummaryData.reduce((acc, curr) => {
+                                if (selectedUnit !== 'ALL') {
+                                  return acc + (curr.hedgingVolumeByUnit[selectedUnit] || 0);
+                                }
+                                return acc + (curr.hedgingVolume || 0);
+                              }, 0);
+                              return physTotal > 0 ? `${Math.min(100, (hedgeTotal / physTotal) * 100)}%` : '0%';
+                            })()
+                          }}
+                        />
+                      </div>
+                    </div>
+                  </div>
+
+                  <div className="text-[9px] text-slate-500 leading-relaxed font-mono mt-3 xl:mt-0 pt-2 border-t border-slate-200">
+                    <span className="font-bold text-slate-700 block mb-0.5">Portfolio Mandate Guide:</span>
+                    Hedging LNG represents operational risk mitigation and is treated alongside physical flows. DH and DFT represent financial paper trades and are aggregated separately to maintain compliance and clean exposure reporting.
+                  </div>
+                </div>
+              </div>
             </div>
 
             {/* Strategies Interactive Directory Section */}
@@ -2228,8 +3895,8 @@ export const TrmsSummaryTable: React.FC<TrmsSummaryTableProps> = ({ trmsData, vi
                               <span>{item.unallocatedCargo || 'Open Leg'}</span>
                             </span>
                           </td>
-                          <td className="py-2.5 px-3 text-right font-mono font-semibold text-slate-800">{item.purchaseVolume.toLocaleString(undefined, { maximumFractionDigits: 0 })}</td>
-                          <td className="py-2.5 px-3 text-right font-mono font-semibold text-slate-800">{item.salesVolume.toLocaleString(undefined, { maximumFractionDigits: 0 })}</td>
+                          <td className="py-2.5 px-3 text-right font-mono font-semibold text-slate-800">{formatUnitVolumes(item.purchaseVolumeByUnit, ' | ', 'buy')}</td>
+                          <td className="py-2.5 px-3 text-right font-mono font-semibold text-slate-800">{formatUnitVolumes(item.salesVolumeByUnit, ' | ', 'sell')}</td>
                           <td className="py-2.5 px-3 text-right font-mono text-slate-600">${item.shippingRelatedCosts.toLocaleString(undefined, { maximumFractionDigits: 0 })}</td>
                           <td className={`py-2.5 px-3 text-right font-mono font-bold ${item.hedgingPnL >= 0 ? 'text-emerald-600' : 'text-rose-600'}`}>
                             {item.hedgingPnL >= 0 ? '+' : '-'}${Math.abs(item.hedgingPnL).toLocaleString(undefined, { maximumFractionDigits: 0 })}
@@ -2336,7 +4003,16 @@ export const TrmsSummaryTable: React.FC<TrmsSummaryTableProps> = ({ trmsData, vi
                     <div className="flex items-center justify-center h-full text-slate-400 font-mono">No physical optimizations to display</div>
                   ) : (
                     <ResponsiveContainer width="100%" height="100%">
-                      <BarChart data={optimizationChartData} margin={{ top: 10, right: 10, left: -10, bottom: 0 }}>
+                      <BarChart 
+                        data={optimizationChartData} 
+                        margin={{ top: 10, right: 10, left: -10, bottom: 0 }}
+                        onClick={(data) => {
+                          if (data && data.activeLabel) {
+                            setSelectedDrillDownStrategy(data.activeLabel);
+                            toast.success(`Opening drill-down details for ${data.activeLabel}`);
+                          }
+                        }}
+                      >
                         <CartesianGrid strokeDasharray="3 3" stroke="#f1f5f9" />
                         <XAxis dataKey="name" stroke="#64748b" tickFormatter={(v) => v.slice(0, 12) + (v.length > 12 ? '..' : '')} />
                         <YAxis stroke="#64748b" />
@@ -2345,8 +4021,8 @@ export const TrmsSummaryTable: React.FC<TrmsSummaryTableProps> = ({ trmsData, vi
                           formatter={(value: number) => [`$${value.toLocaleString()}`, '']}
                         />
                         <RechartsLegend wrapperStyle={{ fontSize: '10px', paddingTop: '10px' }} />
-                        <Bar dataKey="Base P&L" fill="#94a3b8" radius={[4, 4, 0, 0]} opacity={0.7} />
-                        <Bar dataKey="Optimized P&L" fill="#10b981" radius={[4, 4, 0, 0]} opacity={0.9} />
+                        <Bar dataKey="Base P&L" fill="#94a3b8" radius={[4, 4, 0, 0]} opacity={0.7} cursor="pointer" />
+                        <Bar dataKey="Optimized P&L" fill="#10b981" radius={[4, 4, 0, 0]} opacity={0.9} cursor="pointer" />
                       </BarChart>
                     </ResponsiveContainer>
                   )}
@@ -2365,10 +4041,10 @@ export const TrmsSummaryTable: React.FC<TrmsSummaryTableProps> = ({ trmsData, vi
 
                 <div className="mt-4 space-y-3 flex-1 overflow-auto custom-scrollbar">
                   {[...optimizedStrategies]
-                    .sort((a, b) => ((b.totalPnL - b.basePnL) - (a.totalPnL - a.basePnL)))
+                    .sort((a, b) => (b.optimizationUplift - a.optimizationUplift))
                     .slice(0, 4)
                     .map((item, idx) => {
-                      const upliftVal = item.totalPnL - item.basePnL;
+                      const upliftVal = item.optimizationUplift;
                       return (
                         <div key={idx} className="p-3 bg-slate-50 border border-slate-150 rounded-xl flex items-center justify-between hover:border-emerald-200 transition-all cursor-pointer"
                              onClick={() => setSelectedDrillDownStrategy(item.strategyName)}>
@@ -2377,7 +4053,9 @@ export const TrmsSummaryTable: React.FC<TrmsSummaryTableProps> = ({ trmsData, vi
                             <span className="text-[8px] font-mono text-slate-500 uppercase tracking-wider block">{getTrmsGroupName(item.strategyName)}</span>
                           </div>
                           <div className="text-right">
-                            <span className="text-xs font-mono font-black text-emerald-600 block">+${upliftVal.toLocaleString(undefined, { maximumFractionDigits: 0 })}</span>
+                            <span className={`text-xs font-mono font-black block ${upliftVal >= 0 ? 'text-emerald-600' : 'text-rose-600'}`}>
+                              {upliftVal >= 0 ? '+' : '-'}${Math.abs(upliftVal).toLocaleString(undefined, { maximumFractionDigits: 0 })}
+                            </span>
                             <span className="text-[8px] font-mono text-slate-400 block">Uplift</span>
                           </div>
                         </div>
@@ -2395,7 +4073,7 @@ export const TrmsSummaryTable: React.FC<TrmsSummaryTableProps> = ({ trmsData, vi
                     <FileSpreadsheet className="w-4 h-4 text-emerald-600" />
                     Physical Optimizations Performance Sheet
                   </h3>
-                  <p className="text-[10px] text-slate-500 font-mono mt-0.5">Granular P&amp;L auditing of Standard (Base) vs Optimized allocations.</p>
+                  <p className="text-[10px] text-slate-500 font-mono mt-0.5">Granular auditing of Standard (Base Value) vs Optimized allocations.</p>
                 </div>
               </div>
 
@@ -2407,15 +4085,17 @@ export const TrmsSummaryTable: React.FC<TrmsSummaryTableProps> = ({ trmsData, vi
                       <th className="py-2.5 px-3">Category</th>
                       <th className="py-2.5 px-3 text-right">Purchase Vol</th>
                       <th className="py-2.5 px-3 text-right">Sales Vol</th>
-                      <th className="py-2.5 px-3 text-right">Base P&amp;L ($)</th>
-                      <th className="py-2.5 px-3 text-right">Optimized P&amp;L ($)</th>
+                      <th className="py-2.5 px-3 text-right">Base Value ($)</th>
+                      <th className="py-2.5 px-3 text-right">Optimized Value ($)</th>
                       <th className="py-2.5 px-3 text-right">Optimization Uplift ($)</th>
                       <th className="py-2.5 px-4 text-center">Action</th>
                     </tr>
                   </thead>
                   <tbody className="divide-y divide-slate-100">
                     {optimizedStrategies.map((item, index) => {
-                      const uplift = item.totalPnL - item.basePnL;
+                      const baseNetVal = (item.baseSalesRevenue || 0) - (item.basePurchaseCost || 0) - Math.abs(item.baseShippingRelatedCosts || 0);
+                      const optNetVal = (item.salesRevenue || 0) - (item.purchaseCost || 0) - Math.abs(item.shippingRelatedCosts || 0);
+                      const uplift = item.optimizationUplift;
                       return (
                         <tr
                           key={index}
@@ -2433,16 +4113,16 @@ export const TrmsSummaryTable: React.FC<TrmsSummaryTableProps> = ({ trmsData, vi
                               {getTrmsGroupName(item.strategyName)}
                             </span>
                           </td>
-                          <td className="py-3 px-3 text-right font-mono text-slate-600">{item.purchaseVolume.toLocaleString(undefined, { maximumFractionDigits: 0 })}</td>
-                          <td className="py-3 px-3 text-right font-mono text-slate-600">{item.salesVolume.toLocaleString(undefined, { maximumFractionDigits: 0 })}</td>
-                          <td className={`py-3 px-3 text-right font-mono font-semibold ${item.basePnL >= 0 ? 'text-slate-600' : 'text-rose-500'}`}>
-                            {item.basePnL >= 0 ? '+' : '-'}${Math.abs(item.basePnL).toLocaleString(undefined, { maximumFractionDigits: 0 })}
+                          <td className="py-3 px-3 text-right font-mono text-slate-600">{formatUnitVolumes(item.purchaseVolumeByUnit, ' | ', 'buy')}</td>
+                          <td className="py-3 px-3 text-right font-mono text-slate-600">{formatUnitVolumes(item.salesVolumeByUnit, ' | ', 'sell')}</td>
+                          <td className={`py-3 px-3 text-right font-mono font-semibold ${baseNetVal >= 0 ? 'text-slate-600' : 'text-rose-500'}`}>
+                            {baseNetVal >= 0 ? '+' : '-'}${Math.abs(baseNetVal).toLocaleString(undefined, { maximumFractionDigits: 0 })}
                           </td>
-                          <td className={`py-3 px-3 text-right font-mono font-bold ${item.totalPnL >= 0 ? 'text-slate-800' : 'text-rose-650'}`}>
-                            {item.totalPnL >= 0 ? '+' : '-'}${Math.abs(item.totalPnL).toLocaleString(undefined, { maximumFractionDigits: 0 })}
+                          <td className={`py-3 px-3 text-right font-mono font-bold ${optNetVal >= 0 ? 'text-slate-800' : 'text-rose-650'}`}>
+                            {optNetVal >= 0 ? '+' : '-'}${Math.abs(optNetVal).toLocaleString(undefined, { maximumFractionDigits: 0 })}
                           </td>
-                          <td className="py-3 px-3 text-right font-mono font-black text-emerald-600">
-                            +${uplift.toLocaleString(undefined, { maximumFractionDigits: 0 })}
+                          <td className={`py-3 px-3 text-right font-mono font-black ${uplift >= 0 ? 'text-emerald-600' : 'text-rose-600'}`}>
+                            {uplift >= 0 ? '+' : '-'}${Math.abs(uplift).toLocaleString(undefined, { maximumFractionDigits: 0 })}
                           </td>
                           <td className="py-3 px-4 text-center">
                             <span className="text-xs text-blue-600 group-hover:text-blue-700 font-bold flex items-center justify-center gap-1">
@@ -2617,7 +4297,7 @@ export const TrmsSummaryTable: React.FC<TrmsSummaryTableProps> = ({ trmsData, vi
                             </div>
                             <div className="text-[10px] font-mono text-slate-500 flex justify-between pt-1 border-t border-slate-200/50">
                               <span>Volume:</span>
-                              <span className="font-bold text-slate-700">{item.purchaseVolume.toLocaleString()} MMBtu</span>
+                              <span className="font-bold text-slate-700">{formatUnitVolumes(item.purchaseVolumeByUnit, ' | ', 'buy')}</span>
                             </div>
                             <div className="text-[10px] font-mono text-slate-500 flex justify-between">
                               <span>Total Cost:</span>
@@ -2663,7 +4343,7 @@ export const TrmsSummaryTable: React.FC<TrmsSummaryTableProps> = ({ trmsData, vi
                             </div>
                             <div className="text-[10px] font-mono text-slate-500 flex justify-between pt-1 border-t border-slate-200/50">
                               <span>Volume:</span>
-                              <span className="font-bold text-slate-700">{item.salesVolume.toLocaleString()} MMBtu</span>
+                              <span className="font-bold text-slate-700">{formatUnitVolumes(item.salesVolumeByUnit, ' | ', 'sell')}</span>
                             </div>
                             <div className="text-[10px] font-mono text-slate-500 flex justify-between">
                               <span>Total Revenue:</span>
@@ -2694,7 +4374,7 @@ export const TrmsSummaryTable: React.FC<TrmsSummaryTableProps> = ({ trmsData, vi
                               <div>
                                 <span className="text-emerald-700 font-extrabold">Net Uplift: </span>
                                 <span className="font-extrabold text-emerald-600 bg-emerald-50 px-1.5 py-0.5 rounded border border-emerald-200">
-                                  +${(item.totalPnL - item.basePnL).toLocaleString(undefined, { maximumFractionDigits: 0 })}
+                                  +${(item.optimizationUplift).toLocaleString(undefined, { maximumFractionDigits: 0 })}
                                 </span>
                               </div>
                             )}
@@ -2736,12 +4416,944 @@ export const TrmsSummaryTable: React.FC<TrmsSummaryTableProps> = ({ trmsData, vi
           </div>
         )}
 
+        {dashboardTab === 'volume_exposure' && (
+          <div className="space-y-4 animate-fadeIn">
+            {/* Header description card */}
+            <div className="bg-gradient-to-r from-slate-900 to-slate-800 text-white p-4 rounded-xl border border-slate-700 shadow-sm flex flex-col md:flex-row justify-between items-start md:items-center gap-4">
+              <div>
+                <h3 className="text-xs font-bold uppercase tracking-widest flex items-center gap-2">
+                  <Ship className="w-5 h-5 text-sky-400" />
+                  Volume, seasonal exposure &amp; Market Basis Analytics
+                </h3>
+                <p className="text-[10px] text-slate-300 font-mono mt-1">
+                  Advanced overview of physical cargo commitments, pricing indices, seasonal loading schedules, and trader portfolio concentrations.
+                </p>
+              </div>
+              <div className="flex bg-slate-950/60 p-2.5 rounded-lg border border-slate-800 text-[10px] font-mono gap-4">
+                <div>
+                  <span className="text-slate-400 block uppercase">Total Physical Vol</span>
+                  <span className="text-[11px] font-black text-sky-400 font-mono leading-tight block">
+                    {(() => {
+                      const aggregated = filteredAndSortedSummaryData.reduce((acc, curr) => {
+                        const units = new Set([...Object.keys(curr.purchaseVolumeByUnit || {}), ...Object.keys(curr.salesVolumeByUnit || {})]);
+                        units.forEach(unit => {
+                          const p = curr.purchaseVolumeByUnit?.[unit] || 0;
+                          const s = curr.salesVolumeByUnit?.[unit] || 0;
+                          acc[unit] = (acc[unit] || 0) + Math.max(p, s);
+                        });
+                        return acc;
+                      }, {} as { [unit: string]: number });
+                      return formatUnitVolumes(aggregated, ' | ');
+                    })()}
+                  </span>
+                </div>
+                <div className="w-px bg-slate-800" />
+                <div>
+                  <span className="text-slate-400 block uppercase">Active Strategies</span>
+                  <span className="text-sm font-black text-sky-400 font-mono">
+                    {filteredAndSortedSummaryData.length}
+                  </span>
+                </div>
+              </div>
+            </div>
+
+            {/* Top row stats cards (Bento Grid) */}
+            <div className="grid grid-cols-1 sm:grid-cols-2 lg:grid-cols-4 gap-4">
+              
+              {/* Stat card 1: Purchases */}
+              <div className="bg-white p-4 rounded-xl border border-slate-200 shadow-sm flex items-center gap-4">
+                <div className="p-3 rounded-lg bg-indigo-50 border border-indigo-100">
+                  <ArrowRight className="w-5 h-5 text-indigo-600" />
+                </div>
+                <div>
+                  <span className="text-[10px] font-bold text-slate-400 uppercase tracking-wider block">Physical Purchase Vol</span>
+                  <span className="text-sm font-black text-slate-800 font-mono leading-tight whitespace-pre-line block">
+                    {(() => {
+                      const aggregated = filteredAndSortedSummaryData.reduce((acc, curr) => {
+                        Object.entries(curr.purchaseVolumeByUnit || {}).forEach(([unit, val]) => {
+                          acc[unit] = (acc[unit] || 0) + val;
+                        });
+                        return acc;
+                      }, {} as { [unit: string]: number });
+                      return formatUnitVolumes(aggregated, '\n', 'buy');
+                    })()}
+                  </span>
+                </div>
+              </div>
+
+              {/* Stat card 2: Sales */}
+              <div className="bg-white p-4 rounded-xl border border-slate-200 shadow-sm flex items-center gap-4">
+                <div className="p-3 rounded-lg bg-teal-50 border border-teal-100">
+                  <ArrowLeft className="w-5 h-5 text-teal-600" />
+                </div>
+                <div>
+                  <span className="text-[10px] font-bold text-slate-400 uppercase tracking-wider block">Physical Sales Vol</span>
+                  <span className="text-sm font-black text-slate-800 font-mono leading-tight whitespace-pre-line block">
+                    {(() => {
+                      const aggregated = filteredAndSortedSummaryData.reduce((acc, curr) => {
+                        Object.entries(curr.salesVolumeByUnit || {}).forEach(([unit, val]) => {
+                          acc[unit] = (acc[unit] || 0) + val;
+                        });
+                        return acc;
+                      }, {} as { [unit: string]: number });
+                      return formatUnitVolumes(aggregated, '\n', 'sell');
+                    })()}
+                  </span>
+                </div>
+              </div>
+
+              {/* Stat card 3: Net Exposure */}
+              {(() => {
+                const aggregatedExposure = filteredAndSortedSummaryData.reduce((acc, curr) => {
+                  Object.entries(curr.purchaseVolumeByUnit || {}).forEach(([unit, val]) => {
+                    acc[unit] = (acc[unit] || 0) + val;
+                  });
+                  Object.entries(curr.salesVolumeByUnit || {}).forEach(([unit, val]) => {
+                    acc[unit] = (acc[unit] || 0) - val;
+                  });
+                  return acc;
+                }, {} as { [unit: string]: number });
+
+                const firstUnitVal = Object.values(aggregatedExposure)[0] || 0;
+                const isLong = firstUnitVal >= 0;
+
+                return (
+                  <div className="bg-white p-4 rounded-xl border border-slate-200 shadow-sm flex items-center gap-4">
+                    <div className={`p-3 rounded-lg border ${isLong ? 'bg-emerald-50 border-emerald-100' : 'bg-rose-50 border-rose-100'}`}>
+                      <Activity className={`w-5 h-5 ${isLong ? 'text-emerald-600' : 'text-rose-600'}`} />
+                    </div>
+                    <div>
+                      <span className="text-[10px] font-bold text-slate-400 uppercase tracking-wider block">Net Position Exposure</span>
+                      <span className={`text-sm font-black font-mono leading-tight whitespace-pre-line block ${isLong ? 'text-emerald-600' : 'text-rose-600'}`}>
+                        {(() => {
+                          const formatted = Object.entries(aggregatedExposure)
+                            .filter(([_, val]) => Math.abs(val) > 0.0001)
+                            .map(([unit, val]) => {
+                              const sign = val >= 0 ? '+' : '-';
+                              return `${sign}${Math.abs(val).toLocaleString(undefined, { maximumFractionDigits: 0 })} ${unit}`;
+                            })
+                            .join('\n');
+                          return formatted || '0 Units';
+                        })()}
+                      </span>
+                    </div>
+                  </div>
+                );
+              })()}
+
+              {/* Stat card 4: Hedging Coverage Ratio */}
+              {(() => {
+                let physBblTotal = 0;
+                let hedgeBblTotal = 0;
+                let physMMBtuTotal = 0;
+                let hedgeMMBtuTotal = 0;
+
+                filteredAndSortedSummaryData.forEach(curr => {
+                  physBblTotal += Math.max(curr.purchaseVolumeByUnit?.['Bbl'] || 0, curr.salesVolumeByUnit?.['Bbl'] || 0);
+                  hedgeBblTotal += curr.hedgingVolumeByUnit?.['Bbl'] || 0;
+                  physMMBtuTotal += Math.max(curr.purchaseVolumeByUnit?.['MMBtu'] || 0, curr.salesVolumeByUnit?.['MMBtu'] || 0);
+                  hedgeMMBtuTotal += curr.hedgingVolumeByUnit?.['MMBtu'] || 0;
+                });
+
+                const ratios: number[] = [];
+                if (physBblTotal > 0) {
+                  ratios.push((hedgeBblTotal / physBblTotal) * 100);
+                }
+                if (physMMBtuTotal > 0) {
+                  ratios.push((hedgeMMBtuTotal / physMMBtuTotal) * 100);
+                }
+
+                let ratio = 0;
+                if (ratios.length > 0) {
+                  ratio = ratios.reduce((a, b) => a + b, 0) / ratios.length;
+                } else {
+                  const totalPhys = filteredAndSortedSummaryData.reduce((acc, curr) => acc + Math.max(curr.purchaseVolume || 0, curr.salesVolume || 0), 0);
+                  const totalHedge = filteredAndSortedSummaryData.reduce((acc, curr) => acc + (curr.hedgingVolume || 0), 0);
+                  ratio = totalPhys > 0 ? (totalHedge / totalPhys) * 100 : 0;
+                }
+                return (
+                  <div className="bg-white p-4 rounded-xl border border-slate-200 shadow-sm flex items-center gap-4">
+                    <div className="p-3 rounded-lg bg-emerald-50 border border-emerald-100">
+                      <TrendingUp className="w-5 h-5 text-emerald-600" />
+                    </div>
+                    <div>
+                      <span className="text-[10px] font-bold text-slate-400 uppercase tracking-wider block">Hedging Coverage Ratio</span>
+                      <span className="text-lg font-black text-slate-800 font-mono leading-none">
+                        {ratio.toFixed(1)}%
+                      </span>
+                      <span className="text-[10px] text-slate-500 font-mono block mt-1 leading-tight">
+                        {(() => {
+                          const aggregated = filteredAndSortedSummaryData.reduce((acc, curr) => {
+                            Object.entries(curr.hedgingVolumeByUnit || {}).forEach(([unit, val]) => {
+                              acc[unit] = (acc[unit] || 0) + val;
+                            });
+                            return acc;
+                          }, {} as { [unit: string]: number });
+                          return formatUnitVolumes(aggregated);
+                        })()}
+                      </span>
+                    </div>
+                  </div>
+                );
+              })()}
+
+            </div>
+
+            {/* Row 1 Charts: Volume per Strategy & Monthly Temporal Schedule */}
+            <div className="grid grid-cols-1 lg:grid-cols-2 gap-4">
+              
+              {/* Chart A: Physical Purchase vs Sales Volumes per Strategy */}
+              <div className="bg-white rounded-xl border border-slate-200 shadow-sm p-4 flex flex-col justify-between">
+                <div>
+                  <h3 className="text-xs font-bold text-slate-800 uppercase tracking-widest flex items-center gap-1.5">
+                    <BarChart3 className="w-4 h-4 text-indigo-600" />
+                    Physical Cargo Volume Balancing per Strategy
+                  </h3>
+                  <p className="text-[10px] text-slate-500 font-mono mt-0.5">
+                    Compares direct purchase (loading) commitments against sales (delivery) contracts.
+                  </p>
+                </div>
+
+                <div className="h-[280px] mt-4 w-full text-[10px]">
+                  <ResponsiveContainer width="100%" height="100%">
+                    <BarChart
+                      data={filteredAndSortedSummaryData.map(item => {
+                        const getChartVol = (byUnit: any) => {
+                          if (!byUnit) return 0;
+                          if (selectedUnit !== 'ALL') {
+                            return byUnit[selectedUnit] || 0;
+                          }
+                          if ('MMBtu' in byUnit) return byUnit['MMBtu'];
+                          const firstKey = Object.keys(byUnit)[0];
+                          return firstKey ? byUnit[firstKey] : 0;
+                        };
+                        const purchaseVol = getChartVol(item.purchaseVolumeByUnit);
+                        const salesVol = getChartVol(item.salesVolumeByUnit);
+                        return {
+                          name: item.strategyName,
+                          "Purchase Vol": purchaseVol,
+                          "Sales Vol": salesVol,
+                          "Net Bal": purchaseVol - salesVol
+                        };
+                      })}
+                      margin={{ top: 10, right: 10, left: -10, bottom: 0 }}
+                      onClick={(data) => {
+                        if (data && data.activeLabel) {
+                          setSelectedDrillDownStrategy(data.activeLabel);
+                          toast.success(`Opening drill-down details for ${data.activeLabel}`);
+                        }
+                      }}
+                    >
+                      <CartesianGrid strokeDasharray="3 3" stroke="#f1f5f9" vertical={false} />
+                      <XAxis 
+                        dataKey="name" 
+                        stroke="#64748b" 
+                        fontSize={9} 
+                        tickLine={false} 
+                        dy={5}
+                      />
+                      <YAxis 
+                        stroke="#64748b" 
+                        fontSize={9} 
+                        tickLine={false}
+                        axisLine={false}
+                        tickFormatter={(v) => `${(v / 1e3).toFixed(0)}k`}
+                        label={{ value: `Volume (${selectedUnit === 'ALL' ? 'MMBtu/Dominant' : selectedUnit})`, angle: -90, position: 'insideLeft', style: { textAnchor: 'middle', fill: '#64748b', fontSize: 9, dy: 10 } }}
+                      />
+                      <RechartsTooltip
+                        content={({ active, payload, label }) => {
+                          if (active && payload && payload.length) {
+                            const d = payload[0].payload;
+                            const unitLabel = selectedUnit === 'ALL' ? 'Units' : selectedUnit;
+                            return (
+                              <div className="bg-slate-900 text-white p-2.5 rounded-lg shadow-md border border-slate-800 text-[10px] font-mono space-y-1.5">
+                                <p className="font-bold border-b border-slate-800 pb-1 text-slate-300">{label}</p>
+                                <div className="flex justify-between gap-4 text-indigo-300">
+                                  <span>Purchase Volume:</span>
+                                  <span className="font-bold">{(d["Purchase Vol"]).toLocaleString()} {unitLabel}</span>
+                                </div>
+                                <div className="flex justify-between gap-4 text-teal-300">
+                                  <span>Sales Volume:</span>
+                                  <span className="font-bold">{(d["Sales Vol"]).toLocaleString()} {unitLabel}</span>
+                                </div>
+                                <div className={`flex justify-between gap-4 border-t border-slate-800 pt-1 font-bold ${d["Net Bal"] >= 0 ? 'text-emerald-400' : 'text-rose-400'}`}>
+                                  <span>Net Cargo Position:</span>
+                                  <span>{d["Net Bal"] >= 0 ? '+' : ''}{(d["Net Bal"]).toLocaleString()} {unitLabel}</span>
+                                </div>
+                              </div>
+                            );
+                          }
+                          return null;
+                        }}
+                      />
+                      <RechartsLegend verticalAlign="top" height={30} iconSize={8} wrapperStyle={{ fontSize: 9, fontFamily: 'monospace' }} />
+                      <Bar dataKey="Purchase Vol" fill="#4f46e5" name="Purchases" radius={[2, 2, 0, 0]} maxBarSize={20} cursor="pointer" />
+                      <Bar dataKey="Sales Vol" fill="#0d9488" name="Sales" radius={[2, 2, 0, 0]} maxBarSize={20} cursor="pointer" />
+                    </BarChart>
+                  </ResponsiveContainer>
+                </div>
+              </div>
+
+              {/* Chart B: Monthly Cargo Schedule & Flow Exposure */}
+              <div className="bg-white rounded-xl border border-slate-200 shadow-sm p-4 flex flex-col justify-between">
+                <div>
+                  <h3 className="text-xs font-bold text-slate-800 uppercase tracking-widest flex items-center gap-1.5">
+                    <Calendar className="w-4 h-4 text-indigo-600" />
+                    Seasonal Loading &amp; Delivery Timeline ({selectedUnit === 'ALL' ? 'Original Units' : selectedUnit})
+                  </h3>
+                  <p className="text-[10px] text-slate-500 font-mono mt-0.5">
+                    Chronological schedule of physical operations, outlining monthly peaks in purchase and sales.
+                  </p>
+                </div>
+
+                <div className="h-[280px] mt-4 w-full text-[10px]">
+                  {(() => {
+                    const map: Record<string, { month: string, purchase: number, sales: number, sortKey: string }> = {};
+                    
+                    filteredAndSortedSummaryData.forEach(item => {
+                      item.underlyingRows.forEach(row => {
+                        const cflowType = String(row['Cflow Type'] || '').trim().toLowerCase();
+                        if (cflowType === 'commodity' || cflowType === 'physical') {
+                          const month = getRowExposureMonth(row);
+                          if (month) {
+                            const rawVol = Math.abs(Number(String(row['Volume'] || '').replace(/[^0-9.-]/g, '')) || 0);
+                            const vol = convertVolume(rawVol, row['Unit'] || row['unit']);
+                            const buySell = String(row['Buy_Sell'] || row['BuySell'] || '').toLowerCase();
+                            const isBuy = buySell === 'buy' || buySell === 'buys';
+                            const isSell = buySell === 'sell' || buySell === 'sells';
+                            
+                            if (!map[month]) {
+                              const parts = month.split('-');
+                              const monthsList = ['Jan', 'Feb', 'Mar', 'Apr', 'May', 'Jun', 'Jul', 'Aug', 'Sep', 'Oct', 'Nov', 'Dec'];
+                              const mIdx = monthsList.indexOf(parts[0]);
+                              const yearNum = parseInt(parts[1]) || 0;
+                              const sortKey = `${yearNum.toString().padStart(2, '0')}-${(mIdx >= 0 ? mIdx : 0).toString().padStart(2, '0')}`;
+                              
+                              map[month] = {
+                                month,
+                                purchase: 0,
+                                sales: 0,
+                                sortKey
+                              };
+                            }
+                            
+                            if (isBuy) map[month].purchase += vol;
+                            if (isSell) map[month].sales += vol;
+                          }
+                        }
+                      });
+                    });
+
+                    const timelineList = Object.values(map)
+                      .sort((a, b) => a.sortKey.localeCompare(b.sortKey));
+
+                    if (timelineList.length === 0) {
+                      return (
+                        <div className="flex items-center justify-center h-full text-slate-400 font-mono">
+                          No physical cargo operations scheduled.
+                        </div>
+                      );
+                    }
+
+                    return (
+                      <ResponsiveContainer width="100%" height="100%">
+                        <ComposedChart
+                          data={timelineList}
+                          margin={{ top: 10, right: 10, left: -10, bottom: 0 }}
+                          onClick={(data) => {
+                            if (data && data.activeLabel) {
+                              if (searchTerm === data.activeLabel) {
+                                setSearchTerm('');
+                                toast.success(`Cleared timeline month filter`);
+                              } else {
+                                setSearchTerm(data.activeLabel);
+                                toast.success(`Filtering dashboard by period: ${data.activeLabel}`);
+                              }
+                            }
+                          }}
+                        >
+                          <CartesianGrid strokeDasharray="3 3" stroke="#f1f5f9" vertical={false} />
+                          <XAxis 
+                            dataKey="month" 
+                            stroke="#64748b" 
+                            fontSize={9} 
+                            tickLine={false}
+                            dy={5}
+                          />
+                          <YAxis 
+                            stroke="#64748b" 
+                            fontSize={9} 
+                            tickLine={false}
+                            axisLine={false}
+                            tickFormatter={(v) => `${(v / 1e6).toFixed(1)}M`}
+                          />
+                          <RechartsTooltip
+                            content={({ active, payload, label }) => {
+                              if (active && payload && payload.length) {
+                                const d = payload[0].payload;
+                                const netVal = d.purchase - d.sales;
+                                return (
+                                  <div className="bg-slate-900 text-white p-2.5 rounded-lg shadow-md border border-slate-800 text-[10px] font-mono space-y-1.5">
+                                    <p className="font-bold border-b border-slate-800 pb-1 text-slate-300">Period: {label}</p>
+                                    <div className="flex justify-between gap-4 text-indigo-300">
+                                      <span>Purchased:</span>
+                                      <span className="font-bold">{d.purchase.toLocaleString()} {selectedUnit === 'ALL' ? 'Units' : selectedUnit}</span>
+                                    </div>
+                                    <div className="flex justify-between gap-4 text-teal-300">
+                                      <span>Sold:</span>
+                                      <span className="font-bold">{d.sales.toLocaleString()} {selectedUnit === 'ALL' ? 'Units' : selectedUnit}</span>
+                                    </div>
+                                    <div className={`flex justify-between gap-4 border-t border-slate-800 pt-1 font-bold ${netVal >= 0 ? 'text-emerald-400' : 'text-rose-400'}`}>
+                                      <span>Net Exposure:</span>
+                                      <span>{netVal >= 0 ? 'Long' : 'Short'} ({Math.abs(netVal).toLocaleString()} {selectedUnit === 'ALL' ? 'Units' : selectedUnit})</span>
+                                    </div>
+                                  </div>
+                                );
+                              }
+                              return null;
+                            }}
+                          />
+                          <RechartsLegend verticalAlign="top" height={30} iconSize={8} wrapperStyle={{ fontSize: 9, fontFamily: 'monospace' }} />
+                          <Bar dataKey="purchase" fill="#6366f1" name="Purchase Loadings" radius={[2, 2, 0, 0]} maxBarSize={15} cursor="pointer" />
+                          <Bar dataKey="sales" fill="#14b8a6" name="Sales Deliveries" radius={[2, 2, 0, 0]} maxBarSize={15} cursor="pointer" />
+                          <Line type="monotone" dataKey="purchase" stroke="#3b82f6" strokeWidth={1} dot={{ r: 2 }} activeDot={{ r: 3 }} name="Loading Trend" cursor="pointer" />
+                          <Line type="monotone" dataKey="sales" stroke="#10b981" strokeWidth={1} dot={{ r: 2 }} activeDot={{ r: 3 }} name="Delivery Trend" cursor="pointer" />
+                        </ComposedChart>
+                      </ResponsiveContainer>
+                    );
+                  })()}
+                </div>
+              </div>
+
+            </div>
+
+            {/* Row 2: Index Pricing Exposure & Trader Concentration */}
+            <div className="grid grid-cols-1 lg:grid-cols-12 gap-4">
+              
+              {/* Pricing Index Exposure Breakdown */}
+              <div className="lg:col-span-5 bg-white rounded-xl border border-slate-200 shadow-sm p-4 flex flex-col justify-between">
+                <div>
+                  <h3 className="text-xs font-bold text-slate-800 uppercase tracking-widest flex items-center gap-1.5">
+                    <PieChartIcon className="w-4 h-4 text-indigo-600" />
+                    Market Index Pricing Basis Exposure
+                  </h3>
+                  <p className="text-[10px] text-slate-500 font-mono mt-0.5">
+                    Breakdown of physical cargo volumes indexed against international gas, LNG, or Brent markers.
+                  </p>
+                </div>
+
+                {(() => {
+                  const getRowPriceIndex = (row: any) => {
+                    const indexVal = row['IndexName_ProjectionMethod'] || row['IndexName ProjectionMethod'] || row['IndexName_Projection_Method'] || row['Index Name'] || row['IndexName'] || row['Reference'] || '';
+                    const str = String(indexVal).toUpperCase();
+                    if (str.includes('HH') || str.includes('HENRY')) return 'Henry Hub';
+                    if (str.includes('TTF')) return 'TTF';
+                    if (str.includes('JKM')) return 'JKM';
+                    if (str.includes('NBP')) return 'NBP';
+                    if (str.includes('BRENT') || str.includes('CO1')) return 'Brent';
+                    if (str.includes('JCC')) return 'JCC';
+                    return 'Fixed / Other';
+                  };
+
+                  const map: Record<string, number> = {};
+                  filteredAndSortedSummaryData.forEach(item => {
+                    item.underlyingRows.forEach(row => {
+                      const cflowType = String(row['Cflow Type'] || '').trim().toLowerCase();
+                      if (cflowType === 'commodity' || cflowType === 'physical') {
+                        const idxName = getRowPriceIndex(row);
+                        const rawVol = Math.abs(Number(String(row['Volume'] || '').replace(/[^0-9.-]/g, '')) || 0);
+                        const vol = convertVolume(rawVol, row['Unit'] || row['unit']);
+                        map[idxName] = (map[idxName] || 0) + vol;
+                      }
+                    });
+                  });
+
+                  const colors = ['#3b82f6', '#10b981', '#f59e0b', '#8b5cf6', '#ec4899', '#f43f5e', '#64748b'];
+                  const indexList = Object.entries(map)
+                    .map(([name, value], idx) => ({
+                      name,
+                      value,
+                      color: colors[idx % colors.length]
+                    }))
+                    .sort((a, b) => b.value - a.value);
+
+                  const totalVol = indexList.reduce((acc, curr) => acc + curr.value, 0);
+
+                  if (indexList.length === 0) {
+                    return (
+                      <div className="h-[200px] flex items-center justify-center text-slate-400 font-mono">
+                        No indexed cargo commitments.
+                      </div>
+                    );
+                  }
+
+                  return (
+                    <div className="grid grid-cols-1 sm:grid-cols-2 gap-4 items-center mt-4 h-[200px]">
+                      <div className="relative h-full flex items-center justify-center">
+                        <ResponsiveContainer width="100%" height="100%">
+                          <PieChart>
+                            <Pie
+                              data={indexList}
+                              cx="50%"
+                              cy="50%"
+                              innerRadius={35}
+                              outerRadius={55}
+                              paddingAngle={3}
+                              dataKey="value"
+                              onClick={(entry) => {
+                                if (entry && entry.name) {
+                                  if (selectedIndexFilter === entry.name) {
+                                    setSelectedIndexFilter(null);
+                                    toast.success("Cleared pricing index filter");
+                                  } else {
+                                    setSelectedIndexFilter(entry.name);
+                                    toast.success(`Filtering by Pricing Index: ${entry.name}`);
+                                  }
+                                }
+                              }}
+                              cursor="pointer"
+                            >
+                              {indexList.map((entry, index) => (
+                                <Cell key={`cell-${index}`} fill={entry.color} className="hover:opacity-85 transition-opacity" />
+                              ))}
+                            </Pie>
+                            <RechartsTooltip 
+                              formatter={(v: number) => [`${v.toLocaleString()} ${selectedUnit === 'ALL' ? 'Units' : selectedUnit}`, 'Physical Volume']}
+                              contentStyle={{ backgroundColor: '#ffffff', borderColor: '#e2e8f0', fontSize: '9px' }}
+                            />
+                          </PieChart>
+                        </ResponsiveContainer>
+                        <div className="absolute flex flex-col items-center justify-center text-center">
+                          <span className="text-[8px] font-bold text-slate-400 uppercase">Total</span>
+                          <span className="text-xs font-black text-slate-800 font-mono">
+                            {totalVol >= 1e6 ? `${(totalVol / 1e6).toFixed(1)}M` : totalVol.toLocaleString()}
+                          </span>
+                        </div>
+                      </div>
+
+                      <div className="space-y-1.5 max-h-full overflow-y-auto custom-scrollbar pr-1">
+                        {indexList.map((entry, idx) => {
+                          const pct = totalVol > 0 ? (entry.value / totalVol) * 100 : 0;
+                          const isSelected = selectedIndexFilter === entry.name;
+                          return (
+                            <div 
+                              key={idx} 
+                              onClick={() => {
+                                if (isSelected) {
+                                  setSelectedIndexFilter(null);
+                                  toast.success("Cleared pricing index filter");
+                                } else {
+                                  setSelectedIndexFilter(entry.name);
+                                  toast.success(`Filtering by Pricing Index: ${entry.name}`);
+                                }
+                              }}
+                              className={`flex items-center justify-between text-[10px] font-mono border border-transparent last:border-0 cursor-pointer hover:bg-slate-50 p-1.5 rounded-lg transition-all ${
+                                isSelected ? 'bg-blue-50/80 border-blue-200 text-blue-900 font-extrabold' : 'text-slate-600'
+                              }`}
+                            >
+                              <div className="flex items-center gap-1.5 min-w-0">
+                                <span className="w-2 h-2 rounded-full flex-shrink-0" style={{ backgroundColor: entry.color }} />
+                                <span className="truncate">{entry.name}</span>
+                              </div>
+                              <div className="text-right flex-shrink-0 font-mono">
+                                <span className="font-bold text-slate-800">{pct.toFixed(1)}%</span>
+                                <span className="text-[8px] text-slate-400 ml-1">({(entry.value / 1e6).toFixed(1)}M)</span>
+                              </div>
+                            </div>
+                          );
+                        })}
+                      </div>
+                    </div>
+                  );
+                })()}
+              </div>
+
+              {/* Trader Concentration & Deal Allocation */}
+              <div className="lg:col-span-7 bg-white rounded-xl border border-slate-200 shadow-sm p-4 flex flex-col justify-between">
+                <div>
+                  <h3 className="text-xs font-bold text-slate-800 uppercase tracking-widest flex items-center gap-1.5">
+                    <Activity className="w-4 h-4 text-indigo-600" />
+                    Trader Volume &amp; Deal Allocation Distribution
+                  </h3>
+                  <p className="text-[10px] text-slate-500 font-mono mt-0.5">
+                    Assesses desk concentration ratios and trade counts across key book-runners.
+                  </p>
+                </div>
+
+                {(() => {
+                  const getRowTraderName = (row: any) => {
+                    return String(row['Trader'] || row['Trader Name'] || 'Unassigned').trim();
+                  };
+
+                  const map: Record<string, { trader: string, volume: number, dealCount: number }> = {};
+                  filteredAndSortedSummaryData.forEach(item => {
+                    item.underlyingRows.forEach(row => {
+                      const trader = getRowTraderName(row);
+                      const rawVol = Math.abs(Number(String(row['Volume'] || '').replace(/[^0-9.-]/g, '')) || 0);
+                      const vol = convertVolume(rawVol, row['Unit'] || row['unit']);
+                      if (!map[trader]) {
+                        map[trader] = { trader, volume: 0, dealCount: 0 };
+                      }
+                      map[trader].volume += vol;
+                      map[trader].dealCount += 1;
+                    });
+                  });
+
+                  const traderList = Object.values(map)
+                    .sort((a, b) => b.volume - a.volume)
+                    .slice(0, 5); // top 5 traders
+
+                  const totalTradedVol = Object.values(map).reduce((acc, curr) => acc + curr.volume, 0);
+
+                  if (traderList.length === 0) {
+                    return (
+                      <div className="h-[200px] flex items-center justify-center text-slate-400 font-mono">
+                        No traders assigned to physical transactions.
+                      </div>
+                    );
+                  }
+
+                  return (
+                    <div className="space-y-4 mt-4 h-[200px] flex flex-col justify-center font-mono">
+                      {traderList.map((tr, idx) => {
+                        const pct = totalTradedVol > 0 ? (tr.volume / totalTradedVol) * 100 : 0;
+                        const isSelected = selectedTraderFilter === tr.trader;
+                        return (
+                          <div 
+                            key={idx} 
+                            onClick={() => {
+                              if (isSelected) {
+                                setSelectedTraderFilter(null);
+                                toast.success("Cleared trader filter");
+                              } else {
+                                setSelectedTraderFilter(tr.trader);
+                                toast.success(`Filtering by Trader: ${tr.trader}`);
+                              }
+                            }}
+                            className={`p-2 rounded-xl transition-all border cursor-pointer hover:bg-slate-50 ${
+                              isSelected ? 'bg-indigo-50/70 border-indigo-200 shadow-sm' : 'border-transparent'
+                            }`}
+                          >
+                            <div className="flex justify-between items-baseline text-[10px]">
+                              <div className="flex items-center gap-1.5">
+                                <span className="text-slate-500 text-[9px]">#{idx + 1}</span>
+                                <span className={`font-bold ${isSelected ? 'text-indigo-900 font-extrabold' : 'text-slate-800'}`}>{tr.trader}</span>
+                                <span className="text-[8px] bg-slate-100 border border-slate-200 text-slate-500 px-1.5 py-0.2 rounded font-sans">
+                                  {tr.dealCount} deals
+                                </span>
+                              </div>
+                              <div className="text-right font-mono">
+                                <span className={`font-bold ${isSelected ? 'text-indigo-900' : 'text-slate-800'}`}>{tr.volume.toLocaleString()} {selectedUnit === 'ALL' ? 'Units' : selectedUnit}</span>
+                                <span className="text-[9px] text-slate-400 ml-1.5">({pct.toFixed(1)}%)</span>
+                              </div>
+                            </div>
+                            
+                            {/* Horizontal Progress bar */}
+                            <div className="w-full bg-slate-100 h-2 rounded-full overflow-hidden flex mt-1.5">
+                              <div 
+                                className={`h-full rounded-full transition-all duration-500 ${
+                                  isSelected ? 'bg-gradient-to-r from-indigo-500 to-indigo-700' : 'bg-gradient-to-r from-blue-500 to-indigo-600'
+                                }`}
+                                style={{ width: `${pct}%` }}
+                              />
+                            </div>
+                          </div>
+                        );
+                      })}
+                    </div>
+                  );
+                })()}
+              </div>
+
+            </div>
+
+            {/* Row 3: Index Hedging & Ratio Breakdown Chart */}
+            <div className="bg-white rounded-xl border border-slate-200 shadow-sm p-5 space-y-4">
+              <div className="flex flex-col sm:flex-row justify-between items-start sm:items-center gap-3">
+                <div>
+                  <h3 className="text-xs font-bold text-slate-800 uppercase tracking-widest flex items-center gap-1.5">
+                    <BarChart3 className="w-4 h-4 text-indigo-600" />
+                    Portfolio Exposure Breakdown by Price Index
+                  </h3>
+                  <p className="text-[10px] text-slate-500 font-mono mt-0.5">
+                    Compare physical quantities vs. individual hedging allocations (DH LNG, DFT LNG, and Hedging LNG) to identify coverage imbalances.
+                  </p>
+                </div>
+                
+                {/* Selector Tabs */}
+                <div className="flex bg-slate-100 p-1 border border-slate-200 rounded-lg select-none">
+                  <button
+                    onClick={() => setIndexBreakdownUnit('MMBtu')}
+                    className={`px-3 py-1 text-[10px] font-bold rounded-md transition-all ${
+                      indexBreakdownUnit === 'MMBtu'
+                        ? 'bg-white text-slate-900 shadow-xs'
+                        : 'text-slate-500 hover:text-slate-800'
+                    }`}
+                  >
+                    MMBtu Volume
+                  </button>
+                  <button
+                    onClick={() => setIndexBreakdownUnit('Bbl')}
+                    className={`px-3 py-1 text-[10px] font-bold rounded-md transition-all ${
+                      indexBreakdownUnit === 'Bbl'
+                        ? 'bg-white text-slate-900 shadow-xs'
+                        : 'text-slate-500 hover:text-slate-800'
+                    }`}
+                  >
+                    Bbl Volume
+                  </button>
+                  <button
+                    onClick={() => setIndexBreakdownUnit('Ratio')}
+                    className={`px-3 py-1 text-[10px] font-bold rounded-md transition-all ${
+                      indexBreakdownUnit === 'Ratio'
+                        ? 'bg-white text-slate-900 shadow-xs'
+                        : 'text-slate-500 hover:text-slate-800'
+                    }`}
+                  >
+                    Hedge Ratio (%)
+                  </button>
+                </div>
+              </div>
+
+              {indexHedgeBreakdown.length === 0 ? (
+                <div className="h-[240px] flex items-center justify-center text-slate-400 font-mono text-[10px]">
+                  No index hedging data available.
+                </div>
+              ) : (
+                <div className="h-[280px] w-full text-[10px]">
+                  <ResponsiveContainer width="100%" height="100%">
+                    <BarChart
+                      data={indexHedgeBreakdown}
+                      margin={{ top: 10, right: 10, left: -10, bottom: 0 }}
+                    >
+                      <CartesianGrid strokeDasharray="3 3" stroke="#f1f5f9" vertical={false} />
+                      <XAxis dataKey="index" stroke="#64748b" fontSize={9} tickLine={false} dy={5} />
+                      <YAxis stroke="#64748b" fontSize={9} tickLine={false} dx={-5} />
+                      <RechartsTooltip 
+                        contentStyle={{ background: '#0f172a', border: 'none', borderRadius: '8px', color: '#f8fafc' }}
+                        labelClassName="font-bold text-[11px] mb-1 font-sans text-slate-100"
+                        itemStyle={{ fontSize: '10px', fontFamily: 'monospace', padding: '1px 0' }}
+                        formatter={(value: any, name: string) => {
+                          if (indexBreakdownUnit === 'Ratio') {
+                            return [`${Number(value).toFixed(1)}%`, name];
+                          }
+                          return [Number(value).toLocaleString(undefined, { maximumFractionDigits: 0 }), name];
+                        }}
+                      />
+                      <RechartsLegend verticalAlign="top" height={36} wrapperStyle={{ fontSize: '10px' }} />
+                      
+                      {indexBreakdownUnit === 'MMBtu' && (
+                        <>
+                          <Bar dataKey="physMMBtu" name="Physical Volume" fill="#f59e0b" radius={[4, 4, 0, 0]} />
+                          <Bar dataKey="dhMMBtu" name="DH LNG Volume" fill="#6366f1" radius={[4, 4, 0, 0]} />
+                          <Bar dataKey="dftMMBtu" name="DFT LNG Volume" fill="#0ea5e9" radius={[4, 4, 0, 0]} />
+                          <Bar dataKey="hedgingMMBtu" name="Hedging LNG Volume" fill="#10b981" radius={[4, 4, 0, 0]} />
+                        </>
+                      )}
+                      
+                      {indexBreakdownUnit === 'Bbl' && (
+                        <>
+                          <Bar dataKey="physBbl" name="Physical Volume" fill="#f59e0b" radius={[4, 4, 0, 0]} />
+                          <Bar dataKey="dhBbl" name="DH LNG Volume" fill="#6366f1" radius={[4, 4, 0, 0]} />
+                          <Bar dataKey="dftBbl" name="DFT LNG Volume" fill="#0ea5e9" radius={[4, 4, 0, 0]} />
+                          <Bar dataKey="hedgingBbl" name="Hedging LNG Volume" fill="#10b981" radius={[4, 4, 0, 0]} />
+                        </>
+                      )}
+
+                      {indexBreakdownUnit === 'Ratio' && (
+                        <>
+                          <Bar dataKey="dhRatio" name="DH Hedge Ratio" fill="#6366f1" radius={[4, 4, 0, 0]} />
+                          <Bar dataKey="dftRatio" name="DFT Hedge Ratio" fill="#0ea5e9" radius={[4, 4, 0, 0]} />
+                          <Bar dataKey="hedgingRatio" name="Hedging Hedge Ratio" fill="#10b981" radius={[4, 4, 0, 0]} />
+                          <Bar dataKey="totalHedgeRatio" name="Total Combined Hedge Ratio" fill="#e11d48" radius={[4, 4, 0, 0]} />
+                        </>
+                      )}
+                    </BarChart>
+                  </ResponsiveContainer>
+                </div>
+              )}
+            </div>
+
+            {/* Row 4: Detailed Cards Breakdown */}
+            <div className="bg-white rounded-xl border border-slate-200 shadow-sm p-5 space-y-4">
+              <div>
+                <h3 className="text-xs font-bold text-slate-800 uppercase tracking-widest flex items-center gap-1.5">
+                  <TrendingUp className="w-4 h-4 text-emerald-600 animate-pulse" />
+                  Detailed Index Portfolio Breakdown Cards
+                </h3>
+                <p className="text-[10px] text-slate-500 font-mono mt-0.5">
+                  Drill down into physical commitments and individual target portfolio allocations (DH LNG, DFT LNG, and Hedging LNG) calculated per unit and averaged.
+                </p>
+              </div>
+
+              {indexHedgeBreakdown.length === 0 ? (
+                <div className="p-8 text-center text-slate-400 font-mono text-[10px]">
+                  No hedging or physical volume associated with price indices found.
+                </div>
+              ) : (
+                <div className="grid grid-cols-1 xl:grid-cols-2 gap-6">
+                  {indexHedgeBreakdown.map((item, idx) => {
+                    const isTotalProfitable = item.totalHedgePnL >= 0;
+
+                    return (
+                      <div key={idx} className="border border-slate-200 rounded-xl p-5 bg-slate-50/30 hover:bg-slate-50 transition-all flex flex-col justify-between space-y-4">
+                        
+                        {/* Card Header: Index Name & Physical exposure info */}
+                        <div className="flex flex-col sm:flex-row sm:items-center justify-between gap-2 border-b border-slate-100 pb-3">
+                          <div>
+                            <span className="font-extrabold text-sm text-slate-800 block">{item.index}</span>
+                            <span className="text-[9px] text-slate-400 block font-mono">
+                              Physical commitments mapped to index
+                            </span>
+                          </div>
+                          <div className="bg-white border border-slate-200 rounded-lg px-3 py-1 text-right">
+                            <span className="text-[8px] font-bold text-slate-400 uppercase tracking-wider block">Physical Exposure</span>
+                            <span className="text-[10px] font-mono font-bold text-amber-600">
+                              {item.physBbl.toLocaleString(undefined, { maximumFractionDigits: 0 })} bbl / {item.physMMBtu.toLocaleString(undefined, { maximumFractionDigits: 0 })} MMBtu
+                            </span>
+                          </div>
+                        </div>
+
+                        {/* Card Columns: DH, DFT, Hedging portfolio breakdown */}
+                        <div className="grid grid-cols-1 md:grid-cols-3 gap-3">
+                          
+                          {/* 1. DH LNG Column */}
+                          <div className="bg-white border border-slate-100 rounded-xl p-3 flex flex-col justify-between space-y-3 shadow-xs">
+                            <div className="flex items-center justify-between">
+                              <span className="font-bold text-[10px] text-indigo-600 uppercase tracking-wider">DH LNG</span>
+                              <span className={`text-[9px] font-mono font-bold px-1.5 py-0.2 rounded ${
+                                item.dhPnL >= 0 ? 'bg-emerald-50 text-emerald-700' : 'bg-rose-50 text-rose-700'
+                              }`}>
+                                {item.dhPnL >= 0 ? '+' : ''}${item.dhPnL.toLocaleString(undefined, { maximumFractionDigits: 0 })}
+                              </span>
+                            </div>
+
+                            <div className="space-y-1 text-[9px] font-mono text-slate-600">
+                              <div className="flex justify-between">
+                                <span>Bbl:</span>
+                                <span className="font-bold text-slate-800">{item.dhBbl.toLocaleString(undefined, { maximumFractionDigits: 0 })}</span>
+                              </div>
+                              <div className="flex justify-between">
+                                <span>MMBtu:</span>
+                                <span className="font-bold text-slate-800">{item.dhMMBtu.toLocaleString(undefined, { maximumFractionDigits: 0 })}</span>
+                              </div>
+                            </div>
+
+                            <div className="pt-2 border-t border-slate-50">
+                              <div className="flex justify-between items-center mb-1 text-[9px]">
+                                <span className="text-slate-400">Hedge Ratio:</span>
+                                <span className="font-extrabold text-indigo-600 font-mono">{item.dhRatio.toFixed(1)}%</span>
+                              </div>
+                              <div className="w-full bg-slate-100 h-1 rounded-full overflow-hidden">
+                                <div className="bg-indigo-500 h-full rounded-full" style={{ width: `${Math.min(item.dhRatio, 100)}%` }} />
+                              </div>
+                            </div>
+                          </div>
+
+                          {/* 2. DFT LNG Column */}
+                          <div className="bg-white border border-slate-100 rounded-xl p-3 flex flex-col justify-between space-y-3 shadow-xs">
+                            <div className="flex items-center justify-between">
+                              <span className="font-bold text-[10px] text-sky-600 uppercase tracking-wider">DFT LNG</span>
+                              <span className={`text-[9px] font-mono font-bold px-1.5 py-0.2 rounded ${
+                                item.dftPnL >= 0 ? 'bg-emerald-50 text-emerald-700' : 'bg-rose-50 text-rose-700'
+                              }`}>
+                                {item.dftPnL >= 0 ? '+' : ''}${item.dftPnL.toLocaleString(undefined, { maximumFractionDigits: 0 })}
+                              </span>
+                            </div>
+
+                            <div className="space-y-1 text-[9px] font-mono text-slate-600">
+                              <div className="flex justify-between">
+                                <span>Bbl:</span>
+                                <span className="font-bold text-slate-800">{item.dftBbl.toLocaleString(undefined, { maximumFractionDigits: 0 })}</span>
+                              </div>
+                              <div className="flex justify-between">
+                                <span>MMBtu:</span>
+                                <span className="font-bold text-slate-800">{item.dftMMBtu.toLocaleString(undefined, { maximumFractionDigits: 0 })}</span>
+                              </div>
+                            </div>
+
+                            <div className="pt-2 border-t border-slate-50">
+                              <div className="flex justify-between items-center mb-1 text-[9px]">
+                                <span className="text-slate-400">Hedge Ratio:</span>
+                                <span className="font-extrabold text-sky-600 font-mono">{item.dftRatio.toFixed(1)}%</span>
+                              </div>
+                              <div className="w-full bg-slate-100 h-1 rounded-full overflow-hidden">
+                                <div className="bg-sky-500 h-full rounded-full" style={{ width: `${Math.min(item.dftRatio, 100)}%` }} />
+                              </div>
+                            </div>
+                          </div>
+
+                          {/* 3. Hedging LNG Column */}
+                          <div className="bg-white border border-slate-100 rounded-xl p-3 flex flex-col justify-between space-y-3 shadow-xs">
+                            <div className="flex items-center justify-between">
+                              <span className="font-bold text-[10px] text-emerald-600 uppercase tracking-wider">Hedging LNG</span>
+                              <span className={`text-[9px] font-mono font-bold px-1.5 py-0.2 rounded ${
+                                item.hedgingPnL >= 0 ? 'bg-emerald-50 text-emerald-700' : 'bg-rose-50 text-rose-700'
+                              }`}>
+                                {item.hedgingPnL >= 0 ? '+' : ''}${item.hedgingPnL.toLocaleString(undefined, { maximumFractionDigits: 0 })}
+                              </span>
+                            </div>
+
+                            <div className="space-y-1 text-[9px] font-mono text-slate-600">
+                              <div className="flex justify-between">
+                                <span>Bbl:</span>
+                                <span className="font-bold text-slate-800">{item.hedgingBbl.toLocaleString(undefined, { maximumFractionDigits: 0 })}</span>
+                              </div>
+                              <div className="flex justify-between">
+                                <span>MMBtu:</span>
+                                <span className="font-bold text-slate-800">{item.hedgingMMBtu.toLocaleString(undefined, { maximumFractionDigits: 0 })}</span>
+                              </div>
+                            </div>
+
+                            <div className="pt-2 border-t border-slate-50">
+                              <div className="flex justify-between items-center mb-1 text-[9px]">
+                                <span className="text-slate-400">Hedge Ratio:</span>
+                                <span className="font-extrabold text-emerald-600 font-mono">{item.hedgingRatio.toFixed(1)}%</span>
+                              </div>
+                              <div className="w-full bg-slate-100 h-1 rounded-full overflow-hidden">
+                                <div className="bg-emerald-500 h-full rounded-full" style={{ width: `${Math.min(item.hedgingRatio, 100)}%` }} />
+                              </div>
+                            </div>
+                          </div>
+
+                        </div>
+
+                        {/* Card footer: Aggregated Combined Metrics */}
+                        <div className="bg-slate-900 border border-slate-850 p-3.5 rounded-xl flex items-center justify-between text-slate-100">
+                          <div className="space-y-0.5">
+                            <span className="text-[8px] font-bold text-slate-400 uppercase tracking-wider block font-sans">Combined Portfolio Totals</span>
+                            <div className="flex items-center gap-3 text-[9.5px] font-mono text-slate-300">
+                              <span>Hedge Vol: <strong className="text-white">{(item.totalHedgeBbl).toLocaleString(undefined, { maximumFractionDigits: 0 })} Bbl / {(item.totalHedgeMMBtu).toLocaleString(undefined, { maximumFractionDigits: 0 })} MMBtu</strong></span>
+                              <span className="text-slate-600">|</span>
+                              <span>Total PnL: <strong className={isTotalProfitable ? 'text-emerald-400' : 'text-rose-400'}>
+                                {isTotalProfitable ? '+' : ''}${item.totalHedgePnL.toLocaleString(undefined, { maximumFractionDigits: 0 })}
+                              </strong></span>
+                            </div>
+                          </div>
+                          <div className="text-right">
+                            <span className="text-[8px] font-bold text-slate-400 uppercase tracking-wider block font-sans">Combined Hedge Ratio</span>
+                            <span className="text-xs font-black text-emerald-400 font-mono">
+                              {item.totalHedgeRatio.toFixed(1)}%
+                            </span>
+                          </div>
+                        </div>
+
+                      </div>
+                    );
+                  })}
+                </div>
+              )}
+            </div>
+
+          </div>
+        )}
+
       </div>
     );
   };
 
   return (
-    <div className="flex flex-col flex-1 h-full bg-slate-950 text-slate-100 select-none custom-scrollbar">
+    <div className="flex flex-col flex-1 h-full bg-slate-950 text-slate-100 custom-scrollbar">
       
       {/* 1. Header controller bar */}
       <div className="p-4 border-b border-slate-850 bg-slate-900 flex flex-col md:flex-row justify-between items-stretch md:items-center gap-3">
@@ -2938,47 +5550,130 @@ export const TrmsSummaryTable: React.FC<TrmsSummaryTableProps> = ({ trmsData, vi
 
       {/* 2. KPIs Overview Card Panel */}
       <div className="p-4 border-b border-slate-800 bg-slate-950 grid grid-cols-2 lg:grid-cols-6 gap-3 shrink-0">
-        <div className="bg-slate-900 p-3.5 rounded-xl border border-slate-800 shadow-sm">
-          <div className="text-[10px] uppercase text-slate-400 font-mono font-bold tracking-wider">Total Strategies</div>
-          <div className="text-lg font-extrabold text-slate-100 mt-1 font-mono flex items-baseline gap-1">
-            {kpis.total} <span className="text-[10px] font-normal text-slate-500">In View</span>
+        <div className="bg-slate-900 p-3 rounded-xl border border-slate-800 shadow-sm flex flex-col justify-between">
+          <div>
+            <div className="text-[10px] uppercase text-slate-300 font-mono font-extrabold tracking-wider">Total Strategies</div>
+            <div className="text-lg font-extrabold text-slate-50 mt-1 font-mono flex items-baseline gap-1">
+              {kpis.total} <span className="text-[10px] font-semibold text-slate-300">In View</span>
+            </div>
+          </div>
+          <div className="text-[9.5px] font-mono text-slate-400 mt-2">
+            Active Filtered Count
           </div>
         </div>
         
-        <div className="bg-slate-900 p-3.5 rounded-xl border border-slate-800 shadow-sm">
-          <div className="text-[10px] uppercase text-slate-400 font-mono font-bold tracking-wider">Purchase Cost</div>
-          <div className="text-lg font-extrabold text-emerald-400 mt-1 font-mono flex items-baseline gap-1" title={`Total volume count: ${kpis.aggregatePurchaseVolume.toFixed(2)}`}>
-            ${kpis.aggregatePurchaseCost.toLocaleString(undefined, { maximumFractionDigits: 0 })}
-            <span className="text-[9px] font-normal text-slate-500 ml-1">({Math.floor(kpis.aggregatePurchaseVolume).toLocaleString()} V)</span>
+        {/* Purchase Cost */}
+        <div className="bg-slate-900 p-3 rounded-xl border border-slate-800 shadow-sm flex flex-col justify-between">
+          <div>
+            <div className="text-[10px] uppercase text-slate-300 font-mono font-extrabold tracking-wider">Purchase Cost</div>
+            <div className="text-lg font-extrabold text-emerald-400 mt-1 font-mono flex items-baseline gap-1" title={`Total volume count: ${kpis.aggregatePurchaseVolume.toFixed(2)}`}>
+              ${kpis.aggregatePurchaseCost.toLocaleString(undefined, { maximumFractionDigits: 0 })}
+              <span className="text-[9px] font-semibold text-slate-300 ml-1">({Math.floor(kpis.aggregatePurchaseVolume).toLocaleString()} V)</span>
+            </div>
+          </div>
+          <div className="mt-2 pt-1.5 border-t border-slate-800/80 flex items-center justify-end">
+            <span className={`inline-flex items-center gap-0.5 text-[10px] font-mono font-extrabold px-1.5 py-0.5 rounded ${
+              kpis.aggregatePurchaseCostPnLChange > 0 
+                ? 'text-emerald-400 bg-emerald-950/60 border border-emerald-800/40' 
+                : kpis.aggregatePurchaseCostPnLChange < 0 
+                  ? 'text-rose-400 bg-rose-950/60 border border-rose-800/40' 
+                  : 'text-slate-400 bg-slate-800/60'
+            }`}>
+              {kpis.aggregatePurchaseCostPnLChange > 0 ? '▲ +' : kpis.aggregatePurchaseCostPnLChange < 0 ? '▼ -' : ''}
+              ${Math.abs(kpis.aggregatePurchaseCostPnLChange).toLocaleString(undefined, { maximumFractionDigits: 0 })}
+            </span>
           </div>
         </div>
 
-        <div className="bg-slate-900 p-3.5 rounded-xl border border-slate-800 shadow-sm">
-          <div className="text-[10px] uppercase text-slate-400 font-mono font-bold tracking-wider">Sales Revenue</div>
-          <div className="text-lg font-extrabold text-blue-400 mt-1 font-mono flex items-baseline gap-1" title={`Total volume count: ${kpis.aggregateSalesVolume.toFixed(2)}`}>
-            ${kpis.aggregateSalesRevenue.toLocaleString(undefined, { maximumFractionDigits: 0 })}
-            <span className="text-[9px] font-normal text-slate-500 ml-1">({Math.floor(kpis.aggregateSalesVolume).toLocaleString()} V)</span>
+        {/* Sales Revenue */}
+        <div className="bg-slate-900 p-3 rounded-xl border border-slate-800 shadow-sm flex flex-col justify-between">
+          <div>
+            <div className="text-[10px] uppercase text-slate-300 font-mono font-extrabold tracking-wider">Sales Revenue</div>
+            <div className="text-lg font-extrabold text-blue-400 mt-1 font-mono flex items-baseline gap-1" title={`Total volume count: ${kpis.aggregateSalesVolume.toFixed(2)}`}>
+              ${kpis.aggregateSalesRevenue.toLocaleString(undefined, { maximumFractionDigits: 0 })}
+              <span className="text-[9px] font-semibold text-slate-300 ml-1">({Math.floor(kpis.aggregateSalesVolume).toLocaleString()} V)</span>
+            </div>
+          </div>
+          <div className="mt-2 pt-1.5 border-t border-slate-800/80 flex items-center justify-end">
+            <span className={`inline-flex items-center gap-0.5 text-[10px] font-mono font-extrabold px-1.5 py-0.5 rounded ${
+              kpis.aggregateSalesRevenuePnLChange > 0 
+                ? 'text-emerald-400 bg-emerald-950/60 border border-emerald-800/40' 
+                : kpis.aggregateSalesRevenuePnLChange < 0 
+                  ? 'text-rose-400 bg-rose-950/60 border border-rose-800/40' 
+                  : 'text-slate-400 bg-slate-800/60'
+            }`}>
+              {kpis.aggregateSalesRevenuePnLChange > 0 ? '▲ +' : kpis.aggregateSalesRevenuePnLChange < 0 ? '▼ -' : ''}
+              ${Math.abs(kpis.aggregateSalesRevenuePnLChange).toLocaleString(undefined, { maximumFractionDigits: 0 })}
+            </span>
           </div>
         </div>
 
-        <div className="bg-slate-900 p-3.5 rounded-xl border border-slate-800 shadow-sm">
-          <div className="text-[10px] uppercase text-slate-400 font-mono font-bold tracking-wider">Shipping Cost</div>
-          <div className="text-lg font-extrabold text-purple-400 mt-1 font-mono">
-            ${kpis.aggregateShippingCosts.toLocaleString(undefined, { maximumFractionDigits: 0 })}
+        {/* Shipping Cost */}
+        <div className="bg-slate-900 p-3 rounded-xl border border-slate-800 shadow-sm flex flex-col justify-between">
+          <div>
+            <div className="text-[10px] uppercase text-slate-300 font-mono font-extrabold tracking-wider">Shipping Cost</div>
+            <div className="text-lg font-extrabold text-purple-400 mt-1 font-mono">
+              ${kpis.aggregateShippingCosts.toLocaleString(undefined, { maximumFractionDigits: 0 })}
+            </div>
+          </div>
+          <div className="mt-2 pt-1.5 border-t border-slate-800/80 flex items-center justify-end">
+            <span className={`inline-flex items-center gap-0.5 text-[10px] font-mono font-extrabold px-1.5 py-0.5 rounded ${
+              kpis.aggregateShippingCostPnLChange > 0 
+                ? 'text-emerald-400 bg-emerald-950/60 border border-emerald-800/40' 
+                : kpis.aggregateShippingCostPnLChange < 0 
+                  ? 'text-rose-400 bg-rose-950/60 border border-rose-800/40' 
+                  : 'text-slate-400 bg-slate-800/60'
+            }`}>
+              {kpis.aggregateShippingCostPnLChange > 0 ? '▲ +' : kpis.aggregateShippingCostPnLChange < 0 ? '▼ -' : ''}
+              ${Math.abs(kpis.aggregateShippingCostPnLChange).toLocaleString(undefined, { maximumFractionDigits: 0 })}
+            </span>
           </div>
         </div>
 
-        <div className="bg-slate-900 p-3.5 rounded-xl border border-slate-800 shadow-sm">
-          <div className="text-[10px] uppercase text-slate-400 font-mono font-bold tracking-wider">Hedging operations</div>
-          <div className="text-lg font-extrabold text-amber-400 mt-1 font-mono">
-            ${kpis.aggregateHedgingPnL.toLocaleString(undefined, { maximumFractionDigits: 0 })}
+        {/* Hedging operations */}
+        <div className="bg-slate-900 p-3 rounded-xl border border-slate-800 shadow-sm flex flex-col justify-between">
+          <div>
+            <div className="text-[10px] uppercase text-slate-300 font-mono font-extrabold tracking-wider">Hedging operations</div>
+            <div className="text-lg font-extrabold text-amber-400 mt-1 font-mono flex items-baseline gap-1" title={`Total hedging volume: ${formatUnitVolumes(kpis.aggregateHedgingVolumeByUnit, ' | ', 'neutral')}`}>
+              ${kpis.aggregateHedgingPnL.toLocaleString(undefined, { maximumFractionDigits: 0 })}
+              <span className="text-[9px] font-semibold text-slate-300 ml-1">({formatUnitVolumes(kpis.aggregateHedgingVolumeByUnit, ' | ', 'neutral')} | {kpis.aggregateHedgingVolumePct.toFixed(1)}%)</span>
+            </div>
+          </div>
+          <div className="mt-2 pt-1.5 border-t border-slate-800/80 flex items-center justify-end">
+            <span className={`inline-flex items-center gap-0.5 text-[10px] font-mono font-extrabold px-1.5 py-0.5 rounded ${
+              kpis.aggregateHedgingPnLChange > 0 
+                ? 'text-emerald-400 bg-emerald-950/60 border border-emerald-800/40' 
+                : kpis.aggregateHedgingPnLChange < 0 
+                  ? 'text-rose-400 bg-rose-950/60 border border-rose-800/40' 
+                  : 'text-slate-400 bg-slate-800/60'
+            }`}>
+              {kpis.aggregateHedgingPnLChange > 0 ? '▲ +' : kpis.aggregateHedgingPnLChange < 0 ? '▼ -' : ''}
+              ${Math.abs(kpis.aggregateHedgingPnLChange).toLocaleString(undefined, { maximumFractionDigits: 0 })}
+            </span>
           </div>
         </div>
 
-        <div className="bg-slate-900 p-3.5 rounded-xl border border-slate-800 shadow-sm col-span-2 lg:col-span-1">
-          <div className="text-[10px] uppercase text-slate-400 font-mono font-bold tracking-wider">Aggregate P&amp;L</div>
-          <div className={`text-lg font-extrabold mt-1 font-mono ${kpis.aggregatePnL >= 0 ? 'text-emerald-400' : 'text-rose-400'}`}>
-            {kpis.aggregatePnL >= 0 ? '+' : '-'}${Math.abs(kpis.aggregatePnL).toLocaleString(undefined, { maximumFractionDigits: 0 })}
+        {/* Aggregate P&L */}
+        <div className="bg-slate-900 p-3 rounded-xl border border-slate-800 shadow-sm col-span-2 lg:col-span-1 flex flex-col justify-between">
+          <div>
+            <div className="text-[10px] uppercase text-slate-300 font-mono font-extrabold tracking-wider" title="Revenue - Cost - SRC - Hedging">
+              Aggregate P&amp;L
+            </div>
+            <div className={`text-lg font-extrabold mt-1 font-mono ${kpis.aggregatePnL >= 0 ? 'text-emerald-400' : 'text-rose-400'}`}>
+              {kpis.aggregatePnL >= 0 ? '+' : '-'}${Math.abs(kpis.aggregatePnL).toLocaleString(undefined, { maximumFractionDigits: 0 })}
+            </div>
+          </div>
+          <div className="mt-2 pt-1.5 border-t border-slate-800/80 flex items-center justify-end">
+            <span className={`inline-flex items-center gap-0.5 text-[10px] font-mono font-extrabold px-1.5 py-0.5 rounded ${
+              kpis.aggregateTotalPnLChange > 0 
+                ? 'text-emerald-400 bg-emerald-950/60 border border-emerald-800/40' 
+                : kpis.aggregateTotalPnLChange < 0 
+                  ? 'text-rose-400 bg-rose-950/60 border border-rose-800/40' 
+                  : 'text-slate-400 bg-slate-800/60'
+            }`}>
+              {kpis.aggregateTotalPnLChange > 0 ? '▲ +' : kpis.aggregateTotalPnLChange < 0 ? '▼ -' : ''}
+              ${Math.abs(kpis.aggregateTotalPnLChange).toLocaleString(undefined, { maximumFractionDigits: 0 })}
+            </span>
           </div>
         </div>
       </div>
@@ -3056,7 +5751,7 @@ export const TrmsSummaryTable: React.FC<TrmsSummaryTableProps> = ({ trmsData, vi
       )}
 
       {/* 5. Table Grid Panel */}
-      <div className="flex-1 overflow-auto custom-scrollbar relative bg-slate-950">
+      <div ref={tableContainerRef} className="flex-1 overflow-auto custom-scrollbar relative bg-slate-950">
         {filteredAndSortedSummaryData.length === 0 ? (
           <div className="flex flex-col items-center justify-center py-24 text-center h-full max-w-md mx-auto">
             <Database className="w-10 h-10 text-slate-500 mb-3" />
@@ -3275,12 +5970,150 @@ export const TrmsSummaryTable: React.FC<TrmsSummaryTableProps> = ({ trmsData, vi
                           )
                         ).sort();
 
+                        // Extract unique indices dynamically
+                        const uniqueSubIndices = Array.from(
+                          new Set<string>(
+                            unfilteredSubRows
+                              .map((r: any) => getReadableIndexName(parseIndexFromReference(r['Reference'])))
+                              .filter(x => x && x !== '—')
+                          )
+                        ).sort();
+
+                        // Extract unique exposure months dynamically
+                        const uniqueSubExposureMonths = sortExposureMonths(
+                          Array.from(
+                            new Set<string>(
+                              unfilteredSubRows
+                                .map((r: any) => decodeExposureMonth(parseExpiryFromReference(r['Reference'])))
+                                .filter(x => x && x !== '—')
+                            )
+                          )
+                        );
+
                         const subSearch = (subTableSearches[item.strategyName] || '').toLowerCase().trim();
                         const subBs = subTableBuySellFilters[item.strategyName] || 'all';
                         const subPort = subTablePortfolioFilters[item.strategyName] || 'all';
 
+                        // Column filter definitions for sub-table
+                        const subColumns = [
+                          'Deal Num',
+                          'Reference',
+                          ...(activeDetailFilter === 'hedging' ? ['Ref Index', 'Ref Buyer', 'Ref Exposure Month'] : []),
+                          'EOD Date',
+                          'Portfolio',
+                          'Buy/Sell',
+                          'Ins Type',
+                          'Cflow Type',
+                          'Settlement Type',
+                          'Exposure Month',
+                          'Vol Type',
+                          'Volume',
+                          'Price',
+                          'Value USD',
+                          'Change in P&L'
+                        ];
+
+                        // Helper function to extract cell string value for a row & column in sub-table
+                        const getSubCellString = (r: any, colName: string): string => {
+                          switch (colName) {
+                            case 'Deal Num':
+                              return String(r['Deal Num'] || '').trim();
+                            case 'Reference':
+                              return String(r['Reference'] || '').trim();
+                            case 'Ref Index':
+                              return getReadableIndexName(parseIndexFromReference(r['Reference'])) || '—';
+                            case 'Ref Buyer':
+                              return parseBuyerFromReference(r['Reference']) || '—';
+                            case 'Ref Exposure Month':
+                              return decodeExposureMonth(parseExpiryFromReference(r['Reference'])) || '—';
+                            case 'EOD Date':
+                              return String(r['EOD Date'] || r['EOD_Date'] || '').trim();
+                            case 'Portfolio':
+                              return String(r['Internal Portfolio'] || r['Portfolio'] || '').trim();
+                            case 'Buy/Sell':
+                              return String(r['Buy_Sell'] || r['BuySell'] || '').trim();
+                            case 'Ins Type':
+                              return String(r['Ins Type'] || r['InsType'] || '').trim();
+                            case 'Cflow Type':
+                              return String(r['Cflow Type'] || r['CflowType'] || '').trim();
+                            case 'Settlement Type': {
+                              const rawSett = String(r['Settlement Type'] || '').trim();
+                              if (rawSett && rawSett !== '—') return rawSett;
+                              const cf = String(r['Cflow Type'] || '').trim().toLowerCase();
+                              if (cf !== 'commodity') return rawSett || '—';
+                              const strategyRows = item.underlyingRows;
+                              const hasOpt = strategyRows.some((sr: any) => {
+                                const port = String(sr['Internal Portfolio'] || sr['Portfolio'] || '').trim().toLowerCase();
+                                return port === 'optimization lng' || port.includes('optimization');
+                              });
+                              const hasBuy = strategyRows.some((sr: any) => {
+                                const buySell = String(sr['Buy_Sell'] || sr['BuySell'] || '').trim().toLowerCase();
+                                const cflow = String(sr['Cflow Type'] || '').trim().toLowerCase();
+                                return (buySell === 'buy' || buySell === 'buys') && cflow === 'commodity';
+                              });
+                              const hasSell = strategyRows.some((sr: any) => {
+                                const buySell = String(sr['Buy_Sell'] || sr['BuySell'] || '').trim().toLowerCase();
+                                const cflow = String(sr['Cflow Type'] || '').trim().toLowerCase();
+                                return (buySell === 'sell' || buySell === 'sells') && cflow === 'commodity';
+                              });
+                              const isBuyRow = String(r['Buy_Sell'] || '').toLowerCase() === 'buy' || String(r['Buy_Sell'] || '').toLowerCase() === 'buys';
+                              const isSellRow = String(r['Buy_Sell'] || '').toLowerCase() === 'sell' || String(r['Buy_Sell'] || '').toLowerCase() === 'sells';
+                              if (hasOpt) {
+                                const port = String(r['Internal Portfolio'] || r['Portfolio'] || '').trim().toLowerCase();
+                                return (port === 'optimization lng' || port.includes('optimization')) ? (rawSett || 'Cash Settlement') : 'Physical Settlement';
+                              } else {
+                                if (!hasBuy && hasSell) return isBuyRow ? 'Physical Settlement' : 'Cash Settlement';
+                                else if (hasBuy && !hasSell) return isSellRow ? 'Physical Settlement' : 'Cash Settlement';
+                                else if (hasBuy && hasSell) return rawSett || 'Cash Settlement';
+                              }
+                              return rawSett || 'Cash Settlement';
+                            }
+                            case 'Exposure Month': {
+                              const expM = decodeExposureMonth(parseExpiryFromReference(r['Reference']));
+                              return (expM && expM !== '—') ? expM : (getRowExposureMonth(r) || '—');
+                            }
+                            case 'Vol Type':
+                              return String(r['Volume Type'] || r['Vol Type'] || r['VolType'] || '').trim();
+                            case 'Volume': {
+                              const rawVol = Number(String(r['Volume'] || '').replace(/[^0-9.-]/g, ''));
+                              const uVol = convertVolume(rawVol, r['Unit'] || r['unit']);
+                              return isNaN(uVol) ? '—' : uVol.toLocaleString(undefined, { maximumFractionDigits: 2 });
+                            }
+                            case 'Price': {
+                              const p = Number(String(r['Price'] || '').replace(/[^0-9.-]/g, ''));
+                              return isNaN(p) ? '—' : p.toLocaleString(undefined, { minimumFractionDigits: 2, maximumFractionDigits: 4 });
+                            }
+                            case 'Value USD': {
+                              const v = Number(String(r['Base_Total_Value_USD'] || '').replace(/[^0-9.-]/g, ''));
+                              return isNaN(v) ? '—' : v.toLocaleString(undefined, { maximumFractionDigits: 2 });
+                            }
+                            case 'Change in P&L': {
+                              const pnl = Number(String(r['Change_in_Total_PnL'] || r['Change_in_PnL'] || '').replace(/[^0-9.-]/g, ''));
+                              return isNaN(pnl) ? '—' : pnl.toLocaleString(undefined, { maximumFractionDigits: 2 });
+                            }
+                            default:
+                              return String(r[colName] || '').trim();
+                          }
+                        };
+
+                        // Unique values generator for popover checklist
+                        const getSubUniqueValuesForCol = (colName: string) => {
+                          const counts: Record<string, number> = {};
+                          unfilteredSubRows.forEach((r: any) => {
+                            const val = getSubCellString(r, colName) || '—';
+                            counts[val] = (counts[val] || 0) + 1;
+                          });
+                          return Object.entries(counts)
+                            .map(([value, count]) => ({ value, count }))
+                            .sort((a, b) => b.count - a.count || a.value.localeCompare(b.value));
+                        };
+
+                        // Active column filters for this strategy
+                        const colFilters = subTableColumnFilters[item.strategyName] || {};
+                        const currentSubSort = subTableSortConfig[item.strategyName];
+
                         // Filtered rows for sub-table
-                        const filteredSubRows = unfilteredSubRows.filter((r: any) => {
+                        let filteredSubRows = unfilteredSubRows.filter((r: any) => {
                           if (subSearch) {
                             const dNum = String(r['Deal Num'] || '').toLowerCase();
                             const ref = String(r['Reference'] || '').toLowerCase();
@@ -3299,13 +6132,119 @@ export const TrmsSummaryTable: React.FC<TrmsSummaryTableProps> = ({ trmsData, vi
                             const p = String(r['Internal Portfolio'] || r['Portfolio'] || '').trim();
                             if (p !== subPort) return false;
                           }
+                          // Reference format filter
+                          const subRefFilter = subTableRefFilters[item.strategyName] || 'all';
+                          if (subRefFilter !== 'all') {
+                            const port = String(r['Internal Portfolio'] || r['Portfolio'] || '').trim().toLowerCase();
+                            const isTargetPort = port === 'hedging lng' || port === 'dh lng' || port === 'dft lng';
+                            const validation = isTargetPort ? validateReferenceFormat(r['Reference'] || '') : { isValid: true };
+                            if (subRefFilter === 'valid' && !validation.isValid) return false;
+                            if (subRefFilter === 'invalid' && validation.isValid) return false;
+                          }
+                          // Index filter
+                          const subIndex = subTableIndexFilters[item.strategyName] || 'all';
+                          if (subIndex !== 'all') {
+                            const rowIdx = getReadableIndexName(parseIndexFromReference(r['Reference']));
+                            if (rowIdx !== subIndex) return false;
+                          }
+                          // Exposure Month filter
+                          const subExpMonth = subTableExposureMonthFilters[item.strategyName] || 'all';
+                          if (subExpMonth !== 'all') {
+                            const rowExpMonth = decodeExposureMonth(parseExpiryFromReference(r['Reference']));
+                            if (rowExpMonth !== subExpMonth) return false;
+                          }
+
+                          // Apply per-column header filters
+                          for (const [colName, filter] of Object.entries(colFilters)) {
+                            if (!filter) continue;
+                            const cellVal = getSubCellString(r, colName);
+
+                            // Checkbox filter
+                            if (filter.selectedValues && filter.selectedValues.size > 0) {
+                              const matchVal = cellVal || '—';
+                              if (!filter.selectedValues.has(matchVal)) return false;
+                            }
+
+                            // Condition filter
+                            if (filter.condition && filter.condition !== 'none') {
+                              const rawNum = Number(cellVal.replace(/[^0-9.-]/g, ''));
+                              const isNum = !isNaN(rawNum) && cellVal !== '—';
+
+                              const v1Num = Number(filter.conditionValue1);
+                              const v2Num = Number(filter.conditionValue2);
+                              const valLower = cellVal.toLowerCase();
+                              const c1Lower = (filter.conditionValue1 || '').toLowerCase();
+
+                              switch (filter.condition) {
+                                case 'equals':
+                                  if (valLower !== c1Lower) return false;
+                                  break;
+                                case 'not_equals':
+                                  if (valLower === c1Lower) return false;
+                                  break;
+                                case 'contains':
+                                  if (!valLower.includes(c1Lower)) return false;
+                                  break;
+                                case 'not_contains':
+                                  if (valLower.includes(c1Lower)) return false;
+                                  break;
+                                case 'starts_with':
+                                  if (!valLower.startsWith(c1Lower)) return false;
+                                  break;
+                                case 'ends_with':
+                                  if (!valLower.endsWith(c1Lower)) return false;
+                                  break;
+                                case 'is_empty':
+                                  if (cellVal && cellVal !== '—') return false;
+                                  break;
+                                case 'is_not_empty':
+                                  if (!cellVal || cellVal === '—') return false;
+                                  break;
+                                case 'greater_than':
+                                  if (!isNum || isNaN(v1Num) || rawNum <= v1Num) return false;
+                                  break;
+                                case 'greater_than_or_equal':
+                                  if (!isNum || isNaN(v1Num) || rawNum < v1Num) return false;
+                                  break;
+                                case 'less_than':
+                                  if (!isNum || isNaN(v1Num) || rawNum >= v1Num) return false;
+                                  break;
+                                case 'less_than_or_equal':
+                                  if (!isNum || isNaN(v1Num) || rawNum > v1Num) return false;
+                                  break;
+                                case 'between':
+                                  if (!isNum || isNaN(v1Num) || isNaN(v2Num) || rawNum < v1Num || rawNum > v2Num) return false;
+                                  break;
+                                default:
+                                  break;
+                              }
+                            }
+                          }
+
                           return true;
                         });
+
+                        // Apply sorting for sub-table
+                        if (currentSubSort && currentSubSort.column && currentSubSort.direction) {
+                          const { column, direction } = currentSubSort;
+                          filteredSubRows = [...filteredSubRows].sort((a: any, b: any) => {
+                            const valA = getSubCellString(a, column);
+                            const valB = getSubCellString(b, column);
+
+                            const numA = Number(valA.replace(/[^0-9.-]/g, ''));
+                            const numB = Number(valB.replace(/[^0-9.-]/g, ''));
+                            if (!isNaN(numA) && !isNaN(numB) && valA !== '—' && valB !== '—') {
+                              return direction === 'asc' ? numA - numB : numB - numA;
+                            }
+                            return direction === 'asc' ? valA.localeCompare(valB) : valB.localeCompare(valA);
+                          });
+                        }
 
                         // Totals calculations
                         const subTotals = filteredSubRows.reduce(
                           (acc, r) => {
-                            const vol = Number(String(r['Volume'] || '').replace(/[^0-9.-]/g, ''));
+                            const rawVol = Number(String(r['Volume'] || '').replace(/[^0-9.-]/g, ''));
+                            const vol = convertVolume(rawVol, r['Unit'] || r['unit']);
                             const val = Number(String(r['Base_Total_Value_USD'] || '').replace(/[^0-9.-]/g, ''));
                             const pnl = Number(String(r['Change_in_Total_PnL'] || '').replace(/[^0-9.-]/g, ''));
                             const price = Number(String(r['Price'] || '').replace(/[^0-9.-]/g, ''));
@@ -3323,6 +6262,27 @@ export const TrmsSummaryTable: React.FC<TrmsSummaryTableProps> = ({ trmsData, vi
                         );
 
                         const subAvgPrice = subTotals.priceCount > 0 ? subTotals.priceSum / subTotals.priceCount : 0;
+
+                        const hasAnySubFilterActive = (subTableSearches[item.strategyName] || '') ||
+                          (subTableBuySellFilters[item.strategyName] || 'all') !== 'all' ||
+                          (subTablePortfolioFilters[item.strategyName] || 'all') !== 'all' ||
+                          (subTableRefFilters[item.strategyName] || 'all') !== 'all' ||
+                          (subTableIndexFilters[item.strategyName] || 'all') !== 'all' ||
+                          (subTableExposureMonthFilters[item.strategyName] || 'all') !== 'all' ||
+                          Object.keys(colFilters).length > 0 ||
+                          !!(currentSubSort?.column && currentSubSort?.direction);
+
+                        const clearAllSubFiltersFn = () => {
+                          setSubTableSearches(prev => { const n = { ...prev }; delete n[item.strategyName]; return n; });
+                          setSubTableBuySellFilters(prev => { const n = { ...prev }; delete n[item.strategyName]; return n; });
+                          setSubTablePortfolioFilters(prev => { const n = { ...prev }; delete n[item.strategyName]; return n; });
+                          setSubTableRefFilters(prev => { const n = { ...prev }; delete n[item.strategyName]; return n; });
+                          setSubTableIndexFilters(prev => { const n = { ...prev }; delete n[item.strategyName]; return n; });
+                          setSubTableExposureMonthFilters(prev => { const n = { ...prev }; delete n[item.strategyName]; return n; });
+                          setSubTableColumnFilters(prev => { const n = { ...prev }; delete n[item.strategyName]; return n; });
+                          setSubTableSortConfig(prev => { const n = { ...prev }; delete n[item.strategyName]; return n; });
+                          setSubFilterSearchTerms(prev => { const n = { ...prev }; delete n[item.strategyName]; return n; });
+                        };
 
                         return (
                           <tr>
@@ -3460,15 +6420,56 @@ export const TrmsSummaryTable: React.FC<TrmsSummaryTableProps> = ({ trmsData, vi
                                       </div>
                                     )}
 
+                                    {/* Reference Status Dropdown filter */}
+                                    <div className="flex items-center gap-1 border-l border-slate-800 pl-2">
+                                      <select
+                                        value={subTableRefFilters[item.strategyName] || 'all'}
+                                        onChange={(e) => setSubTableRefFilters(prev => ({ ...prev, [item.strategyName]: e.target.value }))}
+                                        className="bg-transparent text-slate-300 border-none select-[none] focus:ring-0 outline-none text-[10px] font-bold font-mono py-0 pl-1 pr-4 cursor-pointer"
+                                      >
+                                        <option value="all" className="bg-slate-900 text-slate-300">All Ref Status</option>
+                                        <option value="valid" className="bg-slate-900 text-slate-300">Valid Refs Only</option>
+                                        <option value="invalid" className="bg-slate-900 text-amber-400 font-bold">⚠️ Compliance Alerts</option>
+                                      </select>
+                                    </div>
+
+                                    {/* Index Dropdown filter */}
+                                    {uniqueSubIndices.length > 0 && (
+                                      <div className="flex items-center gap-1 border-l border-slate-800 pl-2">
+                                        <select
+                                          value={subTableIndexFilters[item.strategyName] || 'all'}
+                                          onChange={(e) => setSubTableIndexFilters(prev => ({ ...prev, [item.strategyName]: e.target.value }))}
+                                          className="bg-transparent text-slate-300 border-none select-[none] focus:ring-0 outline-none text-[10px] font-bold font-mono py-0 pl-1 pr-4 cursor-pointer"
+                                        >
+                                          <option value="all" className="bg-slate-900 text-slate-300">All Indices</option>
+                                          {uniqueSubIndices.map(idxName => (
+                                            <option key={idxName} value={idxName} className="bg-slate-900 text-slate-350">{idxName}</option>
+                                          ))}
+                                        </select>
+                                      </div>
+                                    )}
+
+                                    {/* Exposure Month Dropdown filter */}
+                                    {uniqueSubExposureMonths.length > 0 && (
+                                      <div className="flex items-center gap-1 border-l border-slate-800 pl-2">
+                                        <select
+                                          value={subTableExposureMonthFilters[item.strategyName] || 'all'}
+                                          onChange={(e) => setSubTableExposureMonthFilters(prev => ({ ...prev, [item.strategyName]: e.target.value }))}
+                                          className="bg-transparent text-slate-300 border-none select-[none] focus:ring-0 outline-none text-[10px] font-bold font-mono py-0 pl-1 pr-4 cursor-pointer"
+                                        >
+                                          <option value="all" className="bg-slate-900 text-slate-300">All Exposure Months</option>
+                                          {uniqueSubExposureMonths.map(m => (
+                                            <option key={m} value={m} className="bg-slate-900 text-slate-350">{m}</option>
+                                          ))}
+                                        </select>
+                                      </div>
+                                    )}
+
                                     {/* Clear Sub Filters button */}
-                                    {((subTableSearches[item.strategyName] || '') || (subTableBuySellFilters[item.strategyName] || 'all') !== 'all' || (subTablePortfolioFilters[item.strategyName] || 'all') !== 'all') && (
+                                    {hasAnySubFilterActive && (
                                       <button
                                         type="button"
-                                        onClick={() => {
-                                          setSubTableSearches(prev => { const n = { ...prev }; delete n[item.strategyName]; return n; });
-                                          setSubTableBuySellFilters(prev => { const n = { ...prev }; delete n[item.strategyName]; return n; });
-                                          setSubTablePortfolioFilters(prev => { const n = { ...prev }; delete n[item.strategyName]; return n; });
-                                        }}
+                                        onClick={clearAllSubFiltersFn}
                                         className="p-1 text-slate-500 hover:text-rose-400 transition-colors mr-1 cursor-pointer"
                                         title="Clear expanded filters"
                                       >
@@ -3478,6 +6479,47 @@ export const TrmsSummaryTable: React.FC<TrmsSummaryTableProps> = ({ trmsData, vi
                                   </div>
                                 </div>
                               </div>
+
+                              {/* Active Column Filters Pills Bar */}
+                              {Object.keys(colFilters).length > 0 && (
+                                <div className="flex flex-wrap items-center gap-1.5 py-1.5 px-3 bg-slate-900 border border-slate-800 rounded-lg mb-3">
+                                  <span className="text-[9.5px] font-bold text-slate-400 uppercase font-mono tracking-wider">Active Column Filters:</span>
+                                  {Object.entries(colFilters).map(([colName, filter]) => {
+                                    const hasChecked = filter.selectedValues && filter.selectedValues.size > 0;
+                                    const hasCond = filter.condition && filter.condition !== 'none';
+                                    if (!hasChecked && !hasCond) return null;
+                                    return (
+                                      <span key={colName} className="text-[10px] bg-blue-950 border border-blue-800 text-blue-300 px-2 py-0.5 rounded-md flex items-center gap-1 font-mono shadow-xs">
+                                        <span className="font-bold">{colName}:</span>
+                                        {hasCond && (
+                                          <span>{filter.condition.replace(/_/g, ' ')} {filter.conditionValue1} {filter.conditionValue2 ? `& ${filter.conditionValue2}` : ''}</span>
+                                        )}
+                                        {hasChecked && (
+                                          <span>{filter.selectedValues.size} selected</span>
+                                        )}
+                                        <button
+                                          type="button"
+                                          onClick={() => handleClearSubColumnFilter(item.strategyName, colName)}
+                                          className="hover:text-rose-300 ml-1 cursor-pointer"
+                                          title={`Clear ${colName} filter`}
+                                        >
+                                          <X className="w-3 h-3" />
+                                        </button>
+                                      </span>
+                                    );
+                                  })}
+                                  <button
+                                    type="button"
+                                    onClick={() => {
+                                      setSubTableColumnFilters(prev => { const n = { ...prev }; delete n[item.strategyName]; return n; });
+                                      setSubTableSortConfig(prev => { const n = { ...prev }; delete n[item.strategyName]; return n; });
+                                    }}
+                                    className="text-[9.5px] text-rose-400 hover:text-rose-300 hover:underline font-mono ml-auto cursor-pointer font-semibold"
+                                  >
+                                    Clear Column Filters
+                                  </button>
+                                </div>
+                              )}
 
                               {/* Sub table output */}
                               {unfilteredSubRows.length === 0 ? (
@@ -3491,44 +6533,90 @@ export const TrmsSummaryTable: React.FC<TrmsSummaryTableProps> = ({ trmsData, vi
                                 <div className="flex flex-col items-center justify-center py-6 text-center bg-slate-900 border border-slate-800 rounded-lg shadow-sm">
                                   <Filter className="w-5 h-5 text-slate-500 mb-1" />
                                   <span className="text-[10px] font-mono text-slate-400">
-                                    No records match your active search or dropdown criteria inside this strategy.
+                                    No records match your active search or column filter criteria inside this strategy.
                                   </span>
                                   <button
                                     type="button"
-                                    onClick={() => {
-                                      setSubTableSearches(prev => { const n = { ...prev }; delete n[item.strategyName]; return n; });
-                                      setSubTableBuySellFilters(prev => { const n = { ...prev }; delete n[item.strategyName]; return n; });
-                                      setSubTablePortfolioFilters(prev => { const n = { ...prev }; delete n[item.strategyName]; return n; });
-                                    }}
-                                    className="mt-2 text-[10px] bg-slate-950 hover:bg-slate-850 px-2.5 py-1 rounded text-blue-400 border border-slate-800 cursor-pointer"
+                                    onClick={clearAllSubFiltersFn}
+                                    className="mt-2 text-[10px] bg-slate-950 hover:bg-slate-850 px-2.5 py-1 rounded text-blue-400 border border-slate-800 cursor-pointer font-bold"
                                   >
-                                    Clear Expand Search
+                                    Clear All Filters &amp; Search
                                   </button>
                                 </div>
                               ) : (
                                 <div className="overflow-x-auto rounded-lg border border-slate-800 bg-slate-900 shadow-sm">
                                   <table className="w-full text-left font-mono text-[10.5px]">
-                                    <thead className="bg-slate-950 text-slate-400 font-mono select-none">
+                                    <thead className="bg-slate-950 text-slate-400 font-mono select-none sticky top-0 z-20">
                                       <tr className="border-b border-slate-800 text-slate-350">
-                                        <th className="py-1.5 px-3">Deal Num</th>
-                                        <th className="py-1.5 px-3">Reference</th>
-                                        <th className="py-1.5 px-3">EOD Date</th>
-                                        <th className="py-1.5 px-3">Portfolio</th>
-                                        <th className="py-1.5 px-3">Buy/Sell</th>
-                                        <th className="py-1.5 px-3">Ins Type</th>
-                                        <th className="py-1.5 px-3">Cflow Type</th>
-                                        <th className="py-1.5 px-3 font-semibold select-none text-blue-400">Settlement Type</th>
-                                        <th className="py-1.5 px-3 text-blue-300">Exposure Month</th>
-                                        <th className="py-1.5 px-3">Vol Type</th>
-                                        <th className="py-1.5 px-3 text-right">Volume</th>
-                                        <th className="py-1.5 px-3 text-right">Price</th>
-                                        <th className="py-1.5 px-3 text-right">Value USD</th>
+                                        {subColumns.map((col, cIdx) => {
+                                          const isFiltered = !!colFilters[col] && (colFilters[col].selectedValues.size > 0 || colFilters[col].condition !== 'none');
+                                          const isSorted = currentSubSort?.column === col && currentSubSort?.direction !== null;
+                                          const isRightAligned = ['Volume', 'Price', 'Value USD', 'Change in P&L'].includes(col);
+                                          const isRightHalf = cIdx > subColumns.length / 2;
+                                          const menuKey = `${item.strategyName}::${col}`;
+
+                                          return (
+                                            <th key={col} className={`py-1.5 px-3 font-semibold relative select-none ${isRightAligned ? 'text-right' : 'text-left'}`}>
+                                              <div className={`flex items-center gap-1.5 ${isRightAligned ? 'justify-end' : 'justify-between'}`}>
+                                                <span
+                                                  onClick={() => handleSubSortToggle(item.strategyName, col)}
+                                                  className="cursor-pointer hover:text-white transition-colors flex items-center gap-1"
+                                                  title={`Click to sort by ${col}`}
+                                                >
+                                                  {col}
+                                                  {isSorted && (
+                                                    currentSubSort.direction === 'asc'
+                                                      ? <ChevronUp className="w-3 h-3 text-indigo-400 inline" />
+                                                      : <ChevronDown className="w-3 h-3 text-rose-400 inline" />
+                                                  )}
+                                                </span>
+                                                <button
+                                                  type="button"
+                                                  onClick={(e) => {
+                                                    e.stopPropagation();
+                                                    setActiveSubFilterMenu(prev => prev === menuKey ? null : menuKey);
+                                                  }}
+                                                  className={`p-0.5 rounded transition-colors cursor-pointer ${
+                                                    isFiltered ? 'text-amber-400 bg-slate-800' : 'text-slate-500 hover:text-slate-200 hover:bg-slate-800'
+                                                  }`}
+                                                  title={`Filter ${col}`}
+                                                >
+                                                  <Filter className="w-3 h-3" />
+                                                </button>
+                                              </div>
+
+                                              {/* Column Filter Popover Panel */}
+                                              {activeSubFilterMenu === menuKey && (
+                                                <div className={`absolute top-full mt-1.5 z-50 text-left normal-case ${isRightHalf ? 'right-0' : 'left-0'}`} ref={subMenuRef}>
+                                                  <ColumnFilterPopover
+                                                    columnName={col}
+                                                    filter={colFilters[col] || { selectedValues: new Set(), condition: 'none', conditionValue1: '', conditionValue2: '' }}
+                                                    uniqueValues={getSubUniqueValuesForCol(col)}
+                                                    filterSearchTerm={subFilterSearchTerms[item.strategyName]?.[col] || ''}
+                                                    setFilterSearchTerm={(val) => setSubFilterSearchTerms(prev => ({
+                                                      ...prev,
+                                                      [item.strategyName]: { ...(prev[item.strategyName] || {}), [col]: val }
+                                                    }))}
+                                                    onApplyCondition={(condition, val1, val2) => handleApplySubConditionFilter(item.strategyName, col, condition, val1, val2)}
+                                                    onToggleCheckbox={(val) => handleToggleSubUniqueValueCheckbox(item.strategyName, col, val)}
+                                                    onSelectAll={(sel) => handleSelectAllSubUniqueValues(item.strategyName, col, getSubUniqueValuesForCol(col), sel)}
+                                                    onClear={() => handleClearSubColumnFilter(item.strategyName, col)}
+                                                    onClose={() => setActiveSubFilterMenu(null)}
+                                                    sortConfig={currentSubSort?.column === col ? currentSubSort : { column: col, direction: null }}
+                                                    onSortChange={(dir) => handleSubSortChange(item.strategyName, col, dir)}
+                                                  />
+                                                </div>
+                                              )}
+                                            </th>
+                                          );
+                                        })}
                                       </tr>
                                     </thead>
                                     <tbody className="divide-y divide-slate-850 bg-slate-900">
                                       {filteredSubRows.map((uRow: any, subIdx) => {
                                         const uVal = Number(String(uRow['Base_Total_Value_USD'] || '').replace(/[^0-9.-]/g, ''));
-                                        const uVol = Number(String(uRow['Volume'] || '').replace(/[^0-9.-]/g, ''));
+                                        const rawVol = Number(String(uRow['Volume'] || '').replace(/[^0-9.-]/g, ''));
+                                        const uVol = convertVolume(rawVol, uRow['Unit'] || uRow['unit']);
                                         const uPrice = Number(String(uRow['Price'] || '').replace(/[^0-9.-]/g, ''));
 
                                         const isBuy = String(uRow['Buy_Sell'] || '').toLowerCase() === 'buy' || String(uRow['Buy_Sell'] || '').toLowerCase() === 'buys';
@@ -3594,7 +6682,49 @@ export const TrmsSummaryTable: React.FC<TrmsSummaryTableProps> = ({ trmsData, vi
                                         return (
                                           <tr key={subIdx} className="hover:bg-slate-850 text-slate-300 border-b border-slate-850 font-mono transition-colors">
                                             <td className="py-1.5 px-3 font-semibold text-slate-100">{uRow['Deal Num']}</td>
-                                            <td className="py-1.5 px-3 max-w-[200px] truncate" title={uRow['Reference']}>{uRow['Reference']}</td>
+                                            <td className="py-1.5 px-3 max-w-[240px]" title={uRow['Reference']}>
+                                              {(() => {
+                                                const port = String(uRow['Internal Portfolio'] || uRow['Portfolio'] || '').trim().toLowerCase();
+                                                const isTargetPort = port === 'hedging lng' || port === 'dh lng' || port === 'dft lng';
+                                                const refValidation = isTargetPort ? validateReferenceFormat(uRow['Reference'] || '') : { isValid: true };
+                                                return (
+                                                  <div className="flex flex-col gap-0.5">
+                                                    <div className="flex items-center gap-1.5">
+                                                      <span className={`font-mono font-bold ${!refValidation.isValid ? 'text-amber-500 font-extrabold animate-pulse' : 'text-slate-200'}`}>
+                                                        {uRow['Reference'] || '—'}
+                                                      </span>
+                                                      {!refValidation.isValid && (
+                                                        <span 
+                                                          className="inline-flex items-center gap-1 px-1.5 py-0.5 bg-amber-950/55 border border-amber-800/45 text-amber-300 text-[9px] rounded-md font-bold uppercase tracking-wider font-sans"
+                                                          title={`Validation Failure: ${refValidation.error}`}
+                                                        >
+                                                          <AlertTriangle className="w-3 h-3 text-amber-500" />
+                                                          Alert
+                                                        </span>
+                                                      )}
+                                                    </div>
+                                                    {!refValidation.isValid && (
+                                                      <span className="text-[9px] text-rose-400 font-sans leading-none">
+                                                        {refValidation.error}
+                                                      </span>
+                                                    )}
+                                                  </div>
+                                                );
+                                              })()}
+                                            </td>
+                                            {activeDetailFilter === 'hedging' && (
+                                              <>
+                                                <td className="py-1.5 px-3">
+                                                  {renderIndexPill(parseIndexFromReference(uRow['Reference']))}
+                                                </td>
+                                                <td className="py-1.5 px-3 font-bold text-slate-200">
+                                                  {parseBuyerFromReference(uRow['Reference'])}
+                                                </td>
+                                                <td className="py-1.5 px-3 text-slate-400 font-semibold">
+                                                  {decodeExposureMonth(parseExpiryFromReference(uRow['Reference']))}
+                                                </td>
+                                              </>
+                                            )}
                                             <td className="py-1.5 px-3 text-slate-400">{uRow['EOD Date'] || uRow['EOD_Date']}</td>
                                             <td className="py-1.5 px-3 font-semibold text-slate-350">{uRow['Internal Portfolio']}</td>
                                             <td className={`py-1.5 px-3 font-bold ${isBuy ? 'text-emerald-400' : 'text-rose-400'}`}>
@@ -3621,10 +6751,23 @@ export const TrmsSummaryTable: React.FC<TrmsSummaryTableProps> = ({ trmsData, vi
                                                 {uRow['Volume Type']}
                                               </span>
                                             </td>
-                                            <td className="py-1.5 px-3 text-right text-slate-200">{isNaN(uVol) ? '—' : uVol.toLocaleString(undefined, { maximumFractionDigits: 3 })}</td>
+                                            <td className="py-1.5 px-3 text-right text-slate-200">{isNaN(uVol) ? '—' : `${uVol.toLocaleString(undefined, { maximumFractionDigits: 3 })} ${uRow['Unit'] || uRow['unit'] || 'MMBtu'}`}</td>
                                             <td className="py-1.5 px-3 text-right text-slate-350">{isNaN(uPrice) ? '—' : `$${uPrice.toLocaleString(undefined, { minimumFractionDigits: 2, maximumFractionDigits: 4 })}`}</td>
                                             <td className="py-1.5 px-3 text-right text-slate-100">
                                               ${isNaN(uVal) ? '—' : uVal.toLocaleString(undefined, { minimumFractionDigits: 0, maximumFractionDigits: 0 })}
+                                            </td>
+                                            <td className="py-1.5 px-3 text-right font-mono">
+                                              {(() => {
+                                                const pnl = Number(String(uRow['Change_in_Total_PnL'] || uRow['Change_in_PnL'] || '').replace(/[^0-9.-]/g, ''));
+                                                if (isNaN(pnl) || pnl === 0) return <span className="text-slate-550">—</span>;
+                                                const sign = pnl >= 0 ? '+' : '-';
+                                                const colorClass = pnl >= 0 ? 'text-emerald-400 font-bold' : 'text-rose-400 font-bold';
+                                                return (
+                                                  <span className={colorClass}>
+                                                    {sign}${Math.abs(pnl).toLocaleString(undefined, { maximumFractionDigits: 0 })}
+                                                  </span>
+                                                );
+                                              })()}
                                             </td>
                                           </tr>
                                         );
@@ -3632,17 +6775,23 @@ export const TrmsSummaryTable: React.FC<TrmsSummaryTableProps> = ({ trmsData, vi
                                     </tbody>
                                     <tfoot className="bg-slate-950 border-t border-slate-800 font-bold text-slate-200">
                                       <tr>
-                                        <td colSpan={10} className="py-2 px-3 text-slate-450 text-left uppercase tracking-wider font-extrabold text-[10px]">
+                                        <td colSpan={activeDetailFilter === 'hedging' ? 13 : 10} className="py-2 px-3 text-slate-450 text-left uppercase tracking-wider font-extrabold text-[10px]">
                                           SUBTOTAL SUM
                                         </td>
                                         <td className="py-2 px-3 text-right text-blue-400 font-mono">
-                                          {subTotals.totalVol === 0 ? '—' : subTotals.totalVol.toLocaleString(undefined, { maximumFractionDigits: 3 })}
+                                          {subTotals.totalVol === 0 ? '—' : `${subTotals.totalVol.toLocaleString(undefined, { maximumFractionDigits: 3 })} ${(() => {
+                                            const units = Array.from(new Set(filteredSubRows.map((r: any) => String(r['Unit'] || r['unit'] || 'MMBtu').trim())));
+                                            return units.length === 1 ? units[0] : (selectedUnit !== 'ALL' ? selectedUnit : 'Units');
+                                          })()}`}
                                         </td>
                                         <td className="py-2 px-3 text-right text-slate-350 font-mono">
                                           {subAvgPrice === 0 ? '—' : `$${subAvgPrice.toLocaleString(undefined, { minimumFractionDigits: 2, maximumFractionDigits: 4 })}`}
                                         </td>
                                         <td className="py-2 px-3 text-right text-slate-100 font-mono">
                                           ${subTotals.totalVal.toLocaleString(undefined, { minimumFractionDigits: 0, maximumFractionDigits: 0 })}
+                                        </td>
+                                        <td className={`py-2 px-3 text-right font-mono ${subTotals.totalPnL >= 0 ? 'text-emerald-400' : 'text-rose-400'}`}>
+                                          {subTotals.totalPnL >= 0 ? '+' : '-'}${Math.abs(subTotals.totalPnL).toLocaleString(undefined, { minimumFractionDigits: 0, maximumFractionDigits: 0 })}
                                         </td>
                                       </tr>
                                     </tfoot>
