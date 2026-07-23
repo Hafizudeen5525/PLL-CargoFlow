@@ -2,7 +2,6 @@ import React, { useState, useMemo, useEffect } from 'react';
 import { motion, AnimatePresence } from 'framer-motion';
 import { CargoProfile, PnLBucket } from '../types';
 import { toast } from 'react-hot-toast';
-import { generateCustomRuleFromPrompt } from '../services/geminiService';
 
 interface CustomRule {
   id: string;
@@ -35,38 +34,36 @@ interface CustomRule {
 }
 
 const CARGO_PROFILE_FIELDS = [
-  { value: 'strategyName', label: 'Strategy / SN Number', type: 'string', description: 'Strategy identification number or cargo title' },
-  { value: 'buyer', label: 'Buyer / Counterparty', type: 'string', description: 'Purchasing counterparty or customer name' },
-  { value: 'source', label: 'Internal Portfolio / Source', type: 'string', description: 'Supply portfolio origin or upstream facility' },
-  { value: 'incoterms', label: 'Incoterms (FOB/DES)', type: 'string', description: 'Delivery terms e.g., Free On Board or Delivered Ex-Ship' },
-  { value: 'loadedVolume', label: 'Loaded Buy Volume (MMBtu)', type: 'number', description: 'Physical cargo volume loaded at origin port' },
-  { value: 'deliveredVolume', label: 'Delivered Sell Volume (MMBtu)', type: 'number', description: 'Physical cargo volume delivered at destination port' },
-  { value: 'absoluteBuyPrice', label: 'Absolute Buy Price ($/MMBtu)', type: 'number', description: 'Contract purchase price per MMBtu' },
-  { value: 'absoluteSellPrice', label: 'Absolute Sell Price ($/MMBtu)', type: 'number', description: 'Contract sales price per MMBtu' },
-  { value: 'loadingDate', label: 'Loading Date', type: 'date', description: 'Scheduled cargo loading / bill of lading date' },
-  { value: 'deliveryDate', label: 'Delivery Date', type: 'date', description: 'Scheduled cargo discharge / delivery date' },
-  { value: 'reconciledSrcCost', label: 'Reconciled Shipping/SRC Cost ($)', type: 'number', description: 'Total shipping and SRC expenditure ($)' },
-  { value: 'srcUnitFee', label: 'Shipping Unit Fee ($/Unit)', type: 'number', description: 'Per unit shipping or SRC tariff fee' },
-  { value: 'finalPhysicalPnL', label: 'Physical PnL ($)', type: 'number', description: 'Physical margin before financial hedging ($)' },
-  { value: 'finalTotalPnL', label: 'Total PnL (incl. Hedging) ($)', type: 'number', description: 'Net PnL including physical and derivative hedges ($)' },
-  { value: 'pnlBucket', label: 'PnL Bucket (Realized/Unrealized)', type: 'string', description: 'Realized or Unrealized P&L status' },
-  { value: 'jarvisNo', label: 'Jarvis Reference No', type: 'string', description: 'Unique Jarvis tracking ID' },
+  { value: 'strategyName', label: 'Strategy Name', type: 'string' },
+  { value: 'buyer', label: 'Buyer / Counterparty', type: 'string' },
+  { value: 'source', label: 'Internal Portfolio / Source', type: 'string' },
+  { value: 'incoterms', label: 'Incoterms (FOB/DES)', type: 'string' },
+  { value: 'loadedVolume', label: 'Loaded Volume (MMBtu)', type: 'number' },
+  { value: 'deliveredVolume', label: 'Delivered Volume (MMBtu)', type: 'number' },
+  { value: 'absoluteBuyPrice', label: 'Absolute Buy Price ($/MMBtu)', type: 'number' },
+  { value: 'absoluteSellPrice', label: 'Absolute Sell Price ($/MMBtu)', type: 'number' },
+  { value: 'loadingDate', label: 'Loading Date', type: 'date' },
+  { value: 'deliveryDate', label: 'Delivery Date', type: 'date' },
+  { value: 'reconciledSrcCost', label: 'Reconciled Shipping/SRC Cost ($)', type: 'number' },
+  { value: 'srcUnitFee', label: 'Shipping Unit Fee ($/Unit)', type: 'number' },
+  { value: 'finalPhysicalPnL', label: 'Physical PnL ($)', type: 'number' },
+  { value: 'finalTotalPnL', label: 'Total PnL (incl. Hedging) ($)', type: 'number' },
+  { value: 'pnlBucket', label: 'PnL Bucket (Realized/Unrealized)', type: 'string' },
+  { value: 'jarvisNo', label: 'Jarvis No', type: 'string' },
 ];
 
 const TRMS_PROFILE_FIELDS = [
-  { value: 'trmsPurchaseValue', label: 'Purchase Volume / Leg Value (MMBtu)', type: 'number', description: 'Total TRMS purchase volume / leg value for the strategy as shown in TRMS summary table' },
-  { value: 'trmsSalesValue', label: 'Sales Volume / Leg Value (MMBtu)', type: 'number', description: 'Total TRMS sales volume / leg value for the strategy as shown in TRMS summary table' },
-  { value: 'weightedBuyPrice', label: 'Weighted Avg Buy Price ($/MMBtu)', type: 'number', description: 'Weighted average purchase price across all buy legs for the strategy' },
-  { value: 'weightedSellPrice', label: 'Weighted Avg Sell Price ($/MMBtu)', type: 'number', description: 'Weighted average sales price across all sell legs for the strategy' },
-  { value: 'commodityValue', label: 'Commodity Value ($)', type: 'number', description: 'Physical commodity valuation ($)' },
-  { value: 'srcValue', label: 'Shipping / SRC Cost ($)', type: 'number', description: 'TRMS shipping and SRC allocation cost ($)' },
-  { value: 'hedgingPnL', label: 'Hedging PnL ($)', type: 'number', description: 'Financial derivatives and hedging P&L ($)' },
-  { value: 'strategyName', label: 'Strategy / SN Number', type: 'string', description: 'Strategy identification code in TRMS' },
-  { value: 'volumeType', label: 'Volume Type', type: 'string', description: 'Fixed, Indexed, or Variable volume specification' },
-  { value: 'priceStatus', label: 'Price Status', type: 'string', description: 'Priced vs Unpriced status' },
-  { value: 'loadingDate', label: 'Loading Date', type: 'date', description: 'Scheduled loading date in TRMS' },
-  { value: 'deliveryDate', label: 'Delivery Date', type: 'date', description: 'Scheduled delivery date in TRMS' },
-  { value: 'commWindowEndDate', label: 'Comm Window End Date', type: 'date', description: 'Pricing or commercial window end date' }
+  { value: 'strategyName', label: 'Strategy Name', type: 'string' },
+  { value: 'volumeType', label: 'Volume Type', type: 'string' },
+  { value: 'priceStatus', label: 'Price Status', type: 'string' },
+  { value: 'commodityValue', label: 'Commodity Value ($)', type: 'number' },
+  { value: 'srcValue', label: 'Shipping / SRC Cost ($)', type: 'number' },
+  { value: 'hedgingPnL', label: 'Hedging PnL ($)', type: 'number' },
+  { value: 'trmsPurchaseValue', label: 'Purchase Leg Value ($)', type: 'number' },
+  { value: 'trmsSalesValue', label: 'Sales Leg Value ($)', type: 'number' },
+  { value: 'loadingDate', label: 'Loading Date', type: 'date' },
+  { value: 'deliveryDate', label: 'Delivery Date', type: 'date' },
+  { value: 'commWindowEndDate', label: 'Comm Window End Date', type: 'date' }
 ];
 
 const DEFAULT_CUSTOM_RULES: CustomRule[] = [
@@ -482,16 +479,6 @@ export const DataQualityDashboard: React.FC<DataQualityDashboardProps> = ({ prof
   const [selectedDimensionModal, setSelectedDimensionModal] = useState<string | null>(null);
   const [expandedRuleNameModal, setExpandedRuleNameModal] = useState<string | null>(null);
   const [sampleFilterModal, setSampleFilterModal] = useState<'all' | 'passed' | 'failed'>('all');
-
-  // AI Rule Generator State
-  const [isAiRuleModalOpen, setIsAiRuleModalOpen] = useState(false);
-  const [aiPrompt, setAiPrompt] = useState('');
-  const [isGeneratingRule, setIsGeneratingRule] = useState(false);
-  const [aiGeneratedRulePreview, setAiGeneratedRulePreview] = useState<CustomRule | null>(null);
-  const [customApiKey, setCustomApiKey] = useState(() => localStorage.getItem('user_gemini_api_key') || '');
-  const [showApiKeyInput, setShowApiKeyInput] = useState(false);
-  const [aiRateLimitCount, setAiRateLimitCount] = useState(0);
-  const [lastAiRequestTime, setLastAiRequestTime] = useState(0);
 
   // Custom Rules state
   const [customRules, setCustomRules] = useState<CustomRule[]>(() => {
@@ -988,15 +975,10 @@ export const DataQualityDashboard: React.FC<DataQualityDashboardProps> = ({ prof
       }
     });
 
-    // Extract TRMS strategy summaries as checkable uniform objects directly from TRMS summary table rows
+    // Extract TRMS strategy summaries as checkable uniform objects
     const trmsStrategies: any[] = [];
     if (trmsData && trmsData.trmsAgg) {
-      Object.entries(trmsData.trmsAgg).forEach(([strategyName, data]: [string, any]) => {
-        const purchaseVol = Math.abs(data.trmsPurchaseValue || 0);
-        const salesVol = Math.abs(data.trmsSalesValue || 0);
-        const buyPrice = data.weightedBuyPrice ?? (purchaseVol > 0 ? Math.abs((data.commodityValue || 0) / purchaseVol) : 0);
-        const sellPrice = data.weightedSellPrice ?? (salesVol > 0 ? Math.abs((data.commodityValue || 0) / salesVol) : 0);
-
+      Object.entries(trmsData.trmsAgg).forEach(([strategyName, data]) => {
         trmsStrategies.push({
           id: `trms-${strategyName}`,
           strategyName: strategyName,
@@ -1005,10 +987,8 @@ export const DataQualityDashboard: React.FC<DataQualityDashboardProps> = ({ prof
           commodityValue: data.commodityValue || 0,
           srcValue: data.srcValue || 0,
           hedgingPnL: data.hedgingPnL || 0,
-          trmsPurchaseValue: purchaseVol,
-          trmsSalesValue: salesVol,
-          weightedBuyPrice: buyPrice,
-          weightedSellPrice: sellPrice,
+          trmsPurchaseValue: data.trmsPurchaseValue || 0,
+          trmsSalesValue: data.trmsSalesValue || 0,
           loadingDate: data.loadingDate || '',
           deliveryDate: data.deliveryDate || '',
           commWindowEndDate: data.commWindowEndDate || ''
@@ -1846,63 +1826,6 @@ export const DataQualityDashboard: React.FC<DataQualityDashboardProps> = ({ prof
     }
   };
 
-  const handleGenerateAiRule = async (promptToUse?: string) => {
-    const query = (promptToUse || aiPrompt).trim();
-    if (!query) {
-      toast.error("Please enter a rule description first.");
-      return;
-    }
-
-    const now = Date.now();
-    if (now - lastAiRequestTime < 60000 && aiRateLimitCount >= 5) {
-      toast.error("Rate limit reached (max 5 requests/min). Please wait a moment before trying again.");
-      return;
-    }
-
-    setIsGeneratingRule(true);
-    setAiGeneratedRulePreview(null);
-
-    try {
-      const generatedRule = await generateCustomRuleFromPrompt(query, customApiKey);
-      setAiGeneratedRulePreview(generatedRule);
-      toast.success("AI successfully created your custom rule preview!");
-
-      setLastAiRequestTime(now);
-      setAiRateLimitCount(prev => (now - lastAiRequestTime < 60000 ? prev + 1 : 1));
-    } catch (error: any) {
-      console.error("AI Rule Generation error:", error);
-      toast.error(error.message || "Failed to generate AI rule. Check prompt or API key.");
-    } finally {
-      setIsGeneratingRule(false);
-    }
-  };
-
-  const handleAcceptAiGeneratedRule = () => {
-    if (!aiGeneratedRulePreview) return;
-    setCustomRules(prev => [aiGeneratedRulePreview, ...prev]);
-    toast.success(`Rule "${aiGeneratedRulePreview.name}" registered to inventory!`);
-    setIsAiRuleModalOpen(false);
-    setAiGeneratedRulePreview(null);
-    setAiPrompt('');
-  };
-
-  const handleEditAiRuleInForm = () => {
-    if (!aiGeneratedRulePreview) return;
-    handleOpenEditRule(aiGeneratedRulePreview);
-    setIsAiRuleModalOpen(false);
-  };
-
-  const handleSaveApiKey = (key: string) => {
-    setCustomApiKey(key);
-    if (key.trim()) {
-      localStorage.setItem('user_gemini_api_key', key.trim());
-      toast.success("Personal Gemini API key saved locally!");
-    } else {
-      localStorage.removeItem('user_gemini_api_key');
-      toast.success("Cleared personal API key. Using default system key.");
-    }
-  };
-
   return (
     <div className="flex-1 flex flex-col min-h-0 bg-slate-50/40 p-4 lg:p-6 overflow-y-auto">
       {/* Dataset Scope Switcher Bar */}
@@ -2446,7 +2369,7 @@ export const DataQualityDashboard: React.FC<DataQualityDashboardProps> = ({ prof
                   Configure real-time quality limits applied automatically to strategies. Toggling rules instantly refreshes active diagnostics, system health status, and warnings.
                 </p>
               </div>
-              <div className="flex items-center gap-2 self-stretch sm:self-auto shrink-0 flex-wrap">
+              <div className="flex items-center gap-2 self-stretch sm:self-auto shrink-0">
                 <button
                   type="button"
                   onClick={handleResetToDefaults}
@@ -2460,26 +2383,13 @@ export const DataQualityDashboard: React.FC<DataQualityDashboardProps> = ({ prof
                 </button>
                 <button
                   type="button"
-                  onClick={() => {
-                    setIsAiRuleModalOpen(true);
-                    setAiGeneratedRulePreview(null);
-                  }}
-                  className="px-4 py-2 text-[10px] font-black text-white bg-gradient-to-r from-indigo-600 via-purple-600 to-pink-600 hover:from-indigo-700 hover:via-purple-700 hover:to-pink-700 rounded-xl uppercase tracking-wider transition-all flex items-center gap-1.5 shadow-md hover:shadow-indigo-500/25 active:scale-98"
-                >
-                  <svg className="w-3.5 h-3.5" fill="none" stroke="currentColor" viewBox="0 0 24 24">
-                    <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2.5} d="M13 10V3L4 14h7v7l9-11h-7z" />
-                  </svg>
-                  <span>✨ Create Rule with AI</span>
-                </button>
-                <button
-                  type="button"
                   onClick={handleOpenCreateRule}
-                  className="px-4 py-2 text-[10px] font-black text-slate-700 hover:text-slate-900 bg-slate-100 hover:bg-slate-200 border border-slate-200/80 rounded-xl uppercase tracking-wider transition-all flex items-center gap-1.5 shadow-xs active:scale-98"
+                  className="px-4 py-2 text-[10px] font-black text-white bg-slate-900 hover:bg-slate-800 rounded-xl uppercase tracking-wider transition-all flex items-center gap-1.5 shadow-sm active:scale-98"
                 >
                   <svg className="w-3.5 h-3.5" fill="none" stroke="currentColor" viewBox="0 0 24 24">
                     <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2.5} d="M12 4v16m8-8H4" />
                   </svg>
-                  Manual Rule
+                  Create custom rule
                 </button>
               </div>
             </div>
@@ -2781,7 +2691,7 @@ export const DataQualityDashboard: React.FC<DataQualityDashboardProps> = ({ prof
                       onClick={() => {
                         setRuleDataset('TRMS');
                         if (!editingRuleId) {
-                          setRuleField('trmsPurchaseValue');
+                          setRuleField('commodityValue');
                           setRuleCompareField('loadingDate');
                         }
                       }}
@@ -2800,186 +2710,6 @@ export const DataQualityDashboard: React.FC<DataQualityDashboardProps> = ({ prof
                       : "This rule will monitor aggregated strategy positions, physical valuation, and hedge statuses in TRMS."
                     }
                   </p>
-                </div>
-
-                {/* Interactive Dataset Column Explorer & Quick Rule Templates */}
-                <div className="bg-slate-50 border border-slate-200/80 p-3.5 rounded-2xl space-y-3">
-                  <div className="flex items-center justify-between">
-                    <span className="text-[10px] font-black uppercase text-slate-600 tracking-wider flex items-center gap-1.5">
-                      <span>📋 Available {ruleDataset} Columns</span>
-                      <span className="px-1.5 py-0.5 bg-indigo-100 text-indigo-700 rounded text-[9px] font-bold">
-                        {(ruleDataset === 'TRMS' ? TRMS_PROFILE_FIELDS : CARGO_PROFILE_FIELDS).length} Columns
-                      </span>
-                    </span>
-                    <span className="text-[9px] text-slate-400 font-bold">Click to select as Target Field</span>
-                  </div>
-
-                  {/* Column Pills */}
-                  <div className="flex flex-wrap gap-1.5 max-h-36 overflow-y-auto p-1 bg-white rounded-xl border border-slate-200/60">
-                    {(ruleDataset === 'TRMS' ? TRMS_PROFILE_FIELDS : CARGO_PROFILE_FIELDS).map(col => {
-                      const isLhsSelected = ruleField === col.value;
-                      const isRhsSelected = ruleCondition === 'mathCompare' && rhsField === col.value;
-                      return (
-                        <button
-                          key={col.value}
-                          type="button"
-                          onClick={() => {
-                            setRuleField(col.value);
-                            toast.success(`Target field set to "${col.label}" (${col.value})`);
-                          }}
-                          className={`px-2.5 py-1 rounded-lg text-[10px] font-bold border transition-all text-left flex items-center gap-1.5 ${
-                            isLhsSelected
-                              ? 'bg-indigo-600 border-indigo-600 text-white shadow-xs'
-                              : isRhsSelected
-                              ? 'bg-purple-100 border-purple-300 text-purple-800 font-extrabold'
-                              : 'bg-slate-50 border-slate-200 text-slate-700 hover:bg-indigo-50 hover:text-indigo-700 hover:border-indigo-200'
-                          }`}
-                          title={col.description}
-                        >
-                          <span>{col.label}</span>
-                          <span className={`text-[8.5px] font-mono px-1 rounded ${isLhsSelected ? 'bg-indigo-700 text-white' : 'bg-slate-200 text-slate-600'}`}>
-                            {col.value}
-                          </span>
-                        </button>
-                      );
-                    })}
-                  </div>
-
-                  {/* Selected Column Description Hint */}
-                  {(() => {
-                    const selCol = (ruleDataset === 'TRMS' ? TRMS_PROFILE_FIELDS : CARGO_PROFILE_FIELDS).find(f => f.value === ruleField);
-                    if (!selCol) return null;
-                    return (
-                      <div className="text-[10px] text-indigo-900 bg-indigo-50/80 border border-indigo-100 p-2 rounded-xl flex items-center gap-2">
-                        <span className="shrink-0 font-bold">💡 Active Target Column:</span>
-                        <span className="font-semibold text-slate-700">{selCol.label} (<code className="font-mono text-indigo-700">{selCol.value}</code>) &mdash; {selCol.description}</span>
-                      </div>
-                    );
-                  })()}
-
-                  {/* Quick One-Click Formula Presets */}
-                  <div className="pt-2 border-t border-slate-200/60">
-                    <span className="text-[9px] font-black uppercase tracking-wider text-slate-400 block mb-1.5">
-                      ⚡ Quick One-Click Rule Templates ({ruleDataset}):
-                    </span>
-                    <div className="flex flex-wrap gap-1.5">
-                      {ruleDataset === 'TRMS' ? (
-                        <>
-                          <button
-                            type="button"
-                            onClick={() => {
-                              setRuleName('TRMS Purchase Volume vs Sales Volume Match');
-                              setRuleDescription('Verifies that TRMS Purchase Leg Volume equals Sales Leg Volume for the strategy.');
-                              setRuleCategory('Quantity Validation');
-                              setRuleSeverity('error');
-                              setRuleIntent('requirement');
-                              setRuleField('trmsPurchaseValue');
-                              setRuleCondition('mathCompare');
-                              setRhsType('field');
-                              setRhsField('trmsSalesValue');
-                              setMathOperator('equals');
-                              setLhsMultiplier('1');
-                              setRhsMultiplier('1');
-                              toast.success('Loaded template: Purchase Volume vs Sales Volume!');
-                            }}
-                            className="px-2.5 py-1 bg-gradient-to-r from-indigo-50 to-purple-50 hover:from-indigo-100 hover:to-purple-100 border border-indigo-200 rounded-lg text-[10px] font-extrabold text-indigo-800 transition-all shadow-xs"
-                          >
-                            ⚖️ Purchase Vol == Sales Vol
-                          </button>
-                          <button
-                            type="button"
-                            onClick={() => {
-                              setRuleName('TRMS SRC Shipping Cost Limit (<= $0)');
-                              setRuleDescription('Requires TRMS shipping/SRC allocation cost to be zero or negative.');
-                              setRuleCategory('Shipping & SRC');
-                              setRuleSeverity('error');
-                              setRuleIntent('requirement');
-                              setRuleField('srcValue');
-                              setRuleCondition('lessThanOrEqual');
-                              setRuleValue('0');
-                              toast.success('Loaded template: TRMS SRC Cost <= 0!');
-                            }}
-                            className="px-2.5 py-1 bg-gradient-to-r from-indigo-50 to-purple-50 hover:from-indigo-100 hover:to-purple-100 border border-indigo-200 rounded-lg text-[10px] font-extrabold text-indigo-800 transition-all shadow-xs"
-                          >
-                            🚢 SRC Cost &le; $0
-                          </button>
-                          <button
-                            type="button"
-                            onClick={() => {
-                              setRuleName('TRMS Loading Date Before Delivery Date');
-                              setRuleDescription('TRMS loading date must chronologically precede delivery date.');
-                              setRuleCategory('Date Validation');
-                              setRuleSeverity('error');
-                              setRuleIntent('requirement');
-                              setRuleField('loadingDate');
-                              setRuleCondition('dateBeforeField');
-                              setRuleCompareField('deliveryDate');
-                              toast.success('Loaded template: Loading Date Before Delivery Date!');
-                            }}
-                            className="px-2.5 py-1 bg-gradient-to-r from-indigo-50 to-purple-50 hover:from-indigo-100 hover:to-purple-100 border border-indigo-200 rounded-lg text-[10px] font-extrabold text-indigo-800 transition-all shadow-xs"
-                          >
-                            {"📅 Loading < Delivery Date"}
-                          </button>
-                          <button
-                            type="button"
-                            onClick={() => {
-                              setRuleName('Flag Unpriced TRMS Strategies');
-                              setRuleDescription('Alerts if TRMS strategy priceStatus is unpriced.');
-                              setRuleCategory('Pricing & Valuations');
-                              setRuleSeverity('warning');
-                              setRuleIntent('violation');
-                              setRuleField('priceStatus');
-                              setRuleCondition('equals');
-                              setRuleValue('unpriced');
-                              toast.success('Loaded template: Flag Unpriced TRMS Strategies!');
-                            }}
-                            className="px-2.5 py-1 bg-gradient-to-r from-indigo-50 to-purple-50 hover:from-indigo-100 hover:to-purple-100 border border-indigo-200 rounded-lg text-[10px] font-extrabold text-indigo-800 transition-all shadow-xs"
-                          >
-                            ⚠️ Price Status == unpriced
-                          </button>
-                        </>
-                      ) : (
-                        <>
-                          <button
-                            type="button"
-                            onClick={() => {
-                              setRuleName('Jarvis Loaded Buy Volume vs Delivered Volume');
-                              setRuleDescription('Compares physical loaded buy volume against delivered sell volume in Jarvis.');
-                              setRuleCategory('Quantity Validation');
-                              setRuleSeverity('error');
-                              setRuleIntent('requirement');
-                              setRuleField('loadedVolume');
-                              setRuleCondition('mathCompare');
-                              setRhsType('field');
-                              setRhsField('deliveredVolume');
-                              setMathOperator('equals');
-                              toast.success('Loaded template: Loaded Volume vs Delivered Volume!');
-                            }}
-                            className="px-2.5 py-1 bg-gradient-to-r from-indigo-50 to-purple-50 hover:from-indigo-100 hover:to-purple-100 border border-indigo-200 rounded-lg text-[10px] font-extrabold text-indigo-800 transition-all shadow-xs"
-                          >
-                            ⚖️ Loaded Vol == Delivered Vol
-                          </button>
-                          <button
-                            type="button"
-                            onClick={() => {
-                              setRuleName('Jarvis Reconciled Shipping Cost (<= $0)');
-                              setRuleDescription('Reconciled shipping / SRC cost in Jarvis must be 0 or negative.');
-                              setRuleCategory('Shipping & SRC');
-                              setRuleSeverity('error');
-                              setRuleIntent('requirement');
-                              setRuleField('reconciledSrcCost');
-                              setRuleCondition('lessThanOrEqual');
-                              setRuleValue('0');
-                              toast.success('Loaded template: Reconciled SRC Cost <= 0!');
-                            }}
-                            className="px-2.5 py-1 bg-gradient-to-r from-indigo-50 to-purple-50 hover:from-indigo-100 hover:to-purple-100 border border-indigo-200 rounded-lg text-[10px] font-extrabold text-indigo-800 transition-all shadow-xs"
-                          >
-                            🚢 Reconciled SRC &le; $0
-                          </button>
-                        </>
-                      )}
-                    </div>
-                  </div>
                 </div>
 
                 {/* Rule info */}
@@ -3666,289 +3396,6 @@ export const DataQualityDashboard: React.FC<DataQualityDashboardProps> = ({ prof
                   </>
                 );
               })()}
-            </motion.div>
-          </div>
-        )}
-      </AnimatePresence>
-
-      {/* AI Custom Rule Generator Modal */}
-      <AnimatePresence>
-        {isAiRuleModalOpen && (
-          <div className="fixed inset-0 z-[120] flex items-center justify-center p-4">
-            {/* Backdrop */}
-            <motion.div
-              initial={{ opacity: 0 }}
-              animate={{ opacity: 1 }}
-              exit={{ opacity: 0 }}
-              onClick={() => setIsAiRuleModalOpen(false)}
-              className="fixed inset-0 bg-slate-900/70 backdrop-blur-xs"
-            />
-
-            {/* Modal Content */}
-            <motion.div
-              initial={{ scale: 0.95, opacity: 0, y: 10 }}
-              animate={{ scale: 1, opacity: 1, y: 0 }}
-              exit={{ scale: 0.95, opacity: 0, y: 10 }}
-              transition={{ type: 'spring', damping: 25, stiffness: 350 }}
-              className="bg-white rounded-3xl overflow-hidden shadow-2xl border border-slate-200 w-full max-w-2xl z-10 flex flex-col max-h-[90vh]"
-            >
-              {/* Header */}
-              <div className="bg-gradient-to-r from-slate-900 via-indigo-950 to-slate-900 text-white p-5 flex items-center justify-between shrink-0 border-b border-indigo-900/50">
-                <div className="flex items-center gap-3">
-                  <div className="w-9 h-9 rounded-2xl bg-gradient-to-tr from-indigo-500 to-pink-500 flex items-center justify-center text-white shadow-md font-bold text-lg">
-                    ✨
-                  </div>
-                  <div>
-                    <div className="flex items-center gap-2">
-                      <h3 className="text-sm font-bold text-white">AI Rule Assistant</h3>
-                      <span className="px-2 py-0.5 bg-indigo-500/30 text-indigo-200 border border-indigo-400/30 rounded-md text-[9px] font-black uppercase tracking-wider">
-                        Gemini 2.5 Flash
-                      </span>
-                    </div>
-                    <p className="text-[11px] text-indigo-200/80 font-normal mt-0.5">
-                      Describe what rule you want in plain English, and AI will configure it instantly.
-                    </p>
-                  </div>
-                </div>
-                <button
-                  type="button"
-                  onClick={() => setIsAiRuleModalOpen(false)}
-                  className="rounded-lg p-1.5 hover:bg-white/10 transition-colors text-slate-300 hover:text-white"
-                >
-                  <svg className="w-5 h-5" fill="none" stroke="currentColor" viewBox="0 0 24 24">
-                    <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M6 18L18 6M6 6l12 12" />
-                  </svg>
-                </button>
-              </div>
-
-              <div className="p-6 overflow-y-auto space-y-5 text-xs text-slate-700">
-                {/* Prompt Input Area */}
-                <div className="space-y-2">
-                  <label className="text-[10px] font-black uppercase text-slate-500 tracking-wider flex items-center justify-between">
-                    <span>What custom rule would you like to build?</span>
-                    <span className="text-[9px] text-indigo-600 font-bold">Natural Language Input</span>
-                  </label>
-                  <div className="relative">
-                    <textarea
-                      value={aiPrompt}
-                      onChange={(e) => setAiPrompt(e.target.value)}
-                      placeholder="e.g., 'Alert me if sell price is higher than $25/MMBtu' or 'Loading date cannot be after delivery date' or 'TRMS SRC cost must be 0 or less'..."
-                      rows={3}
-                      className="w-full text-xs font-semibold px-3.5 py-2.5 border border-slate-200 rounded-2xl focus:ring-2 focus:ring-indigo-500/20 focus:border-indigo-500 outline-none resize-none bg-slate-50/50"
-                    />
-                  </div>
-                </div>
-
-                {/* Quick Example Chips */}
-                <div className="space-y-1.5">
-                  <span className="text-[9px] font-extrabold uppercase text-slate-400 tracking-wider block">
-                    💡 Click a sample rule prompt to test:
-                  </span>
-                  <div className="flex flex-wrap gap-1.5">
-                    {[
-                      "Compare TRMS purchase volume against sales volume",
-                      "Alert me if sell price is higher than $25/MMBtu",
-                      "Loading date must be strictly before delivery date",
-                      "TRMS Shipping / SRC cost must be 0 or less",
-                      "Flag error if TRMS strategy price status is unpriced",
-                      "Flag error if TRMS and Jarvis volumes differ by over 5%"
-                    ].map((sample, sIdx) => (
-                      <button
-                        key={sIdx}
-                        type="button"
-                        onClick={() => {
-                          setAiPrompt(sample);
-                          handleGenerateAiRule(sample);
-                        }}
-                        className="px-2.5 py-1 text-[10px] font-bold text-slate-600 bg-slate-100 hover:bg-indigo-50 hover:text-indigo-700 border border-slate-200 hover:border-indigo-200 rounded-xl transition-all text-left"
-                      >
-                        {sample}
-                      </button>
-                    ))}
-                  </div>
-                </div>
-
-                {/* TRMS Available Column Reference Bar */}
-                <div className="space-y-1.5 bg-slate-50 border border-slate-200/80 p-3 rounded-2xl">
-                  <div className="flex items-center justify-between text-[9px] font-black uppercase text-slate-500 tracking-wider">
-                    <span>📋 TRMS Column Attributes (Click to insert into prompt):</span>
-                    <span className="text-[9px] text-indigo-600 font-bold">TRMS Columns</span>
-                  </div>
-                  <div className="flex flex-wrap gap-1.5">
-                    {TRMS_PROFILE_FIELDS.map(col => (
-                      <button
-                        key={col.value}
-                        type="button"
-                        onClick={() => {
-                          setAiPrompt(prev => prev ? `${prev} ${col.label}` : `Check ${col.label}`);
-                          toast.success(`Inserted "${col.label}"`);
-                        }}
-                        className="px-2 py-0.5 text-[9.5px] font-bold text-slate-700 bg-white hover:bg-indigo-50 hover:text-indigo-700 border border-slate-200 hover:border-indigo-200 rounded-lg transition-all"
-                        title={col.description}
-                      >
-                        <span>{col.label}</span>
-                      </button>
-                    ))}
-                  </div>
-                </div>
-
-                {/* Generate Button */}
-                <div className="flex justify-end">
-                  <button
-                    type="button"
-                    disabled={isGeneratingRule || !aiPrompt.trim()}
-                    onClick={() => handleGenerateAiRule()}
-                    className="px-6 py-2.5 text-xs font-black uppercase tracking-wider text-white bg-gradient-to-r from-indigo-600 to-purple-600 hover:from-indigo-700 hover:to-purple-700 disabled:opacity-50 disabled:cursor-not-allowed rounded-xl shadow-md transition-all flex items-center gap-2"
-                  >
-                    {isGeneratingRule ? (
-                      <>
-                        <svg className="w-4 h-4 animate-spin text-white" fill="none" viewBox="0 0 24 24">
-                          <circle className="opacity-25" cx="12" cy="12" r="10" stroke="currentColor" strokeWidth="4" />
-                          <path className="opacity-75" fill="currentColor" d="M4 12a8 8 0 018-8V0C5.373 0 0 5.373 0 12h4zm2 5.291A7.962 7.962 0 014 12H0c0 3.042 1.135 5.824 3 7.938l3-2.647z" />
-                        </svg>
-                        <span>Analyzing & Generating Rule...</span>
-                      </>
-                    ) : (
-                      <>
-                        <span>✨ Generate Custom Rule</span>
-                      </>
-                    )}
-                  </button>
-                </div>
-
-                {/* Preview of Generated Rule */}
-                {aiGeneratedRulePreview && (
-                  <motion.div
-                    initial={{ opacity: 0, y: 10 }}
-                    animate={{ opacity: 1, y: 0 }}
-                    className="bg-indigo-50/40 border border-indigo-200 rounded-2xl p-4 space-y-3"
-                  >
-                    <div className="flex items-center justify-between border-b border-indigo-100 pb-2">
-                      <span className="text-[10px] font-black uppercase tracking-wider text-indigo-900 flex items-center gap-1.5">
-                        <span className="w-2 h-2 rounded-full bg-emerald-500 animate-pulse" />
-                        Generated Rule Preview
-                      </span>
-                      <span className={`px-2 py-0.5 rounded text-[9px] font-black uppercase ${
-                        aiGeneratedRulePreview.severity === 'error' ? 'bg-rose-100 text-rose-800' :
-                        aiGeneratedRulePreview.severity === 'warning' ? 'bg-amber-100 text-amber-800' : 'bg-blue-100 text-blue-800'
-                      }`}>
-                        {aiGeneratedRulePreview.severity}
-                      </span>
-                    </div>
-
-                    <div className="grid grid-cols-2 gap-3 text-xs">
-                      <div>
-                        <span className="text-[9px] font-extrabold uppercase text-slate-400 block">Rule Title</span>
-                        <span className="font-bold text-slate-800">{aiGeneratedRulePreview.name}</span>
-                      </div>
-                      <div>
-                        <span className="text-[9px] font-extrabold uppercase text-slate-400 block">Target Dataset & Category</span>
-                        <span className="font-bold text-slate-800">{aiGeneratedRulePreview.targetDataset || 'Jarvis'} • {aiGeneratedRulePreview.category}</span>
-                      </div>
-                    </div>
-
-                    <div>
-                      <span className="text-[9px] font-extrabold uppercase text-slate-400 block">Description</span>
-                      <p className="text-slate-600 font-medium text-[11px] leading-relaxed">{aiGeneratedRulePreview.description}</p>
-                    </div>
-
-                    <div className="bg-slate-900 text-emerald-400 p-2.5 rounded-xl font-mono text-[11px] flex items-center justify-between">
-                      <div>
-                        <span className="text-[9px] uppercase tracking-wider text-slate-400 font-sans block">Evaluated Logic:</span>
-                        <span>{aiGeneratedRulePreview.field} {aiGeneratedRulePreview.condition} {aiGeneratedRulePreview.value || aiGeneratedRulePreview.compareField}</span>
-                      </div>
-                      <span className="text-[9px] font-sans font-bold px-2 py-0.5 rounded bg-slate-800 text-slate-300">
-                        {aiGeneratedRulePreview.ruleIntent === 'requirement' ? '✅ Requirement' : '⚠️ Violation Anomaly'}
-                      </span>
-                    </div>
-
-                    <div className="flex gap-2 justify-end pt-1">
-                      <button
-                        type="button"
-                        onClick={handleEditAiRuleInForm}
-                        className="px-3.5 py-1.5 text-[10px] font-black uppercase text-indigo-700 bg-white border border-indigo-200 hover:bg-indigo-50 rounded-xl transition-all"
-                      >
-                        Edit Specs Manually
-                      </button>
-                      <button
-                        type="button"
-                        onClick={handleAcceptAiGeneratedRule}
-                        className="px-4 py-1.5 text-[10px] font-black uppercase text-white bg-emerald-600 hover:bg-emerald-700 rounded-xl shadow-sm transition-all"
-                      >
-                        ✓ Add to Custom Rules Inventory
-                      </button>
-                    </div>
-                  </motion.div>
-                )}
-
-                {/* API Key & Rate Limit Transparency Box */}
-                <div className="border-t border-slate-100 pt-4 mt-2">
-                  <button
-                    type="button"
-                    onClick={() => setShowApiKeyInput(!showApiKeyInput)}
-                    className="text-[10px] font-extrabold uppercase tracking-wider text-slate-500 hover:text-indigo-600 flex items-center gap-1.5 transition-colors"
-                  >
-                    <span>🔑 API Key & Quota Management</span>
-                    <span className="text-slate-400">{showApiKeyInput ? '▲ Hide' : '▼ Expand'}</span>
-                  </button>
-
-                  {showApiKeyInput && (
-                    <motion.div
-                      initial={{ opacity: 0, height: 0 }}
-                      animate={{ opacity: 1, height: 'auto' }}
-                      exit={{ opacity: 0, height: 0 }}
-                      className="mt-3 p-3.5 bg-slate-50 border border-slate-200/80 rounded-2xl space-y-2.5 text-[11px]"
-                    >
-                      <div className="flex items-start gap-2">
-                        <span className="text-base shrink-0">🛡️</span>
-                        <div>
-                          <p className="font-bold text-slate-800">Free Tier & Rate Limit Safeguards</p>
-                          <p className="text-slate-500 leading-relaxed text-[10px] mt-0.5">
-                            By default, requests use the workspace's server-side Gemini API key (completely free on Gemini 2.5 Flash).
-                            To protect against spam or rate limit exhausted errors when many users share the app, a local limit of 5 requests/min is enforced.
-                          </p>
-                        </div>
-                      </div>
-
-                      <div>
-                        <label className="text-[9px] font-extrabold uppercase text-slate-400 block mb-1">
-                          Optional: Use Your Own Gemini API Key
-                        </label>
-                        <div className="flex gap-2">
-                          <input
-                            type="password"
-                            value={customApiKey}
-                            onChange={(e) => setCustomApiKey(e.target.value)}
-                            placeholder="AIzaSy... (leave blank to use system key)"
-                            className="flex-1 text-xs font-mono px-3 py-1.5 border border-slate-200 rounded-xl bg-white focus:ring-2 focus:ring-indigo-500/10 focus:border-indigo-500 outline-none"
-                          />
-                          <button
-                            type="button"
-                            onClick={() => handleSaveApiKey(customApiKey)}
-                            className="px-3 py-1.5 text-[10px] font-black uppercase bg-slate-900 hover:bg-slate-800 text-white rounded-xl transition-all"
-                          >
-                            Save Key
-                          </button>
-                        </div>
-                        <p className="text-[9px] text-slate-400 mt-1">
-                          Key is stored locally in your browser storage (`localStorage`) and never transmitted to external third parties.
-                        </p>
-                      </div>
-                    </motion.div>
-                  )}
-                </div>
-              </div>
-
-              {/* Footer Actions */}
-              <div className="bg-slate-50 p-4 border-t border-slate-200/80 flex justify-end shrink-0">
-                <button
-                  type="button"
-                  onClick={() => setIsAiRuleModalOpen(false)}
-                  className="px-5 py-2 text-[10px] font-black uppercase tracking-wider text-slate-600 hover:text-slate-900 hover:bg-slate-200/50 rounded-xl transition-all"
-                >
-                  Close
-                </button>
-              </div>
             </motion.div>
           </div>
         )}
