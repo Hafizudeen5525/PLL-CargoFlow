@@ -14,7 +14,7 @@ import { DiscrepancyCheck, ReconciliationData } from './components/DiscrepancyCh
 import { CargoProfile, PnLBucket, ForwardCurveData, ForwardCurve, ForwardCurvePoint } from './types';
 import { getMarketData, getForwardCurve, recalculateProfile, getPortfolioYear, saveForwardCurve } from './services/calculationService';
 import { getFromDB, saveToDB } from './services/db';
-import { auth, db, handleFirestoreError, FirestoreOperation } from './firebase';
+import { auth, db, handleFirestoreError, FirestoreOperation, isFirebaseConfigured } from './firebase';
 import { onAuthStateChanged, User } from 'firebase/auth';
 import { doc, setDoc, onSnapshot, collection, query, where, getDoc } from 'firebase/firestore';
 
@@ -72,6 +72,7 @@ const App: React.FC = () => {
 
   // Guest profile loader & listener
   useEffect(() => {
+    if (!isFirebaseConfigured) return;
     // Basic user document initialization in Firestore
     const userRef = doc(db, 'users', 'guest_user');
     getDoc(userRef).then(snap => {
@@ -96,9 +97,7 @@ const App: React.FC = () => {
 
   // Firestore Sync: Profiles (Shared + Private)
   useEffect(() => {
-    if (!user) {
-      setProfiles([]);
-      setSharedProfiles([]);
+    if (!user || !isFirebaseConfigured) {
       return;
     }
 
@@ -108,7 +107,6 @@ const App: React.FC = () => {
       const docs = snapshot.docs.map(d => ({ ...d.data(), id: d.id } as CargoProfile));
       setProfiles(docs);
     }, (err) => {
-        // Suppress initial permission errors if doc doesn't exist yet
         if (err.code !== 'permission-denied') {
             handleFirestoreError(err, FirestoreOperation.LIST, `users/${user.uid}/cargo_profiles`);
         }
@@ -139,7 +137,7 @@ const App: React.FC = () => {
 
   // Firestore Sync: User Settings (Portfolio Year)
   useEffect(() => {
-    if (!user) return;
+    if (!user || !isFirebaseConfigured) return;
     const userRef = doc(db, 'users', user.uid);
     const unsubscribe = onSnapshot(userRef, (docSnap) => {
       if (docSnap.exists()) {
@@ -484,33 +482,46 @@ const App: React.FC = () => {
     const wasShared = allProfiles.find(p => p.id === profileId)?.isShared;
 
     const targetCollection = isNowShared ? 'shared_cargo_profiles' : 'cargo_profiles';
-    const profileRef = isNowShared 
-      ? doc(db, 'shared_cargo_profiles', profileId)
-      : doc(db, 'users', user.uid, 'cargo_profiles', profileId);
 
-    try {
-      await setDoc(profileRef, profileWithId);
-      
-      // If moving from private to shared (by matching an SN or previous toggle), delete the old private one
-      if (isNowShared && existingPrivate && existingPrivate.id !== profileId) {
-          const oldPrivateRef = doc(db, 'users', user.uid, 'cargo_profiles', existingPrivate.id);
-          await setDoc(oldPrivateRef, { deleted: true }, { merge: true });
-      }
-      
-      // Handle the case where we just updated an existing record but the ID was different (unlikely with SN logic but safe)
-      if (profile.id && profile.id !== profileId) {
-          const oldRef = wasShared 
-              ? doc(db, 'shared_cargo_profiles', profile.id)
-              : doc(db, 'users', user.uid, 'cargo_profiles', profile.id);
-          await setDoc(oldRef, { deleted: true }, { merge: true });
-      }
+    // Update local state & IndexedDB first for instant responsiveness
+    setProfiles(prev => {
+      const exists = prev.some(p => p.id === profileWithId.id);
+      const updated = exists 
+        ? prev.map(p => p.id === profileWithId.id ? profileWithId : p)
+        : [...prev, profileWithId];
+      saveToDB('cargo_profiles', updated);
+      return updated;
+    });
 
-      setIsEditing(false);
-      setEditingProfile(undefined);
-      toast.success(isNowShared ? 'Saved to Shared Portfolio' : 'Saved to Private Portfolio');
-    } catch (err) {
-      handleFirestoreError(err, FirestoreOperation.WRITE, `${targetCollection}/${profileId}`);
+    if (isFirebaseConfigured) {
+      const profileRef = isNowShared 
+        ? doc(db, 'shared_cargo_profiles', profileId)
+        : doc(db, 'users', user.uid, 'cargo_profiles', profileId);
+
+      try {
+        await setDoc(profileRef, profileWithId);
+        
+        // If moving from private to shared (by matching an SN or previous toggle), delete the old private one
+        if (isNowShared && existingPrivate && existingPrivate.id !== profileId) {
+            const oldPrivateRef = doc(db, 'users', user.uid, 'cargo_profiles', existingPrivate.id);
+            await setDoc(oldPrivateRef, { deleted: true }, { merge: true });
+        }
+        
+        // Handle the case where we just updated an existing record but the ID was different (unlikely with SN logic but safe)
+        if (profile.id && profile.id !== profileId) {
+            const oldRef = wasShared 
+                ? doc(db, 'shared_cargo_profiles', profile.id)
+                : doc(db, 'users', user.uid, 'cargo_profiles', profile.id);
+            await setDoc(oldRef, { deleted: true }, { merge: true });
+        }
+      } catch (err) {
+        console.warn("Firestore save fallback to local:", err);
+      }
     }
+
+    setIsEditing(false);
+    setEditingProfile(undefined);
+    toast.success(isNowShared ? 'Saved to Shared Portfolio' : 'Saved to Private Portfolio');
   };
 
   const handleDeleteProfile = (id: string) => {
@@ -522,13 +533,24 @@ const App: React.FC = () => {
     if (!profileToDelete) return;
 
     if (confirm(`Delete ${profileToDelete.strategyName}?`)) {
-      const profileRef = profileToDelete.isShared
-        ? doc(db, 'shared_cargo_profiles', id)
-        : doc(db, 'users', user.uid, 'cargo_profiles', id);
+      setProfiles(prev => {
+        const updated = prev.filter(p => p.id !== id);
+        saveToDB('cargo_profiles', updated);
+        return updated;
+      });
+      setSharedProfiles(prev => prev.filter(p => p.id !== id));
 
-      setDoc(profileRef, { deleted: true }, { merge: true })
-        .then(() => toast.success('Cargo deleted'))
-        .catch(err => handleFirestoreError(err, FirestoreOperation.DELETE, `profiles/${id}`));
+      if (isFirebaseConfigured) {
+        const profileRef = profileToDelete.isShared
+          ? doc(db, 'shared_cargo_profiles', id)
+          : doc(db, 'users', user.uid, 'cargo_profiles', id);
+
+        setDoc(profileRef, { deleted: true }, { merge: true })
+          .then(() => toast.success('Cargo deleted'))
+          .catch(err => console.warn("Firestore delete fallback to local:", err));
+      } else {
+        toast.success('Cargo deleted');
+      }
     }
   };
 

@@ -1,6 +1,6 @@
 import { initializeApp } from 'firebase/app';
-import { getAuth, onAuthStateChanged, User } from 'firebase/auth';
-import { getFirestore, doc, getDoc, setDoc, collection, onSnapshot, query, where, getDocFromServer } from 'firebase/firestore';
+import { getAuth } from 'firebase/auth';
+import { getFirestore, doc, getDocFromServer } from 'firebase/firestore';
 
 const firebaseConfig = {
   apiKey: import.meta.env.VITE_FIREBASE_API_KEY || 'YOUR_FIREBASE_API_KEY',
@@ -11,6 +11,13 @@ const firebaseConfig = {
   appId: import.meta.env.VITE_FIREBASE_APP_ID || 'YOUR_FIREBASE_APP_ID',
   firestoreDatabaseId: import.meta.env.VITE_FIREBASE_FIRESTORE_DATABASE_ID || 'ai-studio-pllcargoflow-12bf71f7-bda5-4509-91a5-6094774bb9bc'
 };
+
+export const isFirebaseConfigured = Boolean(
+  firebaseConfig.apiKey &&
+  !firebaseConfig.apiKey.startsWith('YOUR_') &&
+  firebaseConfig.projectId &&
+  !firebaseConfig.projectId.startsWith('YOUR_')
+);
 
 // Initialize Firebase
 const app = initializeApp(firebaseConfig);
@@ -65,17 +72,23 @@ export function handleFirestoreError(error: unknown, operationType: FirestoreOpe
     operationType,
     path
   };
-  console.error('Firestore Error: ', JSON.stringify(errInfo));
-  throw new Error(JSON.stringify(errInfo));
+  console.warn('Firestore Notice: ', JSON.stringify(errInfo));
+  if (isFirebaseConfigured) {
+    throw new Error(JSON.stringify(errInfo));
+  }
 }
 
 // Connection Test
 async function testConnection() {
+  if (!isFirebaseConfigured) {
+    console.info("Firebase running in local offline mode.");
+    return;
+  }
   try {
     await getDocFromServer(doc(db, 'test', 'connection'));
   } catch (error) {
     if (error instanceof Error && error.message.includes('the client is offline')) {
-      console.error("Please check your Firebase configuration. The client is offline.");
+      console.warn("Firebase client is currently offline.");
     }
   }
 }

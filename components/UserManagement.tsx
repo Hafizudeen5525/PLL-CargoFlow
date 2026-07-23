@@ -8,7 +8,7 @@ import {
   doc, 
   updateDoc 
 } from 'firebase/firestore';
-import { db } from '../firebase';
+import { db, isFirebaseConfigured } from '../firebase';
 import { toast } from 'react-hot-toast';
 
 interface UserData {
@@ -21,18 +21,26 @@ interface UserData {
 }
 
 export const UserManagement: React.FC = () => {
-  const [users, setUsers] = useState<UserData[]>([]);
-  const [loading, setLoading] = useState(true);
+  const [users, setUsers] = useState<UserData[]>(() => 
+    !isFirebaseConfigured ? [{ uid: 'guest_user', email: 'guest@cargoflow.local', role: 'admin', displayName: 'Guest Trader', lastLogin: new Date().toISOString() }] : []
+  );
+  const [loading, setLoading] = useState(!isFirebaseConfigured ? false : true);
   const [searchTerm, setSearchTerm] = useState('');
 
   useEffect(() => {
+    if (!isFirebaseConfigured) {
+      return;
+    }
     const q = query(collection(db, 'users'));
     const unsubscribe = onSnapshot(q, (snapshot) => {
       const docs = snapshot.docs.map(d => d.data() as UserData);
       setUsers(docs.sort((a, b) => (a.email || '').localeCompare(b.email || '')));
       setLoading(false);
     }, (err) => {
-      console.error("Error fetching users:", err);
+      console.warn("Error fetching users (local mode active):", err);
+      setUsers([
+        { uid: 'guest_user', email: 'guest@cargoflow.local', role: 'admin', displayName: 'Guest Trader', lastLogin: new Date().toISOString() }
+      ]);
       setLoading(false);
     });
     return () => unsubscribe();

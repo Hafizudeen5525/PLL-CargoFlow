@@ -1,6 +1,6 @@
 
 import { CargoProfile, PnLBucket, EmptyCargoProfile, ForwardCurveData, ForwardCurve, ForwardCurvePoint } from '../types';
-import { db, handleFirestoreError, FirestoreOperation, auth } from '../firebase';
+import { db, handleFirestoreError, FirestoreOperation, auth, isFirebaseConfigured } from '../firebase';
 import { doc, setDoc, getDoc, collection, getDocs, deleteDoc, query, orderBy, limit } from 'firebase/firestore';
 
 export interface ForwardCurveRow {
@@ -658,7 +658,11 @@ const curveCache: Record<string, ForwardCurveRow[]> = {};
 let historicalCache: ForwardCurveRow[] | null = null;
 
 export async function getForwardCurve(dateStr?: string): Promise<ForwardCurveRow[]> {
-    if (!auth.currentUser) return [];
+    if (!auth.currentUser || !isFirebaseConfigured) {
+        if (dateStr && curveCache[dateStr]) return curveCache[dateStr];
+        const keys = Object.keys(curveCache);
+        return keys.length > 0 ? curveCache[keys[0]] : [];
+    }
     try {
         const userId = auth.currentUser.uid;
         if (dateStr) {
@@ -689,7 +693,7 @@ export async function getForwardCurve(dateStr?: string): Promise<ForwardCurveRow
 }
 
 export async function getHistoricalCurve(): Promise<ForwardCurveRow[]> {
-    if (!auth.currentUser) return [];
+    if (!auth.currentUser || !isFirebaseConfigured) return historicalCache || [];
     if (historicalCache) return historicalCache;
     try {
         const docRef = doc(db, 'users', auth.currentUser.uid, 'market_data', 'historical');
@@ -707,8 +711,8 @@ export async function getHistoricalCurve(): Promise<ForwardCurveRow[]> {
 }
 
 export async function saveHistoricalCurve(curve: ForwardCurveRow[]) {
-    if (!auth.currentUser) return;
     historicalCache = curve;
+    if (!auth.currentUser || !isFirebaseConfigured) return;
     try {
         const docRef = doc(db, 'users', auth.currentUser.uid, 'market_data', 'historical');
         await setDoc(docRef, { rows: curve, updatedAt: new Date().toISOString() });
@@ -718,7 +722,7 @@ export async function saveHistoricalCurve(curve: ForwardCurveRow[]) {
 }
 
 export async function getAvailableCurveDates(): Promise<string[]> {
-    if (!auth.currentUser) return [];
+    if (!auth.currentUser || !isFirebaseConfigured) return Object.keys(curveCache);
     try {
         const q = query(collection(db, 'users', auth.currentUser.uid, 'forward_curves'), orderBy('asOfDate', 'desc'));
         const snap = await getDocs(q);
@@ -730,7 +734,8 @@ export async function getAvailableCurveDates(): Promise<string[]> {
 }
 
 export async function saveForwardCurve(date: string, curve: ForwardCurveRow[]) {
-    if (!auth.currentUser) return;
+    curveCache[date] = curve;
+    if (!auth.currentUser || !isFirebaseConfigured) return;
     try {
         const docRef = doc(db, 'users', auth.currentUser.uid, 'forward_curves', date);
         await setDoc(docRef, { asOfDate: date, rows: curve, userId: auth.currentUser.uid });
@@ -740,7 +745,8 @@ export async function saveForwardCurve(date: string, curve: ForwardCurveRow[]) {
 }
 
 export async function deleteForwardCurve(date: string) {
-    if (!auth.currentUser) return;
+    delete curveCache[date];
+    if (!auth.currentUser || !isFirebaseConfigured) return;
     try {
         const docRef = doc(db, 'users', auth.currentUser.uid, 'forward_curves', date);
         await deleteDoc(docRef);
@@ -752,7 +758,11 @@ export async function deleteForwardCurve(date: string) {
 const grmCurveCache: Record<string, ForwardCurveRow[]> = {};
 
 export async function getGRMForwardCurve(dateStr?: string): Promise<ForwardCurveRow[]> {
-    if (!auth.currentUser) return [];
+    if (!auth.currentUser || !isFirebaseConfigured) {
+        if (dateStr && grmCurveCache[dateStr]) return grmCurveCache[dateStr];
+        const keys = Object.keys(grmCurveCache);
+        return keys.length > 0 ? grmCurveCache[keys[0]] : [];
+    }
     try {
         const userId = auth.currentUser.uid;
         if (dateStr) {
@@ -793,7 +803,7 @@ export function getAvailableGRMCurveDatesSync(): string[] {
 }
 
 export async function getAvailableGRMCurveDates(): Promise<string[]> {
-    if (!auth.currentUser) return [];
+    if (!auth.currentUser || !isFirebaseConfigured) return Object.keys(grmCurveCache);
     try {
         const q = query(collection(db, 'users', auth.currentUser.uid, 'grm_forward_curves'), orderBy('asOfDate', 'desc'));
         const snap = await getDocs(q);
@@ -805,7 +815,8 @@ export async function getAvailableGRMCurveDates(): Promise<string[]> {
 }
 
 export async function saveGRMForwardCurve(date: string, curve: ForwardCurveRow[]) {
-    if (!auth.currentUser) return;
+    grmCurveCache[date] = curve;
+    if (!auth.currentUser || !isFirebaseConfigured) return;
     try {
         const docRef = doc(db, 'users', auth.currentUser.uid, 'grm_forward_curves', date);
         await setDoc(docRef, { asOfDate: date, rows: curve, userId: auth.currentUser.uid });
@@ -815,7 +826,8 @@ export async function saveGRMForwardCurve(date: string, curve: ForwardCurveRow[]
 }
 
 export async function deleteGRMForwardCurve(date: string) {
-    if (!auth.currentUser) return;
+    delete grmCurveCache[date];
+    if (!auth.currentUser || !isFirebaseConfigured) return;
     try {
         const docRef = doc(db, 'users', auth.currentUser.uid, 'grm_forward_curves', date);
         await deleteDoc(docRef);
