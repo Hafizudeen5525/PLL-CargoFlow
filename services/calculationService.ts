@@ -104,11 +104,16 @@ const INDEX_ALIASES: Record<string, string> = {
     'HENRY HUB': 'HH',
     'HH': 'HH',
     'JKM': 'JKM',
+    'JAPAN KOREA MARKER': 'JKM',
+    'DES JKM': 'JKM',
+    'JKM DES': 'JKM',
     'NBP': 'NBP',
     'BRENT': 'Dated Brent',
     'DATED BRENT': 'Dated Brent',
+    'BRENT INDEX': 'BRIPE',
     'BRIPE': 'BRIPE',
     'JCC': 'JCC',
+    'JAPAN CRUDE COCKTAIL': 'JCC',
     'AECO': 'AECO',
     'WTI': 'WTI',
     'STATION 2': 'STN 2',
@@ -117,6 +122,120 @@ const INDEX_ALIASES: Record<string, string> = {
     'HENRY HUB LAST DAY': 'HH Last Day',
     'FIX AND FIRM': 'Fix and Firm'
 };
+
+export function normalizeMonthKey(input: string | Date | number | undefined | null): string {
+    if (input === undefined || input === null || input === '') return '';
+    if (input instanceof Date) {
+        if (isNaN(input.getTime())) return '';
+        const y = input.getUTCFullYear();
+        const m = String(input.getUTCMonth() + 1).padStart(2, '0');
+        return `${y}-${m}`;
+    }
+    if (typeof input === 'number') {
+        if (input > 20000) {
+            const date = new Date(Math.round((input - 25569) * 86400 * 1000));
+            const y = date.getUTCFullYear();
+            const m = String(date.getUTCMonth() + 1).padStart(2, '0');
+            return `${y}-${m}`;
+        }
+        return String(input);
+    }
+
+    const str = String(input).trim();
+    if (!str) return '';
+
+    // Match YYYY-MM or YYYY-MM-DD or YYYY/MM/DD or YYYY.MM.DD
+    const isoMatch = str.match(/^(\d{4})[-/.](\d{1,2})(?:[-/.].*)?$/);
+    if (isoMatch) {
+        const y = parseInt(isoMatch[1], 10);
+        const m = String(parseInt(isoMatch[2], 10)).padStart(2, '0');
+        return `${y}-${m}`;
+    }
+
+    // Match MM/YYYY or MM-YYYY
+    const mmYyyyMatch = str.match(/^(\d{1,2})[-/.](\d{4})$/);
+    if (mmYyyyMatch) {
+        const m = String(parseInt(mmYyyyMatch[1], 10)).padStart(2, '0');
+        const y = parseInt(mmYyyyMatch[2], 10);
+        return `${y}-${m}`;
+    }
+
+    const monthsMap: Record<string, string> = {
+        jan: '01', feb: '02', mar: '03', apr: '04', may: '05', jun: '06',
+        jul: '07', aug: '08', sep: '09', oct: '10', nov: '11', dec: '12'
+    };
+
+    const monthNameMatch = str.match(/([a-zA-Z]{3,})[-/.\s,]+(\d{2,4})|(\d{2,4})[-/.\s,]+([a-zA-Z]{3,})/);
+    if (monthNameMatch) {
+        const mStr = (monthNameMatch[1] || monthNameMatch[4] || '').toLowerCase().slice(0, 3);
+        const yStr = monthNameMatch[2] || monthNameMatch[3] || '';
+        if (monthsMap[mStr] && yStr) {
+            let y = parseInt(yStr, 10);
+            if (y < 100) y += 2000;
+            return `${y}-${monthsMap[mStr]}`;
+        }
+    }
+
+    const d = new Date(str);
+    if (!isNaN(d.getTime())) {
+        const y = d.getUTCFullYear();
+        const m = String(d.getUTCMonth() + 1).padStart(2, '0');
+        return `${y}-${m}`;
+    }
+
+    return str;
+}
+
+export function getPriceForIndex(prices: Record<string, number> | undefined, requestedIndex: string): number {
+    if (!prices) return 0;
+    
+    // 1. Exact match
+    if (prices[requestedIndex] !== undefined && typeof prices[requestedIndex] === 'number' && prices[requestedIndex] > 0) {
+        return prices[requestedIndex];
+    }
+
+    const cleanReq = requestedIndex.trim();
+    const reqUpper = cleanReq.toUpperCase();
+    const canonicalReq = INDEX_ALIASES[reqUpper] || cleanReq;
+    const canonicalReqUpper = canonicalReq.toUpperCase();
+
+    // 2. Canonicalized match across all price keys
+    for (const [key, val] of Object.entries(prices)) {
+        if (typeof val !== 'number' || isNaN(val) || val <= 0) continue;
+        const keyUpper = key.trim().toUpperCase();
+        const keyCanonical = (INDEX_ALIASES[keyUpper] || keyUpper).toUpperCase();
+
+        if (keyUpper === reqUpper || keyCanonical === canonicalReqUpper) {
+            return val;
+        }
+    }
+
+    // 3. Substring / fuzzy match
+    for (const [key, val] of Object.entries(prices)) {
+        if (typeof val !== 'number' || isNaN(val) || val <= 0) continue;
+        const keyUpper = key.trim().toUpperCase();
+
+        if (
+            (canonicalReqUpper === 'HH' && (keyUpper.includes('HH') || keyUpper.includes('HENRY'))) ||
+            (canonicalReqUpper === 'TTF' && (keyUpper.includes('TTF') || keyUpper.includes('DUTCH'))) ||
+            (canonicalReqUpper === 'JKM' && keyUpper.includes('JKM')) ||
+            (canonicalReqUpper === 'DATED BRENT' && keyUpper.includes('BRENT')) ||
+            (canonicalReqUpper === 'NBP' && keyUpper.includes('NBP')) ||
+            (canonicalReqUpper === 'JCC' && keyUpper.includes('JCC')) ||
+            (canonicalReqUpper === 'BRIPE' && keyUpper.includes('BRIPE')) ||
+            (canonicalReqUpper === 'STN 2' && (keyUpper.includes('STATION') || keyUpper.includes('STN'))) ||
+            (canonicalReqUpper === 'AECO' && keyUpper.includes('AECO'))
+        ) {
+            return val;
+        }
+    }
+
+    if (canonicalReqUpper === 'HH LAST DAY' || reqUpper.includes('LAST DAY')) {
+        return getPriceForIndex(prices, 'HH');
+    }
+
+    return 0;
+}
 
 const STORAGE_KEY_CURVES = 'forward_curves_data';
 const STORAGE_KEY_GRM_CURVES = 'grm_forward_curves_data';
@@ -297,6 +416,10 @@ function toMonthKey(date: Date): string {
 
 const priceLookupCache = new Map<string, { price: number, details: string, monthUsed: string }>();
 
+export function clearPriceCache(): void {
+    priceLookupCache.clear();
+}
+
 export function getIndexPrice(index: string, refDateStr: string, monthDef: string, curveDate?: string): { price: number, details: string, monthUsed: string } {
     const cacheKey = `${index}-${refDateStr}-${monthDef}-${curveDate || 'latest'}`;
     if (priceLookupCache.has(cacheKey)) {
@@ -317,40 +440,49 @@ function getIndexPriceInternal(index: string, refDateStr: string, monthDef: stri
     const curve = getForwardCurveSync(curveDate);
     const historical = getHistoricalCurveSync();
     
-    if (!index || !refDateStr) return { price: 0, details: 'Missing Index or Ref Date', monthUsed: '' };
+    if (!index) return { price: 0, details: 'Missing Index', monthUsed: '' };
     
-    const baseDate = new Date(refDateStr);
-    const d = new Date(baseDate.getFullYear(), baseDate.getMonth(), 15);
+    const effectiveRefDate = refDateStr || curveDate || new Date().toISOString().split('T')[0];
+    const baseMonthKey = normalizeMonthKey(effectiveRefDate);
+    if (!baseMonthKey || !baseMonthKey.includes('-')) return { price: 0, details: 'Invalid Ref Date', monthUsed: '' };
+    
+    const [yStr, mStr] = baseMonthKey.split('-');
+    const baseYear = parseInt(yStr, 10);
+    const baseMonth0 = parseInt(mStr, 10) - 1; // 0-indexed month
     
     const targetMonths: string[] = [];
     const label = monthDef || 'n';
     const cleanDef = (monthDef || 'n').toLowerCase().replace(/\s/g, '');
 
     if (cleanDef === 'none') {
-        targetMonths.push(toMonthKey(d));
+        targetMonths.push(`${baseYear}-${String(baseMonth0 + 1).padStart(2, '0')}`);
     } else {
         const avgMatch = cleanDef.match(/\(?(\d+),(\d+),(\d+)\)?/);
         if (avgMatch) {
-            const count = parseInt(avgMatch[1]);
-            const lag = parseInt(avgMatch[2]);
+            const count = parseInt(avgMatch[1], 10);
+            const lag = parseInt(avgMatch[2], 10);
             for (let i = 1; i <= count; i++) {
-                const date = new Date(d.getFullYear(), d.getMonth() - lag - i, 15);
-                targetMonths.push(toMonthKey(date));
+                const date = new Date(Date.UTC(baseYear, baseMonth0 - lag - i + 1, 15));
+                const y = date.getUTCFullYear();
+                const m = String(date.getUTCMonth() + 1).padStart(2, '0');
+                targetMonths.push(`${y}-${m}`);
             }
         } else {
             let offset = 0;
             if (cleanDef.includes('n-')) {
                 const val = cleanDef.split('n-')[1];
-                offset = -parseInt(val || '0');
+                offset = -parseInt(val || '0', 10);
             } else if (cleanDef.includes('n+')) {
                 const val = cleanDef.split('n+')[1];
-                offset = parseInt(val || '0');
+                offset = parseInt(val || '0', 10);
             } else if (cleanDef === 'n') {
                 offset = 0;
             }
             
-            const date = new Date(d.getFullYear(), d.getMonth() + offset, 15);
-            targetMonths.push(toMonthKey(date));
+            const date = new Date(Date.UTC(baseYear, baseMonth0 + offset, 15));
+            const y = date.getUTCFullYear();
+            const m = String(date.getUTCMonth() + 1).padStart(2, '0');
+            targetMonths.push(`${y}-${m}`);
         }
     }
 
@@ -360,20 +492,34 @@ function getIndexPriceInternal(index: string, refDateStr: string, monthDef: stri
     const canonicalIndex = INDEX_ALIASES[index.toUpperCase()] || index;
 
     targetMonths.forEach((m: string) => {
+        const normTarget = normalizeMonthKey(m);
         let p = 0;
-        const curveRow = curve.find((r: ForwardCurveRow) => r.month === m);
-        const histRow = historical.find((r: ForwardCurveRow) => r.month === m);
         
-        const getVal = (row: ForwardCurveRow | undefined, idx: string) => {
-            if (!row) return 0;
-            if (row.prices[idx]) return row.prices[idx];
-            // Fallback HH Last Day to HH if missing
-            if (idx === 'HH Last Day' && row.prices['HH']) return row.prices['HH'];
-            return 0;
-        };
+        const histRow = historical.find((r: ForwardCurveRow) => normalizeMonthKey(r.month) === normTarget);
+        const curveRow = curve.find((r: ForwardCurveRow) => normalizeMonthKey(r.month) === normTarget);
+        
+        p = getPriceForIndex(histRow?.prices, canonicalIndex);
+        if (p === 0) p = getPriceForIndex(curveRow?.prices, canonicalIndex);
 
-        p = getVal(histRow, canonicalIndex);
-        if (p === 0) p = getVal(curveRow, canonicalIndex);
+        if (p === 0 && curve.length > 0) {
+            const sortedRows = [...curve].sort((a, b) => normalizeMonthKey(a.month).localeCompare(normalizeMonthKey(b.month)));
+            let closestRow: ForwardCurveRow | null = null;
+            let minDiff = Infinity;
+            const targetTime = new Date(`${normTarget}-15`).getTime();
+            for (const r of sortedRows) {
+                const rNorm = normalizeMonthKey(r.month);
+                if (!rNorm) continue;
+                const rTime = new Date(`${rNorm}-15`).getTime();
+                const diff = Math.abs(targetTime - rTime);
+                if (diff < minDiff) {
+                    minDiff = diff;
+                    closestRow = r;
+                }
+            }
+            if (closestRow) {
+                p = getPriceForIndex(closestRow.prices, canonicalIndex);
+            }
+        }
 
         if (p > 0) {
             total += p;
@@ -435,6 +581,8 @@ export function calculateLegPrice(p: CargoProfile, type: 'buy' | 'sell' | 'tier2
 
 export function evaluateFormula(formula: string, dateStr?: string, curveDate?: string, volume: number = 0, unit?: string): number | null {
     if (!formula) return null;
+    const effectiveDate = dateStr || curveDate || new Date().toISOString().split('T')[0];
+
     let expression = formula
         .replace(/\[/g, '(').replace(/\]/g, ')')
         .replace(/\$/g, '')
@@ -445,7 +593,7 @@ export function evaluateFormula(formula: string, dateStr?: string, curveDate?: s
         const canonical = INDEX_ALIASES[alias];
         const regex = new RegExp(`\\b${alias.replace(/\s+/g, '\\s+')}\\b(?:\\s*\\(([^)]+)\\))?`, 'gi');
         expression = expression.replace(regex, (match, monthDef) => {
-            const { price } = getIndexPrice(canonical, dateStr || '', monthDef || 'n', curveDate);
+            const { price } = getIndexPrice(canonical, effectiveDate, monthDef || 'n', curveDate);
             return price.toString();
         });
     }
@@ -603,6 +751,27 @@ export function recalculateProfile(p: Partial<CargoProfile>, useMarket: boolean 
     const basePurchaseCost = (up.reconciledPurchaseCost > 0) ? up.reconciledPurchaseCost : totalPurchaseCost;
     up.finalTotalCost = basePurchaseCost + finalSrcCost;
 
+    // Implied Unit Price Fallback:
+    // If unit buy or sell price evaluated to 0 (e.g. missing curve or imported lump-sum data without index formulas),
+    // derive the implied unit price from total purchase cost / sales revenue so unit prices are populated.
+    if (!up.isBuyPriceManual && (!up.absoluteBuyPrice || up.absoluteBuyPrice === 0) && (up.loadedVolume || 0) > 0 && basePurchaseCost > 0) {
+        up.absoluteBuyPrice = applyRounding(basePurchaseCost / up.loadedVolume, up.buyPriceRounding);
+        up.finalPurchaseCostT1 = (up.loadedVolume || 0) * up.absoluteBuyPrice;
+    }
+    if (!up.isSellPriceManual && (!up.absoluteSellPrice || up.absoluteSellPrice === 0) && (up.deliveredVolume || 0) > 0 && up.finalSalesRevenue > 0) {
+        up.absoluteSellPrice = applyRounding(up.finalSalesRevenue / up.deliveredVolume, up.sellPriceRounding);
+        up.finalSalesRevenueT1 = (up.deliveredVolume || 0) * up.absoluteSellPrice;
+    }
+
+    if (up.isTieredPricing) {
+        if (!up.isTier2BuyPriceManual && (!up.absoluteTier2BuyPrice || up.absoluteTier2BuyPrice === 0) && (up.tier2LoadedVolume || 0) > 0 && (up.finalPurchaseCostT2 || 0) > 0) {
+            up.absoluteTier2BuyPrice = applyRounding((up.finalPurchaseCostT2 || 0) / (up.tier2LoadedVolume || 1), up.tier2BuyPriceRounding);
+        }
+        if (!up.isTier2SellPriceManual && (!up.absoluteTier2SellPrice || up.absoluteTier2SellPrice === 0) && (up.tier2DeliveredVolume || 0) > 0 && (up.finalSalesRevenueT2 || 0) > 0) {
+            up.absoluteTier2SellPrice = applyRounding((up.finalSalesRevenueT2 || 0) / (up.tier2DeliveredVolume || 1), up.tier2SellPriceRounding);
+        }
+    }
+
     up.finalPhysicalPnL = up.finalSalesRevenue - up.finalTotalCost;
     up.finalTotalPnL = up.finalPhysicalPnL; 
     
@@ -654,8 +823,23 @@ export function findDataGaps(profiles: CargoProfile[], curveDate?: string): Data
     return Object.values(gaps).sort((a: DataGap, b: DataGap) => a.month.localeCompare(b.month));
 }
 
-const curveCache: Record<string, ForwardCurveRow[]> = {};
-let historicalCache: ForwardCurveRow[] | null = null;
+const curveCache: Record<string, ForwardCurveRow[]> = (() => {
+    try {
+        const saved = localStorage.getItem(STORAGE_KEY_CURVES);
+        return saved ? JSON.parse(saved) : {};
+    } catch {
+        return {};
+    }
+})();
+
+let historicalCache: ForwardCurveRow[] | null = (() => {
+    try {
+        const saved = localStorage.getItem(STORAGE_KEY_HISTORICAL);
+        return saved ? JSON.parse(saved) : null;
+    } catch {
+        return null;
+    }
+})();
 
 export async function getForwardCurve(dateStr?: string): Promise<ForwardCurveRow[]> {
     if (!auth.currentUser || !isFirebaseConfigured) {
@@ -712,6 +896,12 @@ export async function getHistoricalCurve(): Promise<ForwardCurveRow[]> {
 
 export async function saveHistoricalCurve(curve: ForwardCurveRow[]) {
     historicalCache = curve;
+    priceLookupCache.clear();
+    try {
+        localStorage.setItem(STORAGE_KEY_HISTORICAL, JSON.stringify(curve));
+    } catch (e) {
+        console.warn("Failed saving historical curve to localStorage", e);
+    }
     if (!auth.currentUser || !isFirebaseConfigured) return;
     try {
         const docRef = doc(db, 'users', auth.currentUser.uid, 'market_data', 'historical');
@@ -735,6 +925,12 @@ export async function getAvailableCurveDates(): Promise<string[]> {
 
 export async function saveForwardCurve(date: string, curve: ForwardCurveRow[]) {
     curveCache[date] = curve;
+    priceLookupCache.clear();
+    try {
+        localStorage.setItem(STORAGE_KEY_CURVES, JSON.stringify(curveCache));
+    } catch (e) {
+        console.warn("Failed saving forward curve to localStorage", e);
+    }
     if (!auth.currentUser || !isFirebaseConfigured) return;
     try {
         const docRef = doc(db, 'users', auth.currentUser.uid, 'forward_curves', date);

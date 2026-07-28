@@ -12,7 +12,7 @@ import { SettingsView } from './components/SettingsView';
 import { UserManagement } from './components/UserManagement';
 import { DiscrepancyCheck, ReconciliationData } from './components/DiscrepancyCheck';
 import { CargoProfile, PnLBucket, ForwardCurveData, ForwardCurve, ForwardCurvePoint } from './types';
-import { getMarketData, getForwardCurve, recalculateProfile, getPortfolioYear, saveForwardCurve } from './services/calculationService';
+import { getMarketData, getForwardCurve, recalculateProfile, getPortfolioYear, saveForwardCurve, normalizeMonthKey } from './services/calculationService';
 import { getFromDB, saveToDB } from './services/db';
 import { auth, db, handleFirestoreError, FirestoreOperation, isFirebaseConfigured } from './firebase';
 import { onAuthStateChanged, User } from 'firebase/auth';
@@ -321,8 +321,9 @@ const App: React.FC = () => {
         const monthMap: Record<string, Record<string, number>> = {};
         fcData.curves.forEach((curve: ForwardCurve) => {
           curve.points.forEach((point: ForwardCurvePoint) => {
-            if (!monthMap[point.month]) monthMap[point.month] = {};
-            monthMap[point.month][curve.index] = point.value;
+            const normMonth = normalizeMonthKey(point.month) || point.month;
+            if (!monthMap[normMonth]) monthMap[normMonth] = {};
+            monthMap[normMonth][curve.index] = point.value;
           });
         });
         const rows = Object.entries(monthMap).map(([month, prices]) => ({

@@ -364,7 +364,30 @@ self.onmessage = (e: MessageEvent) => {
                 const m = String(date.getUTCMonth() + 1).padStart(2, '0');
                 monthStr = `${y}-${m}`;
             } else {
-                monthStr = String(monthVal);
+                const raw = String(monthVal).trim();
+                const isoMatch = raw.match(/^(\d{4})[-/.](\d{1,2})/);
+                if (isoMatch) {
+                    monthStr = `${isoMatch[1]}-${String(parseInt(isoMatch[2], 10)).padStart(2, '0')}`;
+                } else {
+                    const monthsMap: Record<string, string> = {
+                        jan: '01', feb: '02', mar: '03', apr: '04', may: '05', jun: '06',
+                        jul: '07', aug: '08', sep: '09', oct: '10', nov: '11', dec: '12'
+                    };
+                    const mMatch = raw.match(/([a-zA-Z]{3,})[-/.\s,]+(\d{2,4})|(\d{2,4})[-/.\s,]+([a-zA-Z]{3,})/);
+                    if (mMatch) {
+                        const mStr = (mMatch[1] || mMatch[4] || '').toLowerCase().slice(0, 3);
+                        const yStr = mMatch[2] || mMatch[3] || '';
+                        if (monthsMap[mStr] && yStr) {
+                            let y = parseInt(yStr, 10);
+                            if (y < 100) y += 2000;
+                            monthStr = `${y}-${monthsMap[mStr]}`;
+                        } else {
+                            monthStr = raw;
+                        }
+                    } else {
+                        monthStr = raw;
+                    }
+                }
             }
 
             for (let i = 0; i < indexes.length; i++) {

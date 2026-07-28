@@ -121,6 +121,8 @@ export interface TRMSAggregation {
         trmsSalesValue: number;
         reconciledPurchaseCost: number;
         reconciledSalesRevenue: number;
+        weightedBuyPrice?: number;
+        weightedSellPrice?: number;
         commWindowEndDate: string;
         rawRows?: any[];
     }

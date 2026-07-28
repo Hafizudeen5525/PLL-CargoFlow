@@ -382,6 +382,18 @@ export const TrmsSummaryTable: React.FC<TrmsSummaryTableProps> = ({ trmsData, vi
       .join(separator);
   }, [selectedUnit]);
   const [searchTerm, setSearchTerm] = useState('');
+  const [debouncedSearchTerm, setDebouncedSearchTerm] = useState('');
+  const [currentPage, setCurrentPage] = useState<number>(1);
+  const [pageSize, setPageSize] = useState<number>(25);
+
+  useEffect(() => {
+    const timer = setTimeout(() => {
+      setDebouncedSearchTerm(searchTerm);
+      setCurrentPage(1);
+    }, 150);
+    return () => clearTimeout(timer);
+  }, [searchTerm]);
+
   const [selectedEodDate, setSelectedEodDate] = useState<string>('all');
   const [selectedYear, setSelectedYear] = useState<string>('all');
   const [showExposureMonths, setShowExposureMonths] = useState(false);
@@ -1567,8 +1579,8 @@ export const TrmsSummaryTable: React.FC<TrmsSummaryTableProps> = ({ trmsData, vi
     }
 
     // 1. Global text search
-    if (searchTerm.trim()) {
-      const term = searchTerm.toLowerCase();
+    if (debouncedSearchTerm.trim()) {
+      const term = debouncedSearchTerm.toLowerCase();
       result = result.filter(item => {
         return (
           item.strategyName.toLowerCase().includes(term) ||
@@ -1716,7 +1728,18 @@ export const TrmsSummaryTable: React.FC<TrmsSummaryTableProps> = ({ trmsData, vi
     }
 
     return result;
-  }, [summaryData, searchTerm, columnFilters, sortConfig, numCols, activeTrmsGroup, selectedTraderFilter, selectedIndexFilter]);
+  }, [summaryData, debouncedSearchTerm, columnFilters, sortConfig, numCols, activeTrmsGroup, selectedTraderFilter, selectedIndexFilter]);
+
+  const totalPages = useMemo(() => {
+    if (pageSize === 0) return 1;
+    return Math.max(1, Math.ceil(filteredAndSortedSummaryData.length / pageSize));
+  }, [filteredAndSortedSummaryData.length, pageSize]);
+
+  const paginatedSummaryData = useMemo(() => {
+    if (pageSize === 0) return filteredAndSortedSummaryData;
+    const start = (currentPage - 1) * pageSize;
+    return filteredAndSortedSummaryData.slice(start, start + pageSize);
+  }, [filteredAndSortedSummaryData, currentPage, pageSize]);
 
   const indexHedgeBreakdown = useMemo(() => {
     const indices = ['Henry Hub', 'TTF', 'JKM', 'NBP', 'Brent', 'JCC', 'Fixed / Other'];
@@ -5761,10 +5784,10 @@ export const TrmsSummaryTable: React.FC<TrmsSummaryTableProps> = ({ trmsData, vi
             </p>
           </div>
         ) : (
-          <div className="min-w-max pb-10">
-            <table className="w-full text-left border-collapse text-[11px] gridlines-active bg-slate-950 text-slate-200">
+          <div className="min-w-max pb-10 font-sans">
+            <table className="w-full text-left border-collapse text-xs gridlines-active bg-slate-950 text-slate-100 selection:bg-blue-600 selection:text-white">
               <thead>
-                <tr className="bg-slate-900 border-b border-slate-800 sticky top-0 z-30 font-bold uppercase tracking-wider text-slate-200">
+                <tr className="bg-slate-900 border-b border-slate-750 sticky top-0 z-30 font-extrabold uppercase tracking-wider text-[11px] text-slate-200 shadow-xs">
                   <th className="py-3 px-3 w-8 bg-slate-900"></th>
                   {columns.map((col, idx) => {
                     const isFiltered = !!columnFilters[col];
@@ -5775,15 +5798,15 @@ export const TrmsSummaryTable: React.FC<TrmsSummaryTableProps> = ({ trmsData, vi
                     return (
                       <th 
                         key={col} 
-                        className={`py-3 px-4 hover:bg-slate-800 relative ${isRightAligned ? 'text-right' : 'text-left'}`}
+                        className={`py-3.5 px-4 hover:bg-slate-800/80 transition-colors relative ${isRightAligned ? 'text-right' : 'text-left'}`}
                       >
                         <div className={`flex items-center gap-1 group justify-between ${isRightAligned ? 'flex-row-reverse' : ''}`}>
-                          <span className="truncate max-w-[140px] text-slate-300" title={col}>{col}</span>
+                          <span className="truncate max-w-[150px] text-slate-200 font-bold tracking-wide" title={col}>{col}</span>
                           
                           <div className="flex items-center gap-0.5 opacity-80 group-hover:opacity-100 transition-opacity">
                             {isSorted && (
                               <span className="text-blue-400">
-                                {sortConfig.direction === 'asc' ? <ChevronUp className="w-3 h-3" /> : <ChevronDown className="w-3 h-3" />}
+                                {sortConfig.direction === 'asc' ? <ChevronUp className="w-3.5 h-3.5" /> : <ChevronDown className="w-3.5 h-3.5" />}
                               </span>
                             )}
                             <button 
@@ -5825,18 +5848,18 @@ export const TrmsSummaryTable: React.FC<TrmsSummaryTableProps> = ({ trmsData, vi
                   })}
                 </tr>
               </thead>
-              <tbody className="divide-y divide-slate-850 bg-slate-950">
-                {filteredAndSortedSummaryData.map((item, index) => {
+              <tbody className="divide-y divide-slate-800/60 bg-slate-950">
+                {paginatedSummaryData.map((item, index) => {
                   const isExpanded = expandedStrategies.has(item.strategyName);
                   const activeDetailFilter = expandedFilters[item.strategyName] || 'base_lng';
 
                   return (
                     <React.Fragment key={item.strategyName}>
                       <tr 
-                        className={`hover:bg-slate-850 transition-colors cursor-pointer group ${isExpanded ? 'bg-slate-900 border-l-4 border-blue-500 text-white' : 'text-slate-100'}`}
+                        className={`hover:bg-slate-850/90 transition-colors cursor-pointer group ${isExpanded ? 'bg-slate-900 border-l-4 border-blue-500 text-white' : 'text-slate-100 even:bg-slate-900/30'}`}
                         onClick={() => toggleRowExpansion(item.strategyName)}
                       >
-                        <td className="py-2.5 px-3 text-center text-slate-500">
+                        <td className="py-3 px-3 text-center text-slate-500">
                           {isExpanded ? (
                             <ChevronDown className="w-4 h-4 text-blue-400" />
                           ) : (
@@ -5846,7 +5869,7 @@ export const TrmsSummaryTable: React.FC<TrmsSummaryTableProps> = ({ trmsData, vi
 
                         {/* Strategy Name */}
                         <td 
-                          className="py-2.5 px-4 font-extrabold text-slate-100 hover:text-blue-400 hover:underline"
+                          className="py-3 px-4 font-extrabold text-slate-100 tracking-tight text-xs hover:text-blue-400 hover:underline"
                           onClick={(e) => handleCellClick(item.strategyName, 'Strategy Name', e)}
                           title="Click to view Base LNG details"
                         >
@@ -6807,6 +6830,74 @@ export const TrmsSummaryTable: React.FC<TrmsSummaryTableProps> = ({ trmsData, vi
                 })}
               </tbody>
             </table>
+          </div>
+        )}
+
+        {/* 6. Pagination & Rows-Per-Page Footer */}
+        {filteredAndSortedSummaryData.length > 0 && (
+          <div className="px-4 py-2.5 bg-slate-900 border-t border-slate-800 flex flex-wrap items-center justify-between gap-3 shrink-0 text-xs text-slate-200">
+            <div className="flex items-center gap-2">
+              <span className="text-slate-400 font-semibold text-[11px]">Rows per page:</span>
+              <select
+                value={pageSize}
+                onChange={(e) => {
+                  setPageSize(Number(e.target.value));
+                  setCurrentPage(1);
+                }}
+                className="bg-slate-950 border border-slate-750 rounded-lg px-2.5 py-1 text-slate-100 font-bold focus:outline-none focus:ring-1 focus:ring-blue-500 cursor-pointer text-xs"
+              >
+                <option value={15}>15</option>
+                <option value={25}>25</option>
+                <option value={50}>50</option>
+                <option value={100}>100</option>
+                <option value={0}>All ({filteredAndSortedSummaryData.length})</option>
+              </select>
+              <span className="text-slate-400 font-mono text-[11.5px] ml-2">
+                {pageSize === 0 ? (
+                  `Showing all ${filteredAndSortedSummaryData.length} strategies`
+                ) : (
+                  `Showing ${Math.min((currentPage - 1) * pageSize + 1, filteredAndSortedSummaryData.length)}–${Math.min(currentPage * pageSize, filteredAndSortedSummaryData.length)} of ${filteredAndSortedSummaryData.length} strategies`
+                )}
+              </span>
+            </div>
+
+            {pageSize > 0 && totalPages > 1 && (
+              <div className="flex items-center gap-1.5">
+                <button
+                  disabled={currentPage === 1}
+                  onClick={() => setCurrentPage(1)}
+                  className="px-2 py-1 rounded-md bg-slate-800 border border-slate-700 text-slate-300 hover:bg-slate-700 hover:text-white disabled:opacity-30 disabled:cursor-not-allowed text-[11px] font-bold transition-all"
+                  title="First Page"
+                >
+                  « First
+                </button>
+                <button
+                  disabled={currentPage === 1}
+                  onClick={() => setCurrentPage(p => Math.max(1, p - 1))}
+                  className="px-2.5 py-1 rounded-md bg-slate-800 border border-slate-700 text-slate-300 hover:bg-slate-700 hover:text-white disabled:opacity-30 disabled:cursor-not-allowed text-[11px] font-bold transition-all"
+                >
+                  ‹ Prev
+                </button>
+                <span className="px-2.5 font-mono font-bold text-blue-400 text-xs">
+                  Page {currentPage} of {totalPages}
+                </span>
+                <button
+                  disabled={currentPage === totalPages}
+                  onClick={() => setCurrentPage(p => Math.min(totalPages, p + 1))}
+                  className="px-2.5 py-1 rounded-md bg-slate-800 border border-slate-700 text-slate-300 hover:bg-slate-700 hover:text-white disabled:opacity-30 disabled:cursor-not-allowed text-[11px] font-bold transition-all"
+                >
+                  Next ›
+                </button>
+                <button
+                  disabled={currentPage === totalPages}
+                  onClick={() => setCurrentPage(totalPages)}
+                  className="px-2 py-1 rounded-md bg-slate-800 border border-slate-700 text-slate-300 hover:bg-slate-700 hover:text-white disabled:opacity-30 disabled:cursor-not-allowed text-[11px] font-bold transition-all"
+                  title="Last Page"
+                >
+                  Last »
+                </button>
+              </div>
+            )}
           </div>
         )}
       </div>
