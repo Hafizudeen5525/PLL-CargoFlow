@@ -22,6 +22,7 @@ import * as XLSX from 'xlsx';
 import { DataQualityDashboard } from './DataQualityDashboard';
 import { CargoProfile, PnLBucket, ForwardCurveData, ForwardCurve, ForwardCurvePoint } from '../types';
 import { TrmsSummaryTable } from './TrmsSummaryTable';
+import { computeTrmsSummaryRows, TrmsStrategySummary, normalizeStrategyKey } from '../utils/trmsEngine';
 import { getGroupName, GROUPS, saveForwardCurve, ForwardCurveRow, getForwardCurve, getAvailableCurveDates, getGRMForwardCurve, getAvailableGRMCurveDates, formatCurrency } from '../services/calculationService';
 import { LineChart, Line, XAxis, YAxis, CartesianGrid, Tooltip, Legend, ResponsiveContainer } from 'recharts';
 
@@ -45,22 +46,44 @@ export interface TRMSSrcLeg {
 
 export interface ReconciliationRow {
     strategyName: string;
+    group: string;
+    foundInApp: boolean;
     foundInTrms: boolean;
+    status: 'Matched' | 'App Only' | 'TRMS Only';
     profileId: string;
     app: {
+        pnlBucket: string;
+        optimization: string;
+        unallocatedCargo: string;
+        buyVolT1: number;
+        buyVolT2: number;
+        buyVolTotal: number;
+        buyPriceT1: number;
+        buyPriceT2: number;
+        buyPriceEffective: number;
+        sellVolT1: number;
+        sellVolT2: number;
+        sellVolTotal: number;
+        sellPriceT1: number;
+        sellPriceT2: number;
+        sellPriceEffective: number;
+        purchaseCost: number;
+        salesRevenue: number;
+        src: number;
+        loadingMonth: string;
+        deliveryMonth: string;
+        isTiered?: boolean;
+        // Backwards compatibility aliases
         buyPrice: number;
         sellPrice: number;
         buyVol: number;
         sellVol: number;
-        src: number;
         loadingDate: string;
         deliveryDate: string;
         volumeType: string;
         priceStatus: string;
         reconciledPurchaseCost: number;
         reconciledSalesRevenue: number;
-        // Tiered Support
-        isTiered?: boolean;
         tier1BuyPrice?: number;
         tier1BuyVol?: number;
         tier2BuyPrice?: number;
@@ -73,9 +96,32 @@ export interface ReconciliationRow {
         effectiveSellPrice?: number;
     };
     trms: {
+        pnlBucket: string;
+        optimization: string;
+        unallocatedCargo: string;
+        buyVolT1: number;
+        buyVolT2: number;
+        buyVolTotal: number;
+        buyPriceT1: number;
+        buyPriceT2: number;
+        buyPriceEffective: number;
+        sellVolT1: number;
+        sellVolT2: number;
+        sellVolTotal: number;
+        sellPriceT1: number;
+        sellPriceT2: number;
+        sellPriceEffective: number;
+        purchaseCost: number;
+        salesRevenue: number;
+        src: number;
+        loadingMonth: string;
+        deliveryMonth: string;
+        buyTiers: Array<{ vol: number; unit: string; val: number; price: number }>;
+        sellTiers: Array<{ vol: number; unit: string; val: number; price: number }>;
+        rawRows?: any[];
+        // Backwards compatibility aliases
         buyLegs: TRMSCommodityLeg[];
         sellLegs: TRMSCommodityLeg[];
-        src: number;
         srcLegs: TRMSSrcLeg[]; 
         loadingDate: string;
         deliveryDate: string;
@@ -88,9 +134,22 @@ export interface ReconciliationRow {
         reconciledSalesRevenue: number;
         trmsRealized: boolean;
         commWindowEndDate: string;
-        rawRows?: any[];
     };
     discrepancies: Set<string>;
+    diffs: {
+        pnlBucket: boolean;
+        optimization: boolean;
+        unallocatedCargo: boolean;
+        buyVol: number;
+        sellVol: number;
+        buyPrice: number;
+        sellPrice: number;
+        src: number;
+        loadingMonth: boolean;
+        deliveryMonth: boolean;
+        purchaseCost: number;
+        salesRevenue: number;
+    };
     errorPcts: {
         buyPrice: number;
         sellPrice: number;
@@ -352,8 +411,17 @@ export const DiscrepancyCheck: React.FC<DiscrepancyCheckProps> = ({
   const [searchTerm, setSearchTerm] = useState('');
   const [debouncedSearch, setDebouncedSearch] = useState('');
   const [sortConfig, setSortConfig] = useState<SortConfig>({ key: null, direction: 'asc' });
+
+  // Reconciliation Quick Filters State
+  const [reconStatusFilter, setReconStatusFilter] = useState<'all' | 'matched' | 'discrepancies' | 'app_only' | 'trms_only'>('all');
+  const [reconGroupFilter, setReconGroupFilter] = useState<string>('all');
+  const [reconPnlBucketFilter, setReconPnlBucketFilter] = useState<string>('all');
+  const [reconOptimizationFilter, setReconOptimizationFilter] = useState<string>('all');
+  const [reconUnallocatedFilter, setReconUnallocatedFilter] = useState<string>('all');
+  const [selectedEodDate, setSelectedEodDate] = useState<string>('all');
+  const [selectedYear, setSelectedYear] = useState<string>('all');
   
-  const [activeFilters, setActiveFilters] = useState<Record<string, Set<any>>>({});
+  const [activeFilters, setActiveFilters] = useState<Record<string, Set<any>> >({});
   const [openFilterMenu, setOpenFilterMenu] = useState<string | null>(null);
   const [showReportPreview, setShowReportPreview] = useState(false);
   const [viewingRawData, setViewingRawData] = useState<any[] | null>(null);
@@ -621,207 +689,410 @@ export const DiscrepancyCheck: React.FC<DiscrepancyCheckProps> = ({
     Array.from(files).forEach(processFile);
   };
 
-  const reconciliationData = useMemo(() => {
-    return profiles.map(p => {
-        const trms = trmsData.trmsAgg[p.strategyName];
-        let buyLegs = trms?.commodityLegs?.filter(l => l.buySell === 'Buy') || [];
-        let sellLegs = trms?.commodityLegs?.filter(l => l.buySell === 'Sell') || [];
+  const getMonthStr = (dateStr?: string) => {
+    if (!dateStr) return '—';
+    const d = new Date(dateStr);
+    if (isNaN(d.getTime())) return dateStr;
+    const months = ['Jan', 'Feb', 'Mar', 'Apr', 'May', 'Jun', 'Jul', 'Aug', 'Sep', 'Oct', 'Nov', 'Dec'];
+    return `${months[d.getUTCMonth()]}-${String(d.getUTCFullYear()).slice(-2)}`;
+  };
 
-        // If SN has both Buy and Sell legs, drop Physical Settlement rows
-        if (buyLegs.length > 0 && sellLegs.length > 0) {
-            buyLegs = buyLegs.filter(l => l.settlementType !== 'Physical Settlement');
-            sellLegs = sellLegs.filter(l => l.settlementType !== 'Physical Settlement');
-        }
+  const trmsEngineResult = useMemo(() => {
+    return computeTrmsSummaryRows(trmsData.extractedRows || [], selectedEodDate, selectedYear);
+  }, [trmsData.extractedRows, selectedEodDate, selectedYear]);
 
-        const isAppRealized = p.pnlBucket === PnLBucket.Realized;
-        const trmsVolType = trms?.volumeType || 'N/A';
-        const trmsPriceStatus = trms?.priceStatus || 'N/A';
+  const trmsFilterOptions = useMemo(() => {
+    const rawRows = trmsData.extractedRows || [];
+    const eodDates = new Set<string>();
+    const years = new Set<string>();
 
-        const totalBuyVol = (p.loadedVolume || 0) + (p.tier2LoadedVolume || 0);
-        const totalSellVol = (p.deliveredVolume || 0) + (p.tier2DeliveredVolume || 0);
-        
-        const effectiveBuyPrice = totalBuyVol > 0 
-            ? ((p.absoluteBuyPrice || 0) * (p.loadedVolume || 0) + (p.absoluteTier2BuyPrice || 0) * (p.tier2LoadedVolume || 0)) / totalBuyVol
-            : (p.absoluteBuyPrice || 0);
-            
-        const effectiveSellPrice = totalSellVol > 0
-            ? ((p.absoluteSellPrice || 0) * (p.deliveredVolume || 0) + (p.absoluteTier2SellPrice || 0) * (p.tier2DeliveredVolume || 0)) / totalSellVol
-            : (p.absoluteSellPrice || 0);
-        
-        // Recalculate commodity value if filtered
-        const trmsCommodityValue = trms ? [...buyLegs, ...sellLegs].reduce((acc, l) => acc + l.valueUSD, 0) : 0;
+    rawRows.forEach((r: any) => {
+      const dt = String(r['EOD Date'] || r['EOD_Date'] || '').trim();
+      if (dt) eodDates.add(dt);
 
-        const row: ReconciliationRow = {
-            strategyName: p.strategyName, foundInTrms: !!trms, profileId: p.id,
-            app: { 
-                buyPrice: p.absoluteBuyPrice || 0, 
-                sellPrice: p.absoluteSellPrice || 0, 
-                buyVol: p.loadedVolume || 0, 
-                sellVol: p.deliveredVolume || 0, 
-                src: p.reconciledSrcCost || 0,
-                loadingDate: p.loadingDate || '',
-                deliveryDate: p.deliveryDate || '',
-                volumeType: isAppRealized ? 'Actual' : 'Estimate',
-                priceStatus: isAppRealized ? 'Fixed' : 'Estimate',
-                reconciledPurchaseCost: p.reconciledPurchaseCost || 0,
-                reconciledSalesRevenue: p.reconciledSalesRevenue || 0,
-                isTiered: p.isTieredPricing,
-                tier1BuyPrice: p.absoluteBuyPrice || 0,
-                tier1BuyVol: p.loadedVolume || 0,
-                tier2BuyPrice: p.absoluteTier2BuyPrice || 0,
-                tier2BuyVol: p.tier2LoadedVolume || 0,
-                tier1SellPrice: p.absoluteSellPrice || 0,
-                tier1SellVol: p.deliveredVolume || 0,
-                tier2SellPrice: p.absoluteTier2SellPrice || 0,
-                tier2SellVol: p.tier2DeliveredVolume || 0,
-                effectiveBuyPrice,
-                effectiveSellPrice
-            },
-            trms: { 
-                buyLegs, 
-                sellLegs, 
-                src: trms?.srcValue || 0,
-                srcLegs: trms?.srcLegs || [],
-                loadingDate: trms?.loadingDate || '',
-                deliveryDate: trms?.deliveryDate || '',
-                volumeType: trmsVolType,
-                priceStatus: trmsPriceStatus,
-                commodityValue: trmsCommodityValue,
-                trmsPurchaseValue: trms?.trmsPurchaseValue || 0,
-                trmsSalesValue: trms?.trmsSalesValue || 0,
-                reconciledPurchaseCost: trms?.reconciledPurchaseCost || 0,
-                reconciledSalesRevenue: trms?.reconciledSalesRevenue || 0,
-                trmsRealized: trms ? (
-                    buyLegs.length > 0 && sellLegs.length > 0 &&
-                    buyLegs.every(l => l.priceStatus === 'Fixed') &&
-                    sellLegs.every(l => l.priceStatus === 'Fixed') &&
-                    trmsVolType === 'Actual'
-                ) : false,
-                commWindowEndDate: trms?.commWindowEndDate || '',
-                rawRows: trms?.rawRows || []
-            },
-            discrepancies: new Set(),
-            errorPcts: {
-                buyPrice: 100, sellPrice: 100, buyVol: 100, sellVol: 100, src: 100,
-                loadingDate: 100, deliveryDate: 100, purchaseCost: 100, salesRevenue: 100
-            }
-        };
-
-        const calcError = (app: number, trmsVals: number[]) => {
-            if (trmsVals.length === 0) return 100;
-            if (app === 0) {
-                const best = trmsVals.reduce((prev, curr) => Math.abs(curr) < Math.abs(prev) ? curr : prev);
-                return best === 0 ? 0 : 100;
-            }
-            const best = trmsVals.reduce((prev, curr) => Math.abs(curr - app) < Math.abs(prev - app) ? curr : prev);
-            return (Math.abs(app - best) / Math.abs(app)) * 100;
-        };
-
-        const checkTieredMatch = (
-            appV1: number, appV2: number, appP1: number, appP2: number,
-            trmsLegs: TRMSCommodityLeg[],
-            type: 'vol' | 'price'
-        ) => {
-            if (trmsLegs.length === 0) return 100;
-
-            // 1. Total Volume Match (Sum of tiered volumes matches sum of TRMS volumes)
-            if (type === 'vol') {
-                const totalAppVol = appV1 + (appV2 || 0);
-                const totalTrmsVol = trmsLegs.reduce((acc, l) => acc + l.vol, 0);
-                if (Math.abs(totalAppVol - totalTrmsVol) < 1.1) return 0;
-            }
-
-            // 2. Split Match (App T1/T2 matches TRMS Leg 1/2)
-            if (trmsLegs.length === 2) {
-                const [l1, l2] = trmsLegs;
-                const match1 = (Math.abs(l1.vol - appV1) < 1.1 && Math.abs(l1.price - appP1) < 0.0051) &&
-                               (Math.abs(l2.vol - appV2) < 1.1 && Math.abs(l2.price - appP2) < 0.0051);
-                const match2 = (Math.abs(l1.vol - appV2) < 1.1 && Math.abs(l1.price - appP2) < 0.0051) &&
-                               (Math.abs(l2.vol - appV1) < 1.1 && Math.abs(l2.price - appP1) < 0.0051);
-                
-                if (match1 || match2) return 0;
-            }
-
-            return -1; // No specific tiered match found
-        };
-
-        if (trms) {
-            // Price/Vol Errors
-            if (row.app.isTiered) {
-                const buyVolTiered = checkTieredMatch(row.app.tier1BuyVol || 0, row.app.tier2BuyVol || 0, row.app.tier1BuyPrice || 0, row.app.tier2BuyPrice || 0, row.trms.buyLegs, 'vol');
-                row.errorPcts.buyVol = buyVolTiered === 0 ? 0 : calcError(row.app.buyVol, row.trms.buyLegs.map(l => l.vol));
-
-                const buyPriceTiered = checkTieredMatch(row.app.tier1BuyVol || 0, row.app.tier2BuyVol || 0, row.app.tier1BuyPrice || 0, row.app.tier2BuyPrice || 0, row.trms.buyLegs, 'price');
-                row.errorPcts.buyPrice = buyPriceTiered === 0 ? 0 : calcError(row.app.buyPrice, row.trms.buyLegs.map(l => l.price));
-
-                const sellVolTiered = checkTieredMatch(row.app.tier1SellVol || 0, row.app.tier2SellVol || 0, row.app.tier1SellPrice || 0, row.app.tier2SellPrice || 0, row.trms.sellLegs, 'vol');
-                row.errorPcts.sellVol = sellVolTiered === 0 ? 0 : calcError(row.app.sellVol, row.trms.sellLegs.map(l => l.vol));
-
-                const sellPriceTiered = checkTieredMatch(row.app.tier1SellVol || 0, row.app.tier2SellVol || 0, row.app.tier1SellPrice || 0, row.app.tier2SellPrice || 0, row.trms.sellLegs, 'price');
-                row.errorPcts.sellPrice = sellPriceTiered === 0 ? 0 : calcError(row.app.sellPrice, row.trms.sellLegs.map(l => l.price));
-            } else {
-                row.errorPcts.buyPrice = calcError(row.app.buyPrice, row.trms.buyLegs.map(l => l.price));
-                row.errorPcts.sellPrice = calcError(row.app.sellPrice, row.trms.sellLegs.map(l => l.price));
-                row.errorPcts.buyVol = calcError(row.app.buyVol, row.trms.buyLegs.map(l => l.vol));
-                row.errorPcts.sellVol = calcError(row.app.sellVol, row.trms.sellLegs.map(l => l.vol));
-            }
-            
-            // Cost/Revenue Errors
-            const appPurc = row.app.reconciledPurchaseCost > 0 ? row.app.reconciledPurchaseCost : row.app.buyPrice * row.app.buyVol;
-            const appSales = row.app.reconciledSalesRevenue > 0 ? row.app.reconciledSalesRevenue : row.app.sellPrice * row.app.sellVol;
-            row.errorPcts.purchaseCost = calcError(appPurc, row.trms.buyLegs.map(l => Math.abs(l.valueUSD)));
-            row.errorPcts.salesRevenue = calcError(appSales, row.trms.sellLegs.map(l => Math.abs(l.valueUSD)));
-
-            // SRC Error
-            if (row.trms.srcLegs.length === 0) {
-                row.errorPcts.src = row.app.src === 0 ? 0 : 100;
-            } else {
-                row.errorPcts.src = calcError(row.app.src, row.trms.srcLegs.map(l => l.value));
-            }
-
-            // Date Errors
-            const trmsMonth = getMonth(row.trms.commWindowEndDate);
-            
-            const appLMonth = getMonth(row.app.loadingDate);
-            row.errorPcts.loadingDate = (trmsMonth && appLMonth && trmsMonth === appLMonth) ? 0 : 100;
-
-            const appDMonth = getMonth(row.app.deliveryDate);
-            row.errorPcts.deliveryDate = (trmsMonth && appDMonth && trmsMonth === appDMonth) ? 0 : 100;
-
-            // Discrepancies based on error thresholds
-            if (row.errorPcts.buyPrice > 0.01 && row.app.buyPrice > 0) row.discrepancies.add('Buy Price');
-            if (row.errorPcts.sellPrice > 0.01 && row.app.sellPrice > 0) row.discrepancies.add('Sell Price');
-            if (row.errorPcts.buyVol > 0.1 && row.app.buyVol > 0) row.discrepancies.add('Buy Vol');
-            if (row.errorPcts.sellVol > 0.1 && row.app.sellVol > 0) row.discrepancies.add('Sell Vol');
-            if (row.errorPcts.src > 0.1 && (row.app.src > 0 || row.trms.src > 0)) row.discrepancies.add('SRC Cost');
-            if (row.errorPcts.loadingDate > 0) row.discrepancies.add('Loading Month');
-            if (row.errorPcts.deliveryDate > 0) row.discrepancies.add('Delivery Month');
-            
-            // Realization Check
-            if (row.trms.trmsRealized && p.pnlBucket !== PnLBucket.Realized) {
-                row.discrepancies.add('Should be Realized');
-            }
-        } else row.discrepancies.add('Missing in TRMS');
-        return row;
+      const yr = String(r['Plsb Year Bucket'] || r['Plsb_Year_Bucket'] || '').trim();
+      if (yr) {
+        const matches = yr.match(/\b(20\d\d)\b/g);
+        if (matches) matches.forEach(m => years.add(m));
+        else years.add(yr);
+      }
     });
-  }, [profiles, trmsData.trmsAgg]);
+
+    return {
+      eodDates: Array.from(eodDates).sort(),
+      years: Array.from(years).sort()
+    };
+  }, [trmsData.extractedRows]);
+
+  const reconciliationData = useMemo(() => {
+    const activeProfiles = profiles.filter(p => !p.deleted);
+    
+    // Index App Profiles by Strategy Name
+    const appMap = new Map<string, CargoProfile>();
+    activeProfiles.forEach(p => {
+      if (p.strategyName && p.strategyName.trim() !== '') {
+        appMap.set(normalizeStrategyKey(p.strategyName), p);
+      }
+    });
+
+    // Index TRMS Summaries by Strategy Name
+    const trmsMap = new Map<string, TrmsStrategySummary>();
+    trmsEngineResult.forEach(s => {
+      if (s.strategyName && s.strategyName.trim() !== '') {
+        trmsMap.set(normalizeStrategyKey(s.strategyName), s);
+      }
+    });
+
+    // All Strategy Keys
+    const allKeys = new Set<string>([
+      ...Array.from(appMap.keys()),
+      ...Array.from(trmsMap.keys())
+    ]);
+
+    const rows: ReconciliationRow[] = [];
+
+    allKeys.forEach(key => {
+      const app = appMap.get(key);
+      const trms = trmsMap.get(key);
+
+      const foundInApp = !!app;
+      const foundInTrms = !!trms;
+      const strategyName = app?.strategyName || trms?.strategyName || key;
+      const group = getGroupName(strategyName);
+
+      let status: 'Matched' | 'App Only' | 'TRMS Only' = 'Matched';
+      if (foundInApp && !foundInTrms) status = 'App Only';
+      else if (!foundInApp && foundInTrms) status = 'TRMS Only';
+
+      // App Values
+      const isAppRealized = app?.pnlBucket === PnLBucket.Realized;
+      const appPnlBucket = app ? (isAppRealized ? 'Realized' : 'Unrealized') : '—';
+      const appOptimization = app ? (app.optimized ? 'Yes' : 'No') : '—';
+
+      let appUnallocatedCargo = '—';
+      if (app) {
+        const hasBuy = (app.loadedVolume && app.loadedVolume > 0) || (app.absoluteBuyPrice && app.absoluteBuyPrice > 0) || (app.buyFormula && app.buyFormula.trim() !== '');
+        const hasSell = (app.deliveredVolume && app.deliveredVolume > 0) || (app.absoluteSellPrice && app.absoluteSellPrice > 0) || (app.sellFormula && app.sellFormula.trim() !== '');
+        if (hasBuy && hasSell) appUnallocatedCargo = 'Matched';
+        else if (hasBuy && !hasSell) appUnallocatedCargo = 'Open on Sell Leg';
+        else if (!hasBuy && hasSell) appUnallocatedCargo = 'Open on Buy Leg';
+      }
+
+      const isAppTiered = app?.isTieredPricing 
+        || (app?.tier2LoadedVolume ? app.tier2LoadedVolume > 0 : false)
+        || (app?.tier2DeliveredVolume ? app.tier2DeliveredVolume > 0 : false)
+        || (app?.absoluteTier2BuyPrice ? app.absoluteTier2BuyPrice > 0 : false)
+        || (app?.absoluteTier2SellPrice ? app.absoluteTier2SellPrice > 0 : false);
+
+      const appBuyVolT1 = app?.loadedVolume || 0;
+      const appBuyVolT2 = app?.tier2LoadedVolume || 0;
+      const appBuyVolTotal = (isAppTiered || appBuyVolT2 > 0) ? (appBuyVolT1 + appBuyVolT2) : (app?.loadedVolume || app?.totalLoadedVolume || 0);
+
+      const appBuyPriceT1 = app?.absoluteBuyPrice || 0;
+      const appBuyPriceT2 = app?.absoluteTier2BuyPrice || 0;
+      const appBuyPriceEffective = appBuyVolTotal > 0
+        ? (((appBuyVolT1 || (appBuyVolT2 > 0 ? 0 : 1)) * appBuyPriceT1 + appBuyVolT2 * appBuyPriceT2) / (appBuyVolT1 + appBuyVolT2 || 1))
+        : appBuyPriceT1;
+
+      const appSellVolT1 = app?.deliveredVolume || 0;
+      const appSellVolT2 = app?.tier2DeliveredVolume || 0;
+      const appSellVolTotal = (isAppTiered || appSellVolT2 > 0) ? (appSellVolT1 + appSellVolT2) : (app?.deliveredVolume || app?.totalDeliveredVolume || 0);
+
+      const appSellPriceT1 = app?.absoluteSellPrice || 0;
+      const appSellPriceT2 = app?.absoluteTier2SellPrice || 0;
+      const appSellPriceEffective = appSellVolTotal > 0
+        ? (((appSellVolT1 || (appSellVolT2 > 0 ? 0 : 1)) * appSellPriceT1 + appSellVolT2 * appSellPriceT2) / (appSellVolT1 + appSellVolT2 || 1))
+        : appSellPriceT1;
+
+      const appPurchaseCost = app?.reconciledPurchaseCost || (appBuyPriceEffective * appBuyVolTotal);
+      const appSalesRevenue = app?.reconciledSalesRevenue || (appSellPriceEffective * appSellVolTotal);
+      const rawAppSrc = app?.reconciledSrcCost !== undefined && app.reconciledSrcCost !== 0 ? app.reconciledSrcCost : (app?.srcUnitFee ? app.srcUnitFee * (appSellVolTotal || appBuyVolTotal) : 0);
+      const appSrc = rawAppSrc > 0 ? -rawAppSrc : rawAppSrc;
+      const appLoadingMonth = app?.loadingMonth || (app?.loadingDate ? getMonthStr(app.loadingDate) : '—');
+      const appDeliveryMonth = app?.deliveryMonth || (app?.deliveryDate ? getMonthStr(app.deliveryDate) : '—');
+
+      // TRMS Values
+      const trmsPnlBucket = trms?.physicalPnLStatus || '—';
+      const trmsOptimization = trms?.optimisationStatus || '—';
+      const trmsUnallocatedCargo = trms?.unallocatedCargo || '—';
+
+      const trmsBuyT1Vol = trms?.buyTiers?.[0]?.vol ?? (trms?.purchaseVolume ?? 0);
+      const trmsBuyT2Vol = trms?.buyTiers?.[1]?.vol ?? 0;
+      const trmsBuyVolTotal = trms?.purchaseVolume ?? 0;
+
+      const trmsBuyT1Price = trms?.buyTiers?.[0]?.price ?? (trms?.purchasePrice ?? 0);
+      const trmsBuyT2Price = trms?.buyTiers?.[1]?.price ?? 0;
+      const trmsBuyPriceEffective = trms?.purchasePrice ?? 0;
+
+      const trmsSellT1Vol = trms?.sellTiers?.[0]?.vol ?? (trms?.salesVolume ?? 0);
+      const trmsSellT2Vol = trms?.sellTiers?.[1]?.vol ?? 0;
+      const trmsSellVolTotal = trms?.salesVolume ?? 0;
+
+      const trmsSellT1Price = trms?.sellTiers?.[0]?.price ?? (trms?.salesPrice ?? 0);
+      const trmsSellT2Price = trms?.sellTiers?.[1]?.price ?? 0;
+      const trmsSellPriceEffective = trms?.salesPrice ?? 0;
+
+      const trmsPurchaseCost = trms?.purchaseCost ?? 0;
+      const trmsSalesRevenue = trms?.salesRevenue ?? 0;
+      const trmsSrc = trms?.shippingRelatedCosts ?? 0;
+      const trmsLoadingMonth = trms?.loadingMonth || '—';
+      const trmsDeliveryMonth = trms?.deliveryMonth || '—';
+
+      // Discrepancy checks
+      const discrepancies = new Set<string>();
+
+      if (!foundInTrms) {
+        discrepancies.add('Missing in TRMS');
+      } else if (!foundInApp) {
+        discrepancies.add('Missing in App');
+      } else {
+        if (appPnlBucket !== '—' && trmsPnlBucket !== '—' && appPnlBucket !== trmsPnlBucket) {
+          discrepancies.add('P&L Bucket');
+        }
+        if (appOptimization !== '—' && trmsOptimization !== '—' && appOptimization !== trmsOptimization && !(appOptimization === 'No' && (trmsOptimization as string) === '')) {
+          discrepancies.add('Optimization');
+        }
+        if (appUnallocatedCargo !== '—' && trmsUnallocatedCargo !== '—' && appUnallocatedCargo !== trmsUnallocatedCargo) {
+          discrepancies.add('Unallocated Cargo');
+        }
+        if (Math.abs(appBuyVolTotal - trmsBuyVolTotal) > 1.0) {
+          discrepancies.add('Buy Vol');
+        }
+        if (Math.abs(appSellVolTotal - trmsSellVolTotal) > 1.0) {
+          discrepancies.add('Sell Vol');
+        }
+        if (Math.abs(appBuyPriceEffective - trmsBuyPriceEffective) > 0.01) {
+          discrepancies.add('Buy Price');
+        }
+        if (Math.abs(appSellPriceEffective - trmsSellPriceEffective) > 0.01) {
+          discrepancies.add('Sell Price');
+        }
+        if (Math.abs(appSrc - trmsSrc) > 1.0) {
+          discrepancies.add('SRC Cost');
+        }
+        if (appLoadingMonth !== '—' && trmsLoadingMonth !== '—' && appLoadingMonth !== trmsLoadingMonth) {
+          discrepancies.add('Loading Month');
+        }
+        if (appDeliveryMonth !== '—' && trmsDeliveryMonth !== '—' && appDeliveryMonth !== trmsDeliveryMonth) {
+          discrepancies.add('Delivery Month');
+        }
+      }
+
+      const calcPct = (a: number, b: number) => {
+        if (a === 0 && b === 0) return 0;
+        if (a === 0 || b === 0) return 100;
+        return (Math.abs(a - b) / Math.abs(a)) * 100;
+      };
+
+      rows.push({
+        strategyName,
+        group,
+        foundInApp,
+        foundInTrms,
+        status,
+        profileId: app?.id || '',
+        app: {
+          pnlBucket: appPnlBucket,
+          optimization: appOptimization,
+          unallocatedCargo: appUnallocatedCargo,
+          buyVolT1: appBuyVolT1,
+          buyVolT2: appBuyVolT2,
+          buyVolTotal: appBuyVolTotal,
+          buyPriceT1: appBuyPriceT1,
+          buyPriceT2: appBuyPriceT2,
+          buyPriceEffective: appBuyPriceEffective,
+          sellVolT1: appSellVolT1,
+          sellVolT2: appSellVolT2,
+          sellVolTotal: appSellVolTotal,
+          sellPriceT1: appSellPriceT1,
+          sellPriceT2: appSellPriceT2,
+          sellPriceEffective: appSellPriceEffective,
+          purchaseCost: appPurchaseCost,
+          salesRevenue: appSalesRevenue,
+          src: appSrc,
+          loadingMonth: appLoadingMonth,
+          deliveryMonth: appDeliveryMonth,
+          isTiered: isAppTiered,
+          // Backwards compatibility
+          buyPrice: appBuyPriceEffective,
+          sellPrice: appSellPriceEffective,
+          buyVol: appBuyVolTotal,
+          sellVol: appSellVolTotal,
+          loadingDate: app?.loadingDate || '',
+          deliveryDate: app?.deliveryDate || '',
+          volumeType: isAppRealized ? 'Actual' : 'Estimate',
+          priceStatus: isAppRealized ? 'Fixed' : 'Estimate',
+          reconciledPurchaseCost: appPurchaseCost,
+          reconciledSalesRevenue: appSalesRevenue,
+          tier1BuyPrice: appBuyPriceT1,
+          tier1BuyVol: appBuyVolT1,
+          tier2BuyPrice: appBuyPriceT2,
+          tier2BuyVol: appBuyVolT2,
+          tier1SellPrice: appSellPriceT1,
+          tier1SellVol: appSellVolT1,
+          tier2SellPrice: appSellPriceT2,
+          tier2SellVol: appSellVolT2,
+          effectiveBuyPrice: appBuyPriceEffective,
+          effectiveSellPrice: appSellPriceEffective
+        },
+        trms: {
+          pnlBucket: trmsPnlBucket,
+          optimization: trmsOptimization,
+          unallocatedCargo: trmsUnallocatedCargo,
+          buyVolT1: trmsBuyT1Vol,
+          buyVolT2: trmsBuyT2Vol,
+          buyVolTotal: trmsBuyVolTotal,
+          buyPriceT1: trmsBuyT1Price,
+          buyPriceT2: trmsBuyT2Price,
+          buyPriceEffective: trmsBuyPriceEffective,
+          sellVolT1: trmsSellT1Vol,
+          sellVolT2: trmsSellT2Vol,
+          sellVolTotal: trmsSellVolTotal,
+          sellPriceT1: trmsSellT1Price,
+          sellPriceT2: trmsSellT2Price,
+          sellPriceEffective: trmsSellPriceEffective,
+          purchaseCost: trmsPurchaseCost,
+          salesRevenue: trmsSalesRevenue,
+          src: trmsSrc,
+          loadingMonth: trmsLoadingMonth,
+          deliveryMonth: trmsDeliveryMonth,
+          buyTiers: trms?.buyTiers || [],
+          sellTiers: trms?.sellTiers || [],
+          rawRows: trms?.underlyingRows || [],
+          // Backwards compatibility
+          buyLegs: (trms?.buyCalcRows || []).map(r => ({
+            price: Number(r.Price || 0),
+            vol: Number(r.Volume || 0),
+            buySell: 'Buy',
+            startDate: r['Start Date'] || '',
+            endDate: r['End Date'] || '',
+            priceStatus: r['Price Status'] || '',
+            settlementType: r['Settlement Type'] || '',
+            instrumentType: r['Ins Type'] || '',
+            valueUSD: Number(r.Base_Total_Value_USD || 0)
+          })),
+          sellLegs: (trms?.sellCalcRows || []).map(r => ({
+            price: Number(r.Price || 0),
+            vol: Number(r.Volume || 0),
+            buySell: 'Sell',
+            startDate: r['Start Date'] || '',
+            endDate: r['End Date'] || '',
+            priceStatus: r['Price Status'] || '',
+            settlementType: r['Settlement Type'] || '',
+            instrumentType: r['Ins Type'] || '',
+            valueUSD: Number(r.Base_Total_Value_USD || 0)
+          })),
+          srcLegs: [],
+          loadingDate: trmsLoadingMonth,
+          deliveryDate: trmsDeliveryMonth,
+          volumeType: trmsPnlBucket === 'Realized' ? 'Actual' : 'Estimate',
+          priceStatus: trmsPnlBucket === 'Realized' ? 'Fixed' : 'Estimate',
+          commodityValue: trmsSalesRevenue - trmsPurchaseCost,
+          trmsPurchaseValue: trmsPurchaseCost,
+          trmsSalesValue: trmsSalesRevenue,
+          reconciledPurchaseCost: trmsPurchaseCost,
+          reconciledSalesRevenue: trmsSalesRevenue,
+          trmsRealized: trmsPnlBucket === 'Realized',
+          commWindowEndDate: trmsDeliveryMonth
+        },
+        discrepancies,
+        diffs: {
+          pnlBucket: appPnlBucket !== trmsPnlBucket,
+          optimization: appOptimization !== trmsOptimization,
+          unallocatedCargo: appUnallocatedCargo !== trmsUnallocatedCargo,
+          buyVol: appBuyVolTotal - trmsBuyVolTotal,
+          sellVol: appSellVolTotal - trmsSellVolTotal,
+          buyPrice: appBuyPriceEffective - trmsBuyPriceEffective,
+          sellPrice: appSellPriceEffective - trmsSellPriceEffective,
+          src: appSrc - trmsSrc,
+          loadingMonth: appLoadingMonth !== trmsLoadingMonth,
+          deliveryMonth: appDeliveryMonth !== trmsDeliveryMonth,
+          purchaseCost: appPurchaseCost - trmsPurchaseCost,
+          salesRevenue: appSalesRevenue - trmsSalesRevenue
+        },
+        errorPcts: {
+          buyPrice: calcPct(appBuyPriceEffective, trmsBuyPriceEffective),
+          sellPrice: calcPct(appSellPriceEffective, trmsSellPriceEffective),
+          buyVol: calcPct(appBuyVolTotal, trmsBuyVolTotal),
+          sellVol: calcPct(appSellVolTotal, trmsSellVolTotal),
+          src: calcPct(appSrc, trmsSrc),
+          loadingDate: appLoadingMonth === trmsLoadingMonth ? 0 : 100,
+          deliveryDate: appDeliveryMonth === trmsDeliveryMonth ? 0 : 100,
+          purchaseCost: calcPct(appPurchaseCost, trmsPurchaseCost),
+          salesRevenue: calcPct(appSalesRevenue, trmsSalesRevenue)
+        }
+      });
+    });
+
+    return rows;
+  }, [profiles, trmsEngineResult]);
+
+  const allGroups = useMemo(() => {
+    return Array.from(new Set(reconciliationData.map(r => r.group))).filter(Boolean).sort();
+  }, [reconciliationData]);
+
+  const filteredReconciliationData = useMemo(() => {
+    return reconciliationData.filter(row => {
+      if (searchTerm && searchTerm.trim() !== '') {
+        const q = searchTerm.toLowerCase();
+        if (!row.strategyName.toLowerCase().includes(q) && !row.group.toLowerCase().includes(q)) {
+          return false;
+        }
+      }
+
+      if (reconStatusFilter === 'matched') {
+        if (row.status !== 'Matched' || row.discrepancies.size > 0) return false;
+      } else if (reconStatusFilter === 'discrepancies') {
+        if (row.discrepancies.size === 0) return false;
+      } else if (reconStatusFilter === 'app_only') {
+        if (row.status !== 'App Only') return false;
+      } else if (reconStatusFilter === 'trms_only') {
+        if (row.status !== 'TRMS Only') return false;
+      }
+
+      if (reconGroupFilter !== 'all') {
+        if (row.group !== reconGroupFilter) return false;
+      }
+
+      if (reconPnlBucketFilter !== 'all') {
+        if (row.app.pnlBucket !== reconPnlBucketFilter && row.trms.pnlBucket !== reconPnlBucketFilter) return false;
+      }
+
+      if (reconOptimizationFilter !== 'all') {
+        if (row.app.optimization !== reconOptimizationFilter && row.trms.optimization !== reconOptimizationFilter) return false;
+      }
+
+      if (reconUnallocatedFilter !== 'all') {
+        if (row.app.unallocatedCargo !== reconUnallocatedFilter && row.trms.unallocatedCargo !== reconUnallocatedFilter) return false;
+      }
+
+      return true;
+    });
+  }, [reconciliationData, searchTerm, reconStatusFilter, reconGroupFilter, reconPnlBucketFilter, reconOptimizationFilter, reconUnallocatedFilter]);
 
   const currentRawData = useMemo(() => {
-    if (activeTab === 'reconcile') return reconciliationData;
+    if (activeTab === 'reconcile') return filteredReconciliationData;
     if (activeTab === 'quality') return [];
     if (activeTab === 'curves') return [];
     if (activeTab === 'summary') return [];
     const val = (trmsData as any)[activeTab];
     return Array.isArray(val) ? val : [];
-  }, [activeTab, trmsData, reconciliationData]);
+  }, [activeTab, trmsData, filteredReconciliationData]);
 
   const headers = useMemo(() => {
     if (activeTab === 'reconcile') {
         return [
-            'Strategy Name', 'Loading Month', 'Delivery Month', 'Volume Type', 'Price Status', 
-            'Purchase Price', 'Purchase Volume', 'Purchase Cost', 
-            'Sales Price', 'Sales Volume', 'Sales Revenue', 
-            'SRC Components', 'Value Sync'
+            'Strategy Name',
+            'P&L Bucket',
+            'Optimization',
+            'Unallocated Cargo',
+            'Purchase Volume',
+            'Sales Volume',
+            'Purchase Price',
+            'Sales Price',
+            'SRC Costs',
+            'Loading Month',
+            'Delivery Month'
         ];
     }
     if (!currentRawData || currentRawData.length === 0) return [];
@@ -1617,6 +1888,102 @@ export const DiscrepancyCheck: React.FC<DiscrepancyCheckProps> = ({
           <ExtractedTrmsTable trmsData={trmsData} />
         ) : (
           <>
+            {activeTab === 'reconcile' && (
+              <div className="bg-slate-900 text-white p-3 border-b border-slate-800 space-y-3 shrink-0">
+                {/* Quick Filters Bar */}
+                <div className="flex flex-wrap items-center justify-between gap-3 text-xs">
+                  <div className="flex flex-wrap items-center gap-2">
+                    <span className="text-[10px] uppercase font-bold text-slate-400 tracking-wider mr-1">Quick Filters:</span>
+                    
+                    {/* Recon Status Pill Group */}
+                    <div className="flex bg-slate-800 p-0.5 rounded-lg border border-slate-700">
+                      <button onClick={() => setReconStatusFilter('all')} className={`px-2.5 py-1 rounded-md text-[10px] font-bold transition-all ${reconStatusFilter === 'all' ? 'bg-indigo-600 text-white shadow-sm' : 'text-slate-400 hover:text-white'}`}>
+                        All ({reconciliationData.length})
+                      </button>
+                      <button onClick={() => setReconStatusFilter('matched')} className={`px-2.5 py-1 rounded-md text-[10px] font-bold transition-all ${reconStatusFilter === 'matched' ? 'bg-emerald-600 text-white shadow-sm' : 'text-slate-400 hover:text-white'}`}>
+                        Matched ({reconciliationData.filter(r => r.status === 'Matched' && r.discrepancies.size === 0).length})
+                      </button>
+                      <button onClick={() => setReconStatusFilter('discrepancies')} className={`px-2.5 py-1 rounded-md text-[10px] font-bold transition-all ${reconStatusFilter === 'discrepancies' ? 'bg-rose-600 text-white shadow-sm' : 'text-slate-400 hover:text-white'}`}>
+                        Discrepancies ({reconciliationData.filter(r => r.discrepancies.size > 0).length})
+                      </button>
+                      <button onClick={() => setReconStatusFilter('app_only')} className={`px-2.5 py-1 rounded-md text-[10px] font-bold transition-all ${reconStatusFilter === 'app_only' ? 'bg-amber-600 text-white shadow-sm' : 'text-slate-400 hover:text-white'}`}>
+                        App Only ({reconciliationData.filter(r => r.status === 'App Only').length})
+                      </button>
+                      <button onClick={() => setReconStatusFilter('trms_only')} className={`px-2.5 py-1 rounded-md text-[10px] font-bold transition-all ${reconStatusFilter === 'trms_only' ? 'bg-purple-600 text-white shadow-sm' : 'text-slate-400 hover:text-white'}`}>
+                        TRMS Only ({reconciliationData.filter(r => r.status === 'TRMS Only').length})
+                      </button>
+                    </div>
+
+                    {/* Group Dropdown */}
+                    <select value={reconGroupFilter} onChange={(e) => setReconGroupFilter(e.target.value)} className="bg-slate-800 text-slate-200 border border-slate-700 text-[10px] font-bold rounded-lg px-2.5 py-1 focus:ring-1 focus:ring-indigo-500 outline-none">
+                      <option value="all">Group: All ({allGroups.length})</option>
+                      {allGroups.map(g => <option key={g} value={g}>{g}</option>)}
+                    </select>
+
+                    {/* P&L Bucket Dropdown */}
+                    <select value={reconPnlBucketFilter} onChange={(e) => setReconPnlBucketFilter(e.target.value)} className="bg-slate-800 text-slate-200 border border-slate-700 text-[10px] font-bold rounded-lg px-2.5 py-1 focus:ring-1 focus:ring-indigo-500 outline-none">
+                      <option value="all">P&L Bucket: All</option>
+                      <option value="Realized">Realized</option>
+                      <option value="Unrealized">Unrealized</option>
+                    </select>
+
+                    {/* Optimization Dropdown */}
+                    <select value={reconOptimizationFilter} onChange={(e) => setReconOptimizationFilter(e.target.value)} className="bg-slate-800 text-slate-200 border border-slate-700 text-[10px] font-bold rounded-lg px-2.5 py-1 focus:ring-1 focus:ring-indigo-500 outline-none">
+                      <option value="all">Optimization: All</option>
+                      <option value="Yes">Optimization: Yes</option>
+                      <option value="No">Optimization: No</option>
+                    </select>
+
+                    {/* Unallocated Dropdown */}
+                    <select value={reconUnallocatedFilter} onChange={(e) => setReconUnallocatedFilter(e.target.value)} className="bg-slate-800 text-slate-200 border border-slate-700 text-[10px] font-bold rounded-lg px-2.5 py-1 focus:ring-1 focus:ring-indigo-500 outline-none">
+                      <option value="all">Unallocated: All</option>
+                      <option value="Matched">Matched</option>
+                      <option value="Open on Buy Leg">Open on Buy Leg</option>
+                      <option value="Open on Sell Leg">Open on Sell Leg</option>
+                    </select>
+                  </div>
+
+                  {(reconStatusFilter !== 'all' || reconGroupFilter !== 'all' || reconPnlBucketFilter !== 'all' || reconOptimizationFilter !== 'all' || reconUnallocatedFilter !== 'all') && (
+                    <button onClick={() => {
+                      setReconStatusFilter('all');
+                      setReconGroupFilter('all');
+                      setReconPnlBucketFilter('all');
+                      setReconOptimizationFilter('all');
+                      setReconUnallocatedFilter('all');
+                    }} className="text-[10px] font-bold text-rose-400 hover:text-rose-300 underline">
+                      Reset Quick Filters
+                    </button>
+                  )}
+                </div>
+
+                {/* Reconciliation Metrics Summary Cards */}
+                <div className="grid grid-cols-2 md:grid-cols-4 gap-3 pt-1 border-t border-slate-800">
+                  <div className="bg-slate-800/80 p-2 rounded-lg border border-slate-700 flex flex-col">
+                    <span className="text-[9px] font-bold text-slate-400 uppercase tracking-wider">Filtered Strategies</span>
+                    <span className="text-sm font-black text-indigo-400 font-mono mt-0.5">{filteredReconciliationData.length} <span className="text-[10px] text-slate-400 font-normal">/ {reconciliationData.length} Total</span></span>
+                  </div>
+                  <div className="bg-slate-800/80 p-2 rounded-lg border border-slate-700 flex flex-col">
+                    <span className="text-[9px] font-bold text-slate-400 uppercase tracking-wider">Discrepancy Count</span>
+                    <span className="text-sm font-black text-rose-400 font-mono mt-0.5">{filteredReconciliationData.filter(r => r.discrepancies.size > 0).length} <span className="text-[10px] text-slate-400 font-normal">Strategies</span></span>
+                  </div>
+                  <div className="bg-slate-800/80 p-2 rounded-lg border border-slate-700 flex flex-col">
+                    <span className="text-[9px] font-bold text-slate-400 uppercase tracking-wider">Purchase Volume (MT)</span>
+                    <div className="flex items-center justify-between font-mono text-[11px] mt-0.5">
+                      <span className="text-slate-300">App: <strong className="text-white">{filteredReconciliationData.reduce((acc, r) => acc + r.app.buyVolTotal, 0).toLocaleString()}</strong></span>
+                      <span className="text-slate-400">TRMS: <strong className="text-white">{filteredReconciliationData.reduce((acc, r) => acc + r.trms.buyVolTotal, 0).toLocaleString()}</strong></span>
+                    </div>
+                  </div>
+                  <div className="bg-slate-800/80 p-2 rounded-lg border border-slate-700 flex flex-col">
+                    <span className="text-[9px] font-bold text-slate-400 uppercase tracking-wider">Sales Volume (MT)</span>
+                    <div className="flex items-center justify-between font-mono text-[11px] mt-0.5">
+                      <span className="text-slate-300">App: <strong className="text-white">{filteredReconciliationData.reduce((acc, r) => acc + r.app.sellVolTotal, 0).toLocaleString()}</strong></span>
+                      <span className="text-slate-400">TRMS: <strong className="text-white">{filteredReconciliationData.reduce((acc, r) => acc + r.trms.sellVolTotal, 0).toLocaleString()}</strong></span>
+                    </div>
+                  </div>
+                </div>
+              </div>
+            )}
+
             <div className="p-3 border-b border-slate-100 bg-slate-50/50 flex flex-col md:flex-row justify-between items-center gap-3 flex-shrink-0">
           <div className="flex items-center gap-3 w-full md:w-auto">
             <div className="relative w-full md:w-80">
@@ -1871,52 +2238,7 @@ export const DiscrepancyCheck: React.FC<DiscrepancyCheckProps> = ({
     )}
   </div>
 
-      {/* Summary Cards moved below table */}
-      <div className="grid grid-cols-1 md:grid-cols-2 lg:grid-cols-4 gap-3 flex-shrink-0">
-          <motion.div whileHover={{ scale: 1.02 }} className="bg-slate-900 p-4 rounded-2xl border border-slate-800 shadow-xl flex flex-col justify-between overflow-hidden relative group">
-              <div className="absolute top-0 right-0 p-4 opacity-10 group-hover:opacity-30 transition-opacity">
-                  <svg className="w-16 h-16 text-white" fill="none" stroke="currentColor" viewBox="0 0 24 24"><path strokeLinecap="round" strokeLinejoin="round" strokeWidth={1} d="M12 9v2m0 4h.01m-6.938 4h13.856c1.54 0 2.502-1.667 1.732-3L13.732 4c-.77-1.333-2.694-1.333-3.464 0L3.34 16c-.77 1.333.192 3 1.732 3z" /></svg>
-              </div>
-              <div className="relative z-10">
-                  <span className="text-[10px] font-black text-rose-400 uppercase tracking-widest block mb-1">Total Discrepancies</span>
-                  <h3 className="text-3xl font-black text-white font-mono">{stats.totalDiscrepancies}</h3>
-                  <p className="text-[10px] text-slate-500 font-bold uppercase mt-2">Points requiring attention</p>
-              </div>
-          </motion.div>
-          
-          <motion.div whileHover={{ scale: 1.02 }} className="bg-slate-900 p-4 rounded-2xl border border-slate-800 shadow-xl flex flex-col justify-between overflow-hidden relative group">
-              <div className="absolute top-0 right-0 p-4 opacity-10 group-hover:opacity-30 transition-opacity">
-                  <svg className="w-16 h-16 text-white" fill="none" stroke="currentColor" viewBox="0 0 24 24"><path strokeLinecap="round" strokeLinejoin="round" strokeWidth={1} d="M12 9v2m0 4h.01m-6.938 4h13.856c1.54 0 2.502-1.667 1.732-3L13.732 4c-.77-1.333-2.694-1.333-3.464 0L3.34 16c-.77 1.333.192 3 1.732 3z" /></svg>
-              </div>
-              <div className="relative z-10">
-                  <span className="text-[10px] font-black text-rose-400 uppercase tracking-widest block mb-1">Critical Errors</span>
-                  <h3 className="text-3xl font-black text-white font-mono">{stats.criticalErrorsCount}</h3>
-                  <p className="text-[10px] text-slate-500 font-bold uppercase mt-2">Errors exceeding 5%</p>
-              </div>
-          </motion.div>
 
-          <div className="bg-white p-4 rounded-2xl border border-slate-200 shadow-sm flex flex-col justify-between col-span-1 md:col-span-2">
-              <span className="text-[10px] font-black text-slate-400 uppercase tracking-widest block mb-3">Average Error Summary</span>
-              <div className="grid grid-cols-2 sm:grid-cols-4 gap-4">
-                  {[
-                      { label: 'Purc Price', val: stats.avgErrors.buyPrice },
-                      { label: 'Purc Vol', val: stats.avgErrors.buyVol },
-                      { label: 'Sales Price', val: stats.avgErrors.sellPrice },
-                      { label: 'Sales Vol', val: stats.avgErrors.sellVol },
-                      { label: 'SRC Cost', val: stats.avgErrors.src },
-                      { label: 'Purc Cost', val: stats.avgErrors.purchaseCost },
-                      { label: 'Sales Rev', val: stats.avgErrors.salesRevenue }
-                  ].map(err => (
-                      <div key={err.label} className="flex flex-col">
-                          <span className="text-[8px] font-bold text-slate-400 uppercase truncate">{err.label}</span>
-                          <span className={`text-sm font-black font-mono ${err.val > 5 ? 'text-rose-600' : err.val > 0.1 ? 'text-amber-600' : 'text-emerald-600'}`}>
-                              {err.val.toFixed(2)}%
-                          </span>
-                      </div>
-                  ))}
-              </div>
-          </div>
-      </div>
     </div>
       {/* Report Preview Modal */}
       <AnimatePresence>
@@ -2204,290 +2526,266 @@ const ReconciliationRowItem = memo(({ row, activeTab, columnWidths, handleRowEdi
 }) => {
   const r = row as ReconciliationRow;
 
-  const commMonth = getMonthStr(r.trms.commWindowEndDate);
-  const appLoadingMonth = getMonthStr(r.app.loadingDate);
-  const appDeliveryMonth = getMonthStr(r.app.deliveryDate);
-
-  const loadingMonthMatch = commMonth && appLoadingMonth && commMonth === appLoadingMonth;
-  const deliveryMonthMatch = commMonth && appDeliveryMonth && commMonth === appDeliveryMonth;
-
-  const getMonthName = (dateStr: string) => {
-      if (!dateStr) return '-';
-      const d = new Date(dateStr);
-      if (isNaN(d.getTime())) return '-';
-      return d.toLocaleString('default', { month: 'short', year: 'numeric' });
-  };
-
-  return (
-    <div className={`flex border-b border-slate-100 transition-colors hover:bg-indigo-50/20 bg-white group ${activeTab === 'reconcile' && !r.foundInTrms ? 'bg-slate-50' : ''}`} style={{ height: rowHeight, contentVisibility: 'auto', containIntrinsicSize: `auto ${rowHeight}px` }}>
-      {activeTab === 'reconcile' ? (
-        <>
-          <div className={`px-4 py-2 shrink-0 sticky left-0 z-20 border-r border-slate-50 flex items-center transition-colors group-hover:bg-indigo-50/20 ${!r.foundInTrms ? 'bg-slate-100' : 'bg-white'}`} style={{ width: columnWidths['Strategy Name'] || 280 }}>
-              <div className="min-w-0 flex-1">
-                  <div className="text-[11px] font-bold text-slate-800 truncate">{r.strategyName}</div>
-                  <div className={`text-[9px] font-bold uppercase tracking-wider ${r.foundInTrms ? 'text-emerald-500' : 'text-slate-400'}`}>{r.foundInTrms ? 'Matched in TRMS' : 'Missing from TRMS'}</div>
-              </div>
-              {r.foundInTrms && r.trms.rawRows && r.trms.rawRows.length > 0 && (
-                  <button 
-                    onClick={() => onViewRawData(r.strategyName, r.trms.rawRows!)}
-                    className="ml-2 p-1.5 text-slate-400 hover:text-indigo-600 hover:bg-indigo-50 rounded-md transition-all group/btn"
-                    title="Deep Dive TRMS Rows"
-                  >
-                    <svg className="w-3.5 h-3.5" fill="none" viewBox="0 0 24 24" stroke="currentColor">
-                        <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M15 12a3 3 0 11-6 0 3 3 0 016 0z" />
-                        <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M2.458 12C3.732 7.943 7.523 5 12 5c4.478 0 8.268 2.943 9.542 7-1.274 4.057-5.064 7-9.542 7-4.477 0-8.268-2.943-9.542-7z" />
-                    </svg>
-                  </button>
-              )}
-          </div>
-          
-          <div className={`px-4 py-2 shrink-0 flex flex-col justify-center border-r border-slate-50 overflow-hidden ${r.foundInTrms ? (loadingMonthMatch ? 'bg-emerald-50/50' : 'bg-rose-50/50') : ''}`} style={{ width: columnWidths['Loading Month'] || DEFAULT_COLUMN_WIDTH }}>
-              <div className="flex flex-col mb-1 pb-1 border-b border-slate-50">
-                  <div className="flex justify-between items-center">
-                    <span className="text-[8px] font-bold text-slate-400 uppercase tracking-tighter">App Month</span>
-                    {r.foundInTrms && (
-                        <span className={`text-[8px] font-black ${r.errorPcts.loadingDate > 0 ? 'text-rose-500' : 'text-emerald-500'}`}>
-                            {r.errorPcts.loadingDate > 0 ? 'Mismatch' : 'Match'}
-                        </span>
-                    )}
-                  </div>
-                  <span className="text-[10px] font-bold text-slate-700 font-mono">{getMonthName(r.app.loadingDate)}</span>
-              </div>
-              <div className="flex flex-col">
-                  <span className="text-[8px] font-bold text-slate-400 uppercase tracking-tighter">TRMS Month</span>
-                  <span className={`text-[10px] font-bold font-mono ${r.foundInTrms && !loadingMonthMatch ? 'text-rose-500' : 'text-slate-500'}`}>{getMonthName(r.trms.commWindowEndDate)}</span>
-              </div>
-          </div>
-
-          <div className={`px-4 py-2 shrink-0 flex flex-col justify-center border-r border-slate-50 overflow-hidden ${r.foundInTrms ? (deliveryMonthMatch ? 'bg-emerald-50/50' : 'bg-rose-50/50') : ''}`} style={{ width: columnWidths['Delivery Month'] || DEFAULT_COLUMN_WIDTH }}>
-              <div className="flex flex-col mb-1 pb-1 border-b border-slate-50">
-                  <div className="flex justify-between items-center">
-                    <span className="text-[8px] font-bold text-slate-400 uppercase tracking-tighter">App Month</span>
-                    {r.foundInTrms && (
-                        <span className={`text-[8px] font-black ${r.errorPcts.deliveryDate > 0 ? 'text-rose-500' : 'text-emerald-500'}`}>
-                            {r.errorPcts.deliveryDate > 0 ? 'Mismatch' : 'Match'}
-                        </span>
-                    )}
-                  </div>
-                  <span className="text-[10px] font-bold text-slate-700 font-mono">{getMonthName(r.app.deliveryDate)}</span>
-              </div>
-              <div className="flex flex-col">
-                  <span className="text-[8px] font-bold text-slate-400 uppercase tracking-tighter">TRMS Month</span>
-                  <span className={`text-[10px] font-bold font-mono ${r.foundInTrms && !deliveryMonthMatch ? 'text-rose-500' : 'text-slate-500'}`}>{getMonthName(r.trms.commWindowEndDate)}</span>
-              </div>
-          </div>
-
-          <div className="px-4 py-2 shrink-0 flex flex-col justify-center border-r border-slate-50 overflow-hidden" style={{ width: columnWidths['Volume Type'] || DEFAULT_COLUMN_WIDTH }}>
-              <div className="flex flex-col mb-1 pb-1 border-b border-slate-50">
-                  <span className="text-[8px] font-bold text-slate-400 uppercase tracking-tighter">App Status</span>
-                  <div className={`px-2 py-0.5 rounded text-[8px] font-black uppercase w-fit ${r.app.volumeType === 'Actual' ? 'bg-blue-600 text-white' : 'bg-slate-100 text-slate-400'}`}>
-                      {r.app.volumeType}
-                  </div>
-              </div>
-              <div className="flex flex-col">
-                  <span className="text-[8px] font-bold text-slate-400 uppercase tracking-tighter">TRMS Status</span>
-                  {!r.foundInTrms ? <span className="text-[10px] text-slate-300 italic">N/A</span> : (
-                      <div className={`px-2 py-0.5 rounded text-[8px] font-black uppercase w-fit ${r.trms.volumeType === 'Actual' ? 'bg-blue-600 text-white' : 'bg-slate-100 text-slate-400'}`}>
-                          {r.trms.volumeType}
-                      </div>
-                  )}
-              </div>
-          </div>
-
-          <div className="px-4 py-2 shrink-0 flex flex-col justify-center border-r border-slate-50 overflow-hidden" style={{ width: columnWidths['Price Status'] || DEFAULT_COLUMN_WIDTH }}>
-              <div className="flex flex-col mb-1 pb-1 border-b border-slate-50">
-                  <span className="text-[8px] font-bold text-slate-400 uppercase tracking-tighter">App Status</span>
-                  <div className={`px-2 py-0.5 rounded text-[8px] font-black uppercase w-fit ${r.app.priceStatus === 'Fixed' ? 'bg-emerald-600 text-white' : 'bg-slate-100 text-slate-400'}`}>
-                      {r.app.priceStatus}
-                  </div>
-              </div>
-              <div className="flex flex-col">
-                  <span className="text-[8px] font-bold text-slate-400 uppercase tracking-tighter">TRMS Status</span>
-                  {!r.foundInTrms ? <span className="text-[10px] text-slate-300 italic">N/A</span> : (
-                      <div className={`px-2 py-0.5 rounded text-[8px] font-black uppercase w-fit ${r.trms.priceStatus === 'Fixed' ? 'bg-emerald-600 text-white' : 'bg-slate-100 text-slate-400'}`}>
-                          {r.trms.priceStatus}
-                      </div>
-                  )}
-              </div>
-          </div>
-
-          <AlignedSplitCell 
-            type="price" 
-            appVal={r.app.buyPrice} 
-            trmsLegs={r.trms.buyLegs} 
-            found={r.foundInTrms} 
-            width={columnWidths['Purchase Price'] || DEFAULT_COLUMN_WIDTH} 
-            formatUSD={formatUSD} 
-            errorPct={r.errorPcts.buyPrice} 
-            isTiered={r.app.isTiered}
-            tier1Val={r.app.tier1BuyPrice}
-            tier2Val={r.app.tier2BuyPrice}
-            effectiveVal={r.app.effectiveBuyPrice}
-            onDeepDive={(rows) => onViewRawData(r.strategyName, rows)}
-          />
-          <AlignedSplitCell 
-            type="vol" 
-            appVal={r.app.buyVol} 
-            trmsLegs={r.trms.buyLegs} 
-            found={r.foundInTrms} 
-            width={columnWidths['Purchase Volume'] || DEFAULT_COLUMN_WIDTH} 
-            formatUSD={formatUSD} 
-            errorPct={r.errorPcts.buyVol} 
-            isTiered={r.app.isTiered}
-            tier1Val={r.app.tier1BuyVol}
-            tier2Val={r.app.tier2BuyVol}
-            totalVol={r.app.buyVol + (r.app.tier2BuyVol || 0)}
-            onDeepDive={(rows) => onViewRawData(r.strategyName, rows)}
-          />
-          <AlignedSplitCell 
-            type="value" 
-            appVal={r.app.reconciledPurchaseCost > 0 ? r.app.reconciledPurchaseCost : r.app.buyPrice * r.app.buyVol} 
-            trmsLegs={r.trms.buyLegs} 
-            found={r.foundInTrms} 
-            width={columnWidths['Purchase Cost'] || DEFAULT_COLUMN_WIDTH} 
-            formatUSD={formatUSD} 
-            errorPct={r.errorPcts.purchaseCost}
-            label="Purchase Cost"
-            onDeepDive={(rows) => onViewRawData(r.strategyName, rows)}
-          />
-          <AlignedSplitCell 
-            type="price" 
-            appVal={r.app.sellPrice} 
-            trmsLegs={r.trms.sellLegs} 
-            found={r.foundInTrms} 
-            width={columnWidths['Sales Price'] || DEFAULT_COLUMN_WIDTH} 
-            formatUSD={formatUSD} 
-            errorPct={r.errorPcts.sellPrice} 
-            isTiered={r.app.isTiered}
-            tier1Val={r.app.tier1SellPrice}
-            tier2Val={r.app.tier2SellPrice}
-            effectiveVal={r.app.effectiveSellPrice}
-            onDeepDive={(rows) => onViewRawData(r.strategyName, rows)}
-          />
-          <AlignedSplitCell 
-            type="vol" 
-            appVal={r.app.sellVol} 
-            trmsLegs={r.trms.sellLegs} 
-            found={r.foundInTrms} 
-            width={columnWidths['Sales Volume'] || DEFAULT_COLUMN_WIDTH} 
-            formatUSD={formatUSD} 
-            errorPct={r.errorPcts.sellVol} 
-            isTiered={r.app.isTiered}
-            tier1Val={r.app.tier1SellVol}
-            tier2Val={r.app.tier2SellVol}
-            totalVol={r.app.sellVol + (r.app.tier2SellVol || 0)}
-            onDeepDive={(rows) => onViewRawData(r.strategyName, rows)}
-          />
-          <AlignedSplitCell 
-            type="value" 
-            appVal={r.app.reconciledSalesRevenue > 0 ? r.app.reconciledSalesRevenue : r.app.sellPrice * r.app.sellVol} 
-            trmsLegs={r.trms.sellLegs} 
-            found={r.foundInTrms} 
-            width={columnWidths['Sales Revenue'] || DEFAULT_COLUMN_WIDTH} 
-            formatUSD={formatUSD} 
-            errorPct={r.errorPcts.salesRevenue}
-            label="Sales Revenue"
-            onDeepDive={(rows) => onViewRawData(r.strategyName, rows)}
-          />
-          
-          <div className="px-4 py-2 shrink-0 flex flex-col justify-center border-r border-slate-50 overflow-hidden" style={{ width: columnWidths['SRC Components'] || DEFAULT_COLUMN_WIDTH }}>
-                <div className="flex flex-col mb-2 pb-1 border-b border-slate-50 group/app">
-                    <div className="flex justify-between items-center">
-                        <span className="text-[8px] font-bold text-slate-400 uppercase tracking-tighter flex items-center gap-1">
-                            App Reconciled SRC
-                            {r.foundInTrms && r.trms.srcLegs.length > 0 && (
-                                <button 
-                                    onClick={() => onViewRawData(r.strategyName, r.trms.srcLegs.map(l => l.rawRow).filter(Boolean))}
-                                    className="opacity-0 group-hover/app:opacity-100 p-0.5 text-indigo-400 hover:text-indigo-600 transition-all"
-                                    title="Deep Dive all relevant TRMS rows"
-                                >
-                                    <svg className="w-2.5 h-2.5" fill="none" viewBox="0 0 24 24" stroke="currentColor">
-                                        <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M15 12a3 3 0 11-6 0 3 3 0 016 0z" />
-                                        <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M2.458 12C3.732 7.943 7.523 5 12 5c4.478 0 8.268 2.943 9.542 7-1.274 4.057-5.064 7-9.542 7-4.477 0-8.268-2.943-9.542-7z" />
-                                    </svg>
-                                </button>
-                            )}
-                        </span>
-                        {r.foundInTrms && r.errorPcts.src > 0 && (
-                            <span className={`text-[8px] font-black ${r.errorPcts.src > 5 ? 'text-rose-500' : 'text-amber-500'}`}>
-                                Err: {r.errorPcts.src.toFixed(1)}%
-                            </span>
-                        )}
-                    </div>
-                    <AutoScalingText maxFontSize={10} minFontSize={7} className="font-bold text-slate-700 font-mono">
-                        {formatUSD(r.app.src)}
-                    </AutoScalingText>
-                </div>
-                <div className="flex-1 overflow-y-auto custom-scrollbar flex flex-col space-y-1">
-                    {!r.foundInTrms ? <span className="text-[10px] text-slate-300 italic">Not found</span> : r.trms.srcLegs.length === 0 ? (
-                        r.app.src === 0 ? <span className="text-[10px] text-emerald-500 italic">Match (Both 0)</span> : <span className="text-[10px] text-rose-500 italic">No SRC Data</span>
-                    ) : (
-                        <>
-                            <div className="text-[8px] font-bold text-slate-300 uppercase mb-0.5 flex justify-between items-center">
-                                <span>TRMS Breakdown (Sum: {formatUSD(r.trms.src)})</span>
-                            </div>
-                            {r.trms.srcLegs.map((leg, idx) => {
-                                const isM = Math.abs(r.trms.src - r.app.src) < 100;
-                                return (
-                                    <div 
-                                        key={idx} 
-                                        onClick={() => leg.rawRow && onViewRawData(r.strategyName, [leg.rawRow])}
-                                        className={`h-5 flex items-center justify-between px-1.5 rounded font-mono text-[9px] border cursor-pointer transition-all hover:scale-[1.02] active:scale-[0.98] group ${isM ? 'bg-emerald-50 text-emerald-700 font-bold border-emerald-100 shadow-sm' : 'bg-slate-50 text-slate-500 border-slate-100 hover:bg-slate-100'}`}
-                                        title="Click to Deep Dive this specific row"
-                                    >
-                                        <span className="truncate pr-1">LEG {idx + 1}</span>
-                                        <span className="font-bold">{formatUSD(leg.value)}</span>
-                                        <svg className="w-2 h-2 ml-1 opacity-0 group-hover:opacity-100" fill="none" viewBox="0 0 24 24" stroke="currentColor">
-                                            <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M15 12a3 3 0 11-6 0 3 3 0 016 0z" />
-                                            <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M2.458 12C3.732 7.943 7.523 5 12 5c4.478 0 8.268 2.943 9.542 7-1.274 4.057-5.064 7-9.542 7-4.477 0-8.268-2.943-9.542-7z" />
-                                        </svg>
-                                    </div>
-                                );
-                            })}
-                        </>
-                    )}
-                </div>
-          </div>
-
-          <div className="px-4 py-2 shrink-0 flex flex-col justify-center border-r border-slate-50 overflow-hidden" style={{ width: columnWidths['Value Sync'] || DEFAULT_COLUMN_WIDTH }}>
-              <div className="flex flex-col mb-1 pb-1 border-b border-slate-50">
-                  <span className="text-[8px] font-bold text-slate-400 uppercase tracking-tighter">App Physical P&L</span>
-                  <AutoScalingText maxFontSize={10} minFontSize={7} className="font-bold text-slate-700 font-mono">
-                      {formatUSD((r.app.reconciledSalesRevenue > 0 ? r.app.reconciledSalesRevenue : r.app.sellPrice * r.app.sellVol) - (r.app.reconciledPurchaseCost > 0 ? r.app.reconciledPurchaseCost : r.app.buyPrice * r.app.buyVol) - r.app.src)}
-                  </AutoScalingText>
-              </div>
-              <div className="flex flex-col">
-                  <div className="flex justify-between items-center">
-                      <span className="text-[8px] font-bold text-slate-400 uppercase tracking-tighter">TRMS Base Value</span>
-                      {r.foundInTrms && (r.app.sellPrice * r.app.sellVol - r.app.buyPrice * r.app.buyVol - r.app.src) !== 0 && (
-                          <span className={`text-[8px] font-black ${Math.abs((r.trms.commodityValue - (r.app.sellPrice * r.app.sellVol - r.app.buyPrice * r.app.buyVol - r.app.src)) / (r.app.sellPrice * r.app.sellVol - r.app.buyPrice * r.app.buyVol - r.app.src)) > 0.05 ? 'text-rose-500' : 'text-amber-500'}`}>
-                              {((r.trms.commodityValue - (r.app.sellPrice * r.app.sellVol - r.app.buyPrice * r.app.buyVol - r.app.src)) / Math.abs(r.app.sellPrice * r.app.sellVol - r.app.buyPrice * r.app.buyVol - r.app.src) * 100).toFixed(1)}%
-                          </span>
-                      )}
-                  </div>
-                  <AutoScalingText maxFontSize={10} minFontSize={7} className={`font-bold font-mono ${r.foundInTrms && Math.abs((r.app.sellPrice * r.app.sellVol - r.app.buyPrice * r.app.buyVol - r.app.src) - r.trms.commodityValue) > 100 ? 'text-rose-500' : 'text-slate-500'}`}>
-                      {r.foundInTrms ? formatUSD(r.trms.commodityValue) : 'N/A'}
-                  </AutoScalingText>
-              </div>
-          </div>
-          <div className="px-4 py-2 shrink-0 sticky right-0 z-30 bg-white group-hover:bg-indigo-50 border-l border-slate-100 flex items-center justify-center" style={{ width: 80 }}>
-                <button 
-                    onClick={() => handleRowEdit(r.profileId)}
-                    className="p-2 text-indigo-600 hover:bg-indigo-100 rounded-full transition-colors"
-                    title="Edit Cargo in List"
-                >
-                    <svg className="w-4 h-4" fill="none" stroke="currentColor" viewBox="0 0 24 24"><path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M11 5H6a2 2 0 00-2 2v11a2 2 0 002 2h11a2 2 0 002-2v-5m-1.414-9.414a2 2 0 112.828 2.828L11.828 15H9v-2.828l8.586-8.586z" /></svg>
-                </button>
-          </div>
-        </>
-      ) : (
-        headers.map((header, idx) => {
+  if (activeTab !== 'reconcile') {
+    return (
+      <div className="flex border-b border-slate-100 transition-colors hover:bg-indigo-50/20 bg-white group" style={{ height: rowHeight, contentVisibility: 'auto', containIntrinsicSize: `auto ${rowHeight}px` }}>
+        {headers.map((header, idx) => {
           const width = columnWidths[header] || DEFAULT_COLUMN_WIDTH;
           return (
             <div key={header} className={`px-4 py-3 text-slate-600 whitespace-nowrap shrink-0 truncate text-[11px] border-r border-slate-50 ${idx === 0 ? 'sticky left-0 z-20 bg-white group-hover:bg-indigo-50/20 font-bold' : ''}`} style={{ width }}>{String(row[header] ?? '-')}</div>
           );
-        })
-      )}
+        })}
+      </div>
+    );
+  }
+
+  const pnlMismatch = r.foundInApp && r.foundInTrms && r.diffs.pnlBucket;
+  const optMismatch = r.foundInApp && r.foundInTrms && r.diffs.optimization;
+  const unallocMismatch = r.foundInApp && r.foundInTrms && r.diffs.unallocatedCargo;
+  const buyVolMismatch = r.foundInApp && r.foundInTrms && Math.abs(r.diffs.buyVol) > 1.0;
+  const sellVolMismatch = r.foundInApp && r.foundInTrms && Math.abs(r.diffs.sellVol) > 1.0;
+  const buyPriceMismatch = r.foundInApp && r.foundInTrms && Math.abs(r.diffs.buyPrice) > 0.01;
+  const sellPriceMismatch = r.foundInApp && r.foundInTrms && Math.abs(r.diffs.sellPrice) > 0.01;
+  const srcMismatch = r.foundInApp && r.foundInTrms && Math.abs(r.diffs.src) > 1.0;
+  const loadingMonthMismatch = r.foundInApp && r.foundInTrms && r.diffs.loadingMonth;
+  const deliveryMonthMismatch = r.foundInApp && r.foundInTrms && r.diffs.deliveryMonth;
+
+  return (
+    <div className={`flex border-b border-slate-100 transition-colors hover:bg-indigo-50/30 bg-white group ${!r.foundInTrms ? 'bg-amber-50/20' : !r.foundInApp ? 'bg-purple-50/20' : ''}`} style={{ height: rowHeight, contentVisibility: 'auto', containIntrinsicSize: `auto ${rowHeight}px` }}>
+      {/* 1. Strategy Name */}
+      <div className={`px-4 py-2 shrink-0 sticky left-0 z-20 border-r border-slate-100 flex items-center transition-colors group-hover:bg-indigo-50/30 ${!r.foundInTrms ? 'bg-amber-50/80' : !r.foundInApp ? 'bg-purple-50/80' : 'bg-white'}`} style={{ width: columnWidths['Strategy Name'] || 280 }}>
+        <div className="min-w-0 flex-1">
+          <div className="flex items-center gap-1.5">
+            <span className="text-[11px] font-bold text-slate-800 truncate">{r.strategyName}</span>
+            <span className="text-[8px] font-bold text-slate-400 bg-slate-100 px-1.5 py-0.5 rounded truncate">{r.group}</span>
+          </div>
+          <div className="flex items-center gap-1 mt-1">
+            {r.status === 'Matched' ? (
+              <span className="text-[8px] font-black uppercase tracking-wider bg-emerald-100 text-emerald-700 px-1.5 py-0.5 rounded">Matched</span>
+            ) : r.status === 'App Only' ? (
+              <span className="text-[8px] font-black uppercase tracking-wider bg-amber-100 text-amber-800 px-1.5 py-0.5 rounded">App Only (Missing in TRMS)</span>
+            ) : (
+              <span className="text-[8px] font-black uppercase tracking-wider bg-purple-100 text-purple-800 px-1.5 py-0.5 rounded">TRMS Only (Missing in App)</span>
+            )}
+
+            {r.discrepancies.size > 0 && r.status === 'Matched' && (
+              <span className="text-[8px] font-black bg-rose-100 text-rose-700 px-1.5 py-0.5 rounded">
+                {r.discrepancies.size} Diff
+              </span>
+            )}
+          </div>
+        </div>
+
+        {r.foundInTrms && r.trms.rawRows && r.trms.rawRows.length > 0 && (
+          <button 
+            onClick={() => onViewRawData(r.strategyName, r.trms.rawRows!)}
+            className="ml-2 p-1.5 text-slate-400 hover:text-indigo-600 hover:bg-indigo-50 rounded-md transition-all group/btn shrink-0"
+            title="Deep Dive TRMS Raw Rows"
+          >
+            <svg className="w-3.5 h-3.5" fill="none" viewBox="0 0 24 24" stroke="currentColor">
+              <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M15 12a3 3 0 11-6 0 3 3 0 016 0z" />
+              <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M2.458 12C3.732 7.943 7.523 5 12 5c4.478 0 8.268 2.943 9.542 7-1.274 4.057-5.064 7-9.542 7-4.477 0-8.268-2.943-9.542-7z" />
+            </svg>
+          </button>
+        )}
+      </div>
+
+      {/* 2. P&L Bucket */}
+      <div className={`px-3 py-2 shrink-0 flex flex-col justify-center border-r border-slate-100 overflow-hidden ${pnlMismatch ? 'bg-rose-50/70' : ''}`} style={{ width: columnWidths['P&L Bucket'] || DEFAULT_COLUMN_WIDTH }}>
+        <div className="flex justify-between items-center mb-1 pb-1 border-b border-slate-100">
+          <span className="text-[8px] font-bold text-slate-400 uppercase">App</span>
+          <span className={`text-[10px] font-bold font-mono ${r.app.pnlBucket === 'Realized' ? 'text-blue-600' : 'text-slate-700'}`}>{r.app.pnlBucket}</span>
+        </div>
+        <div className="flex justify-between items-center">
+          <span className="text-[8px] font-bold text-slate-400 uppercase">TRMS</span>
+          <span className={`text-[10px] font-bold font-mono ${r.trms.pnlBucket === 'Realized' ? 'text-blue-600' : pnlMismatch ? 'text-rose-600' : 'text-slate-600'}`}>{r.trms.pnlBucket}</span>
+        </div>
+      </div>
+
+      {/* 3. Optimization */}
+      <div className={`px-3 py-2 shrink-0 flex flex-col justify-center border-r border-slate-100 overflow-hidden ${optMismatch ? 'bg-rose-50/70' : ''}`} style={{ width: columnWidths['Optimization'] || DEFAULT_COLUMN_WIDTH }}>
+        <div className="flex justify-between items-center mb-1 pb-1 border-b border-slate-100">
+          <span className="text-[8px] font-bold text-slate-400 uppercase">App</span>
+          <span className={`text-[10px] font-bold font-mono ${r.app.optimization === 'Yes' ? 'text-emerald-600' : 'text-slate-700'}`}>{r.app.optimization}</span>
+        </div>
+        <div className="flex justify-between items-center">
+          <span className="text-[8px] font-bold text-slate-400 uppercase">TRMS</span>
+          <span className={`text-[10px] font-bold font-mono ${r.trms.optimization === 'Yes' ? 'text-emerald-600' : optMismatch ? 'text-rose-600' : 'text-slate-600'}`}>{r.trms.optimization}</span>
+        </div>
+      </div>
+
+      {/* 4. Unallocated Cargo */}
+      <div className={`px-3 py-2 shrink-0 flex flex-col justify-center border-r border-slate-100 overflow-hidden ${unallocMismatch ? 'bg-rose-50/70' : ''}`} style={{ width: columnWidths['Unallocated Cargo'] || 160 }}>
+        <div className="flex justify-between items-center mb-1 pb-1 border-b border-slate-100">
+          <span className="text-[8px] font-bold text-slate-400 uppercase">App</span>
+          <span className="text-[9px] font-bold font-mono text-slate-800 truncate">{r.app.unallocatedCargo}</span>
+        </div>
+        <div className="flex justify-between items-center">
+          <span className="text-[8px] font-bold text-slate-400 uppercase">TRMS</span>
+          <span className={`text-[9px] font-bold font-mono truncate ${unallocMismatch ? 'text-rose-600' : 'text-slate-600'}`}>{r.trms.unallocatedCargo}</span>
+        </div>
+      </div>
+
+      {/* 5. Purchase Volume */}
+      <div className={`px-3 py-2 shrink-0 flex flex-col justify-center border-r border-slate-100 overflow-hidden ${buyVolMismatch ? 'bg-rose-50/70' : ''}`} style={{ width: columnWidths['Purchase Volume'] || 160 }}>
+        <div className="flex flex-col mb-1 pb-1 border-b border-slate-100">
+          <div className="flex justify-between items-center text-[8px] text-slate-400 font-bold uppercase">
+            <span>App Buy Vol</span>
+            {r.app.isTiered && <span className="text-indigo-600">2-Tier</span>}
+          </div>
+          <div className="flex justify-between items-center font-mono text-[10px]">
+            {r.app.isTiered ? (
+              <span className="text-slate-600 text-[8px]">T1:{r.app.buyVolT1.toLocaleString()} | T2:{r.app.buyVolT2.toLocaleString()}</span>
+            ) : null}
+            <span className="font-bold text-slate-800 ml-auto">{r.app.buyVolTotal.toLocaleString()}</span>
+          </div>
+        </div>
+        <div className="flex flex-col">
+          <div className="flex justify-between items-center text-[8px] text-slate-400 font-bold uppercase">
+            <span>TRMS Buy Vol</span>
+            {r.trms.buyVolT2 > 0 && <span className="text-violet-600">2-Tier</span>}
+          </div>
+          <div className="flex justify-between items-center font-mono text-[10px]">
+            {r.trms.buyVolT2 > 0 ? (
+              <span className="text-slate-500 text-[8px]">T1:{r.trms.buyVolT1.toLocaleString()} | T2:{r.trms.buyVolT2.toLocaleString()}</span>
+            ) : null}
+            <span className={`font-bold ml-auto ${buyVolMismatch ? 'text-rose-600' : 'text-slate-700'}`}>{r.trms.buyVolTotal.toLocaleString()}</span>
+          </div>
+        </div>
+      </div>
+
+      {/* 6. Sales Volume */}
+      <div className={`px-3 py-2 shrink-0 flex flex-col justify-center border-r border-slate-100 overflow-hidden ${sellVolMismatch ? 'bg-rose-50/70' : ''}`} style={{ width: columnWidths['Sales Volume'] || 160 }}>
+        <div className="flex flex-col mb-1 pb-1 border-b border-slate-100">
+          <div className="flex justify-between items-center text-[8px] text-slate-400 font-bold uppercase">
+            <span>App Sell Vol</span>
+            {r.app.isTiered && <span className="text-indigo-600">2-Tier</span>}
+          </div>
+          <div className="flex justify-between items-center font-mono text-[10px]">
+            {r.app.isTiered ? (
+              <span className="text-slate-600 text-[8px]">T1:{r.app.sellVolT1.toLocaleString()} | T2:{r.app.sellVolT2.toLocaleString()}</span>
+            ) : null}
+            <span className="font-bold text-slate-800 ml-auto">{r.app.sellVolTotal.toLocaleString()}</span>
+          </div>
+        </div>
+        <div className="flex flex-col">
+          <div className="flex justify-between items-center text-[8px] text-slate-400 font-bold uppercase">
+            <span>TRMS Sell Vol</span>
+            {r.trms.sellVolT2 > 0 && <span className="text-violet-600">2-Tier</span>}
+          </div>
+          <div className="flex justify-between items-center font-mono text-[10px]">
+            {r.trms.sellVolT2 > 0 ? (
+              <span className="text-slate-500 text-[8px]">T1:{r.trms.sellVolT1.toLocaleString()} | T2:{r.trms.sellVolT2.toLocaleString()}</span>
+            ) : null}
+            <span className={`font-bold ml-auto ${sellVolMismatch ? 'text-rose-600' : 'text-slate-700'}`}>{r.trms.sellVolTotal.toLocaleString()}</span>
+          </div>
+        </div>
+      </div>
+
+      {/* 7. Purchase Price */}
+      <div className={`px-3 py-2 shrink-0 flex flex-col justify-center border-r border-slate-100 overflow-hidden ${buyPriceMismatch ? 'bg-rose-50/70' : ''}`} style={{ width: columnWidths['Purchase Price'] || 160 }}>
+        <div className="flex flex-col mb-1 pb-1 border-b border-slate-100">
+          <div className="flex justify-between items-center text-[8px] text-slate-400 font-bold uppercase">
+            <span>App Buy Price</span>
+            {r.app.isTiered && <span className="text-indigo-600">2-Tier</span>}
+          </div>
+          <div className="flex justify-between items-center font-mono text-[10px]">
+            {r.app.isTiered ? (
+              <span className="text-slate-600 text-[8px]">T1:${r.app.buyPriceT1.toFixed(2)} | T2:${r.app.buyPriceT2.toFixed(2)}</span>
+            ) : null}
+            <span className="font-bold text-slate-800 ml-auto">${r.app.buyPriceEffective.toFixed(3)}</span>
+          </div>
+        </div>
+        <div className="flex flex-col">
+          <div className="flex justify-between items-center text-[8px] text-slate-400 font-bold uppercase">
+            <span>TRMS Buy Price</span>
+            {r.trms.buyPriceT2 > 0 && <span className="text-violet-600">2-Tier</span>}
+          </div>
+          <div className="flex justify-between items-center font-mono text-[10px]">
+            {r.trms.buyPriceT2 > 0 ? (
+              <span className="text-slate-500 text-[8px]">T1:${r.trms.buyPriceT1.toFixed(2)} | T2:${r.trms.buyPriceT2.toFixed(2)}</span>
+            ) : null}
+            <span className={`font-bold ml-auto ${buyPriceMismatch ? 'text-rose-600' : 'text-slate-700'}`}>${r.trms.buyPriceEffective.toFixed(3)}</span>
+          </div>
+        </div>
+      </div>
+
+      {/* 8. Sales Price */}
+      <div className={`px-3 py-2 shrink-0 flex flex-col justify-center border-r border-slate-100 overflow-hidden ${sellPriceMismatch ? 'bg-rose-50/70' : ''}`} style={{ width: columnWidths['Sales Price'] || 160 }}>
+        <div className="flex flex-col mb-1 pb-1 border-b border-slate-100">
+          <div className="flex justify-between items-center text-[8px] text-slate-400 font-bold uppercase">
+            <span>App Sell Price</span>
+            {r.app.isTiered && <span className="text-indigo-600">2-Tier</span>}
+          </div>
+          <div className="flex justify-between items-center font-mono text-[10px]">
+            {r.app.isTiered ? (
+              <span className="text-slate-600 text-[8px]">T1:${r.app.sellPriceT1.toFixed(2)} | T2:${r.app.sellPriceT2.toFixed(2)}</span>
+            ) : null}
+            <span className="font-bold text-slate-800 ml-auto">${r.app.sellPriceEffective.toFixed(3)}</span>
+          </div>
+        </div>
+        <div className="flex flex-col">
+          <div className="flex justify-between items-center text-[8px] text-slate-400 font-bold uppercase">
+            <span>TRMS Sell Price</span>
+            {r.trms.sellPriceT2 > 0 && <span className="text-violet-600">2-Tier</span>}
+          </div>
+          <div className="flex justify-between items-center font-mono text-[10px]">
+            {r.trms.sellPriceT2 > 0 ? (
+              <span className="text-slate-500 text-[8px]">T1:${r.trms.sellPriceT1.toFixed(2)} | T2:${r.trms.sellPriceT2.toFixed(2)}</span>
+            ) : null}
+            <span className={`font-bold ml-auto ${sellPriceMismatch ? 'text-rose-600' : 'text-slate-700'}`}>${r.trms.sellPriceEffective.toFixed(3)}</span>
+          </div>
+        </div>
+      </div>
+
+      {/* 9. SRC Costs */}
+      <div className={`px-3 py-2 shrink-0 flex flex-col justify-center border-r border-slate-100 overflow-hidden ${srcMismatch ? 'bg-rose-50/70' : ''}`} style={{ width: columnWidths['SRC Costs'] || DEFAULT_COLUMN_WIDTH }}>
+        <div className="flex justify-between items-center mb-1 pb-1 border-b border-slate-100">
+          <span className="text-[8px] font-bold text-slate-400 uppercase">App SRC</span>
+          <span className="text-[10px] font-bold font-mono text-slate-800">{formatUSD(r.app.src)}</span>
+        </div>
+        <div className="flex justify-between items-center">
+          <span className="text-[8px] font-bold text-slate-400 uppercase">TRMS SRC</span>
+          <span className={`text-[10px] font-bold font-mono ${srcMismatch ? 'text-rose-600' : 'text-slate-600'}`}>{formatUSD(r.trms.src)}</span>
+        </div>
+      </div>
+
+      {/* 10. Loading Month */}
+      <div className={`px-3 py-2 shrink-0 flex flex-col justify-center border-r border-slate-100 overflow-hidden ${loadingMonthMismatch ? 'bg-rose-50/70' : ''}`} style={{ width: columnWidths['Loading Month'] || DEFAULT_COLUMN_WIDTH }}>
+        <div className="flex justify-between items-center mb-1 pb-1 border-b border-slate-100">
+          <span className="text-[8px] font-bold text-slate-400 uppercase">App Month</span>
+          <span className="text-[10px] font-bold font-mono text-slate-800">{r.app.loadingMonth}</span>
+        </div>
+        <div className="flex justify-between items-center">
+          <span className="text-[8px] font-bold text-slate-400 uppercase">TRMS Month</span>
+          <span className={`text-[10px] font-bold font-mono ${loadingMonthMismatch ? 'text-rose-600' : 'text-slate-600'}`}>{r.trms.loadingMonth}</span>
+        </div>
+      </div>
+
+      {/* 11. Delivery Month */}
+      <div className={`px-3 py-2 shrink-0 flex flex-col justify-center border-r border-slate-100 overflow-hidden ${deliveryMonthMismatch ? 'bg-rose-50/70' : ''}`} style={{ width: columnWidths['Delivery Month'] || DEFAULT_COLUMN_WIDTH }}>
+        <div className="flex justify-between items-center mb-1 pb-1 border-b border-slate-100">
+          <span className="text-[8px] font-bold text-slate-400 uppercase">App Month</span>
+          <span className="text-[10px] font-bold font-mono text-slate-800">{r.app.deliveryMonth}</span>
+        </div>
+        <div className="flex justify-between items-center">
+          <span className="text-[8px] font-bold text-slate-400 uppercase">TRMS Month</span>
+          <span className={`text-[10px] font-bold font-mono ${deliveryMonthMismatch ? 'text-rose-600' : 'text-slate-600'}`}>{r.trms.deliveryMonth}</span>
+        </div>
+      </div>
+
+      {/* Actions */}
+      <div className="px-3 py-2 shrink-0 sticky right-0 z-30 bg-white group-hover:bg-indigo-50/50 border-l border-slate-100 flex items-center justify-center" style={{ width: 80 }}>
+        {r.foundInApp && (
+          <button 
+            onClick={() => handleRowEdit(r.profileId)}
+            className="p-1.5 text-indigo-600 hover:bg-indigo-100 rounded-lg transition-colors"
+            title="Edit Cargo Profile"
+          >
+            <svg className="w-4 h-4" fill="none" stroke="currentColor" viewBox="0 0 24 24"><path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M11 5H6a2 2 0 00-2 2v11a2 2 0 002 2h11a2 2 0 002-2v-5m-1.414-9.414a2 2 0 112.828 2.828L11.828 15H9v-2.828l8.586-8.586z" /></svg>
+          </button>
+        )}
+      </div>
     </div>
   );
 });
