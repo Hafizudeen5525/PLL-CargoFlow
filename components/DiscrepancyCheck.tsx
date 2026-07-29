@@ -22,7 +22,7 @@ import * as XLSX from 'xlsx';
 import { DataQualityDashboard } from './DataQualityDashboard';
 import { CargoProfile, PnLBucket, ForwardCurveData, ForwardCurve, ForwardCurvePoint } from '../types';
 import { TrmsSummaryTable } from './TrmsSummaryTable';
-import { computeTrmsSummaryRows, TrmsStrategySummary, normalizeStrategyKey } from '../utils/trmsEngine';
+import { computeTrmsSummaryRows, TrmsStrategySummary, normalizeStrategyKey, parseFlexibleDate } from '../utils/trmsEngine';
 import { getGroupName, GROUPS, saveForwardCurve, ForwardCurveRow, getForwardCurve, getAvailableCurveDates, getGRMForwardCurve, getAvailableGRMCurveDates, formatCurrency } from '../services/calculationService';
 import { LineChart, Line, XAxis, YAxis, CartesianGrid, Tooltip, Legend, ResponsiveContainer } from 'recharts';
 
@@ -691,10 +691,10 @@ export const DiscrepancyCheck: React.FC<DiscrepancyCheckProps> = ({
 
   const getMonthStr = (dateStr?: string) => {
     if (!dateStr) return '—';
-    const d = new Date(dateStr);
-    if (isNaN(d.getTime())) return dateStr;
+    const parsed = parseFlexibleDate(dateStr);
+    if (!parsed) return dateStr;
     const months = ['Jan', 'Feb', 'Mar', 'Apr', 'May', 'Jun', 'Jul', 'Aug', 'Sep', 'Oct', 'Nov', 'Dec'];
-    return `${months[d.getUTCMonth()]}-${String(d.getUTCFullYear()).slice(-2)}`;
+    return `${months[parsed.month]}-${String(parsed.year).slice(-2)}`;
   };
 
   const trmsEngineResult = useMemo(() => {
