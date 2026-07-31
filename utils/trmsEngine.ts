@@ -1,3 +1,20 @@
+export function isUnallocatedBuyer(buyerName?: string): boolean {
+  if (!buyerName || !buyerName.trim()) return true;
+  const b = buyerName.trim().toUpperCase();
+  if (['SPOT', 'UA', 'UNALLOCATED', 'TBD', 'NONE', 'OPEN', 'NO BUYER', 'SPOT/UA', 'UA/SPOT', 'SPOT / UA', 'UA / SPOT', 'OPEN ON SELL', 'OPEN ON SELL LEG'].includes(b)) {
+    return true;
+  }
+  const tokens = b.split(/[\s/\\_-]+/).filter(Boolean);
+  if (tokens.length > 0 && tokens.every(t => ['SPOT', 'UA', 'UNALLOCATED', 'TBD', 'OPEN', 'CARGO', 'NO', 'BUYER'].includes(t))) {
+    return true;
+  }
+  if (tokens.includes('SPOT') || tokens.includes('UA') || tokens.includes('UNALLOCATED') || tokens.includes('TBD')) {
+    const nonUnallocTokens = tokens.filter(t => !['SPOT', 'UA', 'UNALLOCATED', 'TBD', 'CARGO', 'SALE', 'SALES', 'LEG', 'OPEN', 'TRADE', 'NO', 'BUYER'].includes(t));
+    if (nonUnallocTokens.length === 0) return true;
+  }
+  return false;
+}
+
 export function normalizeStrategyKey(name: string): string {
   if (!name) return '';
   return name
@@ -272,7 +289,9 @@ export function computeTrmsSummaryRows(
     });
     const hasSell = underlyingRows.some(r => {
       const buySell = String(r['Buy_Sell'] || r['BuySell'] || '').trim().toLowerCase();
-      return buySell === 'sell' || buySell === 'sells';
+      if (buySell !== 'sell' && buySell !== 'sells') return false;
+      const entity = String(r['External Legal Entity'] || r['Buyer'] || r['Legal Entity'] || '').trim();
+      return !isUnallocatedBuyer(entity);
     });
 
     let unallocatedCargo: 'Matched' | 'Open on Sell Leg' | 'Open on Buy Leg' | '' = '';

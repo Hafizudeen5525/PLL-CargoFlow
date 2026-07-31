@@ -62,6 +62,7 @@ import {
   Line
 } from 'recharts';
 import { ReconciliationData, ColumnFilterPopover } from './DiscrepancyCheck';
+import { isUnallocatedBuyer } from '../utils/trmsEngine';
 import { toast } from 'react-hot-toast';
 import * as XLSX from 'xlsx';
 
@@ -807,7 +808,9 @@ export const TrmsSummaryTable: React.FC<TrmsSummaryTableProps> = ({ trmsData, vi
       });
       const hasSell = underlyingRows.some(r => {
         const buySell = String(r['Buy_Sell'] || r['BuySell'] || '').trim().toLowerCase();
-        return buySell === 'sell' || buySell === 'sells';
+        if (buySell !== 'sell' && buySell !== 'sells') return false;
+        const entity = String(r['External Legal Entity'] || r['Buyer'] || r['Legal Entity'] || '').trim();
+        return !isUnallocatedBuyer(entity);
       });
 
       let unallocatedCargo: 'Matched' | 'Open on Sell Leg' | 'Open on Buy Leg' | '' = '';
@@ -1684,7 +1687,7 @@ export const TrmsSummaryTable: React.FC<TrmsSummaryTableProps> = ({ trmsData, vi
     cols.push(
       'Purchase Volume', 'Sales Volume', 'Purchase Price', 'Sales Price',
       'Purchase Cost', 'Sales Revenue', 'Shipping Related Costs', 'Hedging P&L',
-      'Sum of Value', 'Change in P&L'
+      'Physical P&L', 'Sum of Value', 'Change in P&L'
     );
     if (showLinesCount) {
       cols.push('Lines Count');
@@ -1695,7 +1698,7 @@ export const TrmsSummaryTable: React.FC<TrmsSummaryTableProps> = ({ trmsData, vi
   const numCols = useMemo(() => [
     'Purchase Volume', 'Sales Volume', 'Purchase Price', 'Sales Price',
     'Purchase Cost', 'Sales Revenue', 'Shipping Related Costs', 'Hedging P&L',
-    'Sum of Value', 'Change in P&L', 'Lines Count'
+    'Physical P&L', 'Sum of Value', 'Change in P&L', 'Lines Count'
   ], []);
 
   const clickableFilteredCols = useMemo(() => [
@@ -1724,6 +1727,7 @@ export const TrmsSummaryTable: React.FC<TrmsSummaryTableProps> = ({ trmsData, vi
         else if (col === 'Sales Revenue') val = String(item.salesRevenue);
         else if (col === 'Shipping Related Costs') val = String(item.shippingRelatedCosts);
         else if (col === 'Hedging P&L') val = String(item.hedgingPnL);
+        else if (col === 'Physical P&L') val = String((item.salesRevenue - item.purchaseCost) + item.shippingRelatedCosts);
         else if (col === 'Sum of Value') val = String(item.totalValueUSD);
         else if (col === 'Change in P&L') val = String(item.totalPnL);
         else if (col === 'Lines Count') val = String(item.dealCount);
@@ -1832,6 +1836,7 @@ export const TrmsSummaryTable: React.FC<TrmsSummaryTableProps> = ({ trmsData, vi
           else if (col === 'Sales Revenue') { valStr = String(item.salesRevenue); valNum = item.salesRevenue; }
           else if (col === 'Shipping Related Costs') { valStr = String(item.shippingRelatedCosts); valNum = item.shippingRelatedCosts; }
           else if (col === 'Hedging P&L') { valStr = String(item.hedgingPnL); valNum = item.hedgingPnL; }
+          else if (col === 'Physical P&L') { const p = (item.salesRevenue - item.purchaseCost) + item.shippingRelatedCosts; valStr = String(p); valNum = p; }
           else if (col === 'Sum of Value') { valStr = String(item.totalValueUSD); valNum = item.totalValueUSD; }
           else if (col === 'Change in P&L') { valStr = String(item.totalPnL); valNum = item.totalPnL; }
           else if (col === 'Lines Count') { valStr = String(item.dealCount); valNum = item.dealCount; }
@@ -1891,6 +1896,7 @@ export const TrmsSummaryTable: React.FC<TrmsSummaryTableProps> = ({ trmsData, vi
         else if (col === 'Sales Revenue') { valA = a.salesRevenue; valB = b.salesRevenue; }
         else if (col === 'Shipping Related Costs') { valA = a.shippingRelatedCosts; valB = b.shippingRelatedCosts; }
         else if (col === 'Hedging P&L') { valA = a.hedgingPnL; valB = b.hedgingPnL; }
+        else if (col === 'Physical P&L') { valA = (a.salesRevenue - a.purchaseCost) + a.shippingRelatedCosts; valB = (b.salesRevenue - b.purchaseCost) + b.shippingRelatedCosts; }
         else if (col === 'Sum of Value') { valA = a.totalValueUSD; valB = b.totalValueUSD; }
         else if (col === 'Change in P&L') { valA = a.totalPnL; valB = b.totalPnL; }
         else if (col === 'Lines Count') { valA = a.dealCount; valB = b.dealCount; }
@@ -2337,6 +2343,10 @@ export const TrmsSummaryTable: React.FC<TrmsSummaryTableProps> = ({ trmsData, vi
       });
     });
 
+    // Physical P&L (Excl. Hedging): (Revenue - Cost) + SRC
+    const aggregatePhysicalPnL = (aggregateSalesRevenue - aggregatePurchaseCost) + aggregateShippingCosts;
+    const aggregatePhysicalPnLChange = (aggregateSalesRevenuePnLChange - aggregatePurchaseCostPnLChange) + aggregateShippingCostPnLChange;
+
     // Aggregate P&L tracks (Sales - Purchase) + Hedging + SRC
     const aggregatePnL = aggregateSalesRevenue - aggregatePurchaseCost + aggregateShippingCosts + aggregateHedgingPnL;
 
@@ -2351,6 +2361,8 @@ export const TrmsSummaryTable: React.FC<TrmsSummaryTableProps> = ({ trmsData, vi
       matchedCargo,
       openSell,
       openBuy,
+      aggregatePhysicalPnL,
+      aggregatePhysicalPnLChange,
       aggregatePnL,
       aggregatePurchaseVolume,
       aggregatePurchaseVolumeByUnit,
@@ -2570,6 +2582,7 @@ export const TrmsSummaryTable: React.FC<TrmsSummaryTableProps> = ({ trmsData, vi
       'Sales Revenue', 
       'Shipping Related Costs',
       'Hedging P&L',
+      'Physical P&L',
       'Sum of Value', 
       'Sum of P&L', 
       'Lines Count'
@@ -2592,6 +2605,7 @@ export const TrmsSummaryTable: React.FC<TrmsSummaryTableProps> = ({ trmsData, vi
         item.salesRevenue,
         item.shippingRelatedCosts,
         item.hedgingPnL,
+        (item.salesRevenue - item.purchaseCost) + item.shippingRelatedCosts,
         item.totalValueUSD,
         item.totalPnL,
         item.dealCount
@@ -2619,6 +2633,7 @@ export const TrmsSummaryTable: React.FC<TrmsSummaryTableProps> = ({ trmsData, vi
     else if (col === 'Sales Revenue') val = item.salesRevenue;
     else if (col === 'Shipping Related Costs') val = item.shippingRelatedCosts;
     else if (col === 'Hedging P&L') val = item.hedgingPnL;
+    else if (col === 'Physical P&L') val = (item.salesRevenue - item.purchaseCost) + item.shippingRelatedCosts;
     else if (col === 'Sum of Value') val = item.totalValueUSD;
     else if (col === 'Change in P&L') val = item.totalPnL;
     else if (col === 'Lines Count') val = item.dealCount;
@@ -2771,6 +2786,27 @@ export const TrmsSummaryTable: React.FC<TrmsSummaryTableProps> = ({ trmsData, vi
       if (col === 'Sum of Value') {
         const sign = val < 0 ? '-' : '';
         return val === 0 ? '$0' : `${sign}$${Math.abs(val).toLocaleString(undefined, { maximumFractionDigits: 0 })}`;
+      }
+      if (col === 'Physical P&L') {
+        if (val > 0) {
+          return (
+            <span className="inline-flex items-center gap-1 font-extrabold text-emerald-400 font-mono text-[11px] tracking-wide bg-emerald-950/40 px-2 py-0.5 rounded border border-emerald-800/30" title="Physical P&L before hedging: (Sales Revenue - Purchase Cost) + Shipping Costs">
+              <span>+${Math.abs(val).toLocaleString(undefined, { maximumFractionDigits: 0 })}</span>
+            </span>
+          );
+        } else if (val < 0) {
+          return (
+            <span className="inline-flex items-center gap-1 font-extrabold text-rose-400 font-mono text-[11px] tracking-wide bg-rose-950/40 px-2 py-0.5 rounded border border-rose-800/30" title="Physical P&L before hedging: (Sales Revenue - Purchase Cost) + Shipping Costs">
+              <span>-${Math.abs(val).toLocaleString(undefined, { maximumFractionDigits: 0 })}</span>
+            </span>
+          );
+        } else {
+          return (
+            <span className="inline-flex items-center gap-1 font-semibold text-slate-400 font-mono text-[11px] bg-slate-900/50 px-2 py-0.5 rounded border border-slate-800/30">
+              <span>$0</span>
+            </span>
+          );
+        }
       }
       if (col === 'Change in P&L') {
         if (val > 0) {
@@ -5764,7 +5800,7 @@ export const TrmsSummaryTable: React.FC<TrmsSummaryTableProps> = ({ trmsData, vi
       </div>
 
       {/* 2. KPIs Overview Card Panel */}
-      <div className="p-4 border-b border-slate-800 bg-slate-950 grid grid-cols-2 lg:grid-cols-6 gap-3 shrink-0">
+      <div className="p-4 border-b border-slate-800 bg-slate-950 grid grid-cols-2 md:grid-cols-4 xl:grid-cols-7 gap-3 shrink-0">
         <div className="bg-slate-900 p-3 rounded-xl border border-slate-800 shadow-sm flex flex-col justify-between">
           <div>
             <div className="text-[10px] uppercase text-slate-300 font-mono font-extrabold tracking-wider">Total Strategies</div>
@@ -5868,8 +5904,32 @@ export const TrmsSummaryTable: React.FC<TrmsSummaryTableProps> = ({ trmsData, vi
           </div>
         </div>
 
+        {/* Physical P&L (Excl. Hedging) */}
+        <div className="bg-slate-900 p-3 rounded-xl border border-slate-800 shadow-sm flex flex-col justify-between">
+          <div>
+            <div className="text-[10px] uppercase text-slate-300 font-mono font-extrabold tracking-wider" title="(Sales Revenue - Purchase Cost) + Shipping Costs">
+              Physical P&amp;L
+            </div>
+            <div className={`text-lg font-extrabold mt-1 font-mono ${kpis.aggregatePhysicalPnL >= 0 ? 'text-emerald-400' : 'text-rose-400'}`}>
+              {kpis.aggregatePhysicalPnL >= 0 ? '+' : '-'}${Math.abs(kpis.aggregatePhysicalPnL).toLocaleString(undefined, { maximumFractionDigits: 0 })}
+            </div>
+          </div>
+          <div className="mt-2 pt-1.5 border-t border-slate-800/80 flex items-center justify-end">
+            <span className={`inline-flex items-center gap-0.5 text-[10px] font-mono font-extrabold px-1.5 py-0.5 rounded ${
+              kpis.aggregatePhysicalPnLChange > 0 
+                ? 'text-emerald-400 bg-emerald-950/60 border border-emerald-800/40' 
+                : kpis.aggregatePhysicalPnLChange < 0 
+                  ? 'text-rose-400 bg-rose-950/60 border border-rose-800/40' 
+                  : 'text-slate-400 bg-slate-800/60'
+            }`}>
+              {kpis.aggregatePhysicalPnLChange > 0 ? '▲ +' : kpis.aggregatePhysicalPnLChange < 0 ? '▼ -' : ''}
+              ${Math.abs(kpis.aggregatePhysicalPnLChange).toLocaleString(undefined, { maximumFractionDigits: 0 })}
+            </span>
+          </div>
+        </div>
+
         {/* Aggregate P&L */}
-        <div className="bg-slate-900 p-3 rounded-xl border border-slate-800 shadow-sm col-span-2 lg:col-span-1 flex flex-col justify-between">
+        <div className="bg-slate-900 p-3 rounded-xl border border-slate-800 shadow-sm flex flex-col justify-between">
           <div>
             <div className="text-[10px] uppercase text-slate-300 font-mono font-extrabold tracking-wider" title="(Sales - Purchase) + Hedging + SRC">
               Aggregate P&amp;L

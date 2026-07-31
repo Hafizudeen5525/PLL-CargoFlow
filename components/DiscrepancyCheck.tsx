@@ -22,7 +22,7 @@ import * as XLSX from 'xlsx';
 import { DataQualityDashboard } from './DataQualityDashboard';
 import { CargoProfile, PnLBucket, ForwardCurveData, ForwardCurve, ForwardCurvePoint } from '../types';
 import { TrmsSummaryTable } from './TrmsSummaryTable';
-import { computeTrmsSummaryRows, TrmsStrategySummary, normalizeStrategyKey, parseFlexibleDate } from '../utils/trmsEngine';
+import { computeTrmsSummaryRows, TrmsStrategySummary, normalizeStrategyKey, parseFlexibleDate, isUnallocatedBuyer } from '../utils/trmsEngine';
 import { getGroupName, GROUPS, saveForwardCurve, ForwardCurveRow, getForwardCurve, getAvailableCurveDates, getGRMForwardCurve, getAvailableGRMCurveDates, formatCurrency } from '../services/calculationService';
 import { LineChart, Line, XAxis, YAxis, CartesianGrid, Tooltip, Legend, ResponsiveContainer } from 'recharts';
 
@@ -784,11 +784,18 @@ export const DiscrepancyCheck: React.FC<DiscrepancyCheckProps> = ({
 
       let appUnallocatedCargo = '—';
       if (app) {
-        const hasBuy = (app.loadedVolume && app.loadedVolume > 0) || (app.absoluteBuyPrice && app.absoluteBuyPrice > 0) || (app.buyFormula && app.buyFormula.trim() !== '');
-        const hasSell = (app.deliveredVolume && app.deliveredVolume > 0) || (app.absoluteSellPrice && app.absoluteSellPrice > 0) || (app.sellFormula && app.sellFormula.trim() !== '');
+        const hasBuyData = (app.loadedVolume && app.loadedVolume > 0) || (app.absoluteBuyPrice && app.absoluteBuyPrice > 0) || (app.buyFormula && app.buyFormula.trim() !== '');
+        const hasSellData = (app.deliveredVolume && app.deliveredVolume > 0) || (app.absoluteSellPrice && app.absoluteSellPrice > 0) || (app.sellFormula && app.sellFormula.trim() !== '');
+
+        const hasBuy = hasBuyData && !isUnallocatedBuyer(app.source);
+        const hasSell = hasSellData && !isUnallocatedBuyer(app.buyer);
+
         if (hasBuy && hasSell) appUnallocatedCargo = 'Matched';
         else if (hasBuy && !hasSell) appUnallocatedCargo = 'Open on Sell Leg';
         else if (!hasBuy && hasSell) appUnallocatedCargo = 'Open on Buy Leg';
+        else if (hasBuyData && !hasSellData) appUnallocatedCargo = 'Open on Sell Leg';
+        else if (!hasBuyData && hasSellData) appUnallocatedCargo = 'Open on Buy Leg';
+        else appUnallocatedCargo = '—';
       }
 
       const isAppTiered = app?.isTieredPricing 
@@ -1323,146 +1330,95 @@ export const DiscrepancyCheck: React.FC<DiscrepancyCheckProps> = ({
   };
 
   const generateReportHTML = () => {
-    const tableHeaders = headers.map(h => `<th style="border: 1px solid #e2e8f0; padding: 12px 16px; background: #f8fafc; font-size: 10px; text-transform: uppercase; font-family: sans-serif; color: #475569; font-weight: 800; letter-spacing: 0.5px; text-align: left;">${h}</th>`).join('');
+    const tableHeaders = headers.map(h => `<th style="border: 1px solid #e2e8f0; padding: 12px 14px; background: #f8fafc; font-size: 10px; text-transform: uppercase; font-family: sans-serif; color: #475569; font-weight: 800; letter-spacing: 0.5px; text-align: left;">${h}</th>`).join('');
     
     const tableRows = processedData.map((row: any) => {
         if (activeTab === 'reconcile') {
             const r = row as ReconciliationRow;
-            const loadingMatch = r.errorPcts.loadingDate === 0;
-            const deliveryMatch = r.errorPcts.deliveryDate === 0;
-            
-            const getErrorColor = (pct: number) => pct > 5 ? '#ef4444' : pct > 0.1 ? '#f59e0b' : '#10b981';
-            const getBgColor = (pct: number) => pct > 5 ? '#fef2f2' : pct > 0.1 ? '#fffbeb' : '#f0fdf4';
 
-            const renderLegs = (legs: TRMSCommodityLeg[]) => {
-                if (legs.length === 0) return '<div style="color: #94a3b8; font-style: italic; font-size: 9px;">No legs found</div>';
-                return legs.map((l, i) => `
-                    <div style="font-size: 9px; padding: 4px; border: 1px solid #e2e8f0; border-radius: 4px; margin-top: 4px; background: #f8fafc;">
-                        <div style="display: flex; justify-between; font-weight: bold; color: ${l.buySell === 'Buy' ? '#2563eb' : '#db2777'};">
-                            <span>LEG ${i+1} (${l.buySell})</span>
-                            <span style="margin-left: auto;">$${l.price.toFixed(3)} | ${l.vol.toLocaleString()}</span>
-                        </div>
-                        <div style="font-size: 8px; color: #64748b; margin-top: 2px;">${l.startDate} to ${l.endDate} | ${l.settlementType}</div>
-                    </div>
-                `).join('');
-            };
+            const pnlMismatch = r.foundInApp && r.foundInTrms && r.diffs.pnlBucket;
+            const optMismatch = r.foundInApp && r.foundInTrms && r.diffs.optimization;
+            const unallocMismatch = r.foundInApp && r.foundInTrms && r.diffs.unallocatedCargo;
 
-            const renderSrcLegs = (legs: TRMSSrcLeg[]) => {
-                if (legs.length === 0) return '<div style="color: #94a3b8; font-style: italic; font-size: 9px;">No SRC legs</div>';
-                return legs.map((l, i) => `
-                    <div style="font-size: 9px; padding: 4px; border: 1px solid #e2e8f0; border-radius: 4px; margin-top: 4px; background: #f8fafc; display: flex; justify-content: space-between;">
-                        <span>${l.description}</span>
-                        <span style="font-weight: bold;">${formatUSD(l.value)}</span>
-                    </div>
-                `).join('');
-            };
+            const buyVolDiff = Math.abs(r.app.buyVolTotal - r.trms.buyVolTotal);
+            const buyVolMax = Math.max(Math.abs(r.app.buyVolTotal), Math.abs(r.trms.buyVolTotal));
+            const buyVolPct = buyVolMax > 0 ? (buyVolDiff / buyVolMax) * 100 : 0;
+            const buyVolBg = buyVolDiff <= 0.1 ? 'transparent' : buyVolPct > 5 ? '#fef2f2' : '#fffbeb';
 
-            const getMonthName = (dStr: string) => {
-                if (!dStr) return '-';
-                const d = new Date(dStr);
-                if (isNaN(d.getTime())) return '-';
-                return d.toLocaleString('default', { month: 'short', year: 'numeric' });
+            const sellVolDiff = Math.abs(r.app.sellVolTotal - r.trms.sellVolTotal);
+            const sellVolMax = Math.max(Math.abs(r.app.sellVolTotal), Math.abs(r.trms.sellVolTotal));
+            const sellVolPct = sellVolMax > 0 ? (sellVolDiff / sellVolMax) * 100 : 0;
+            const sellVolBg = sellVolDiff <= 0.1 ? 'transparent' : sellVolPct > 5 ? '#fef2f2' : '#fffbeb';
+
+            const buyPriceMismatch = r.foundInApp && r.foundInTrms && Math.abs(r.diffs.buyPrice) > 0.01;
+            const sellPriceMismatch = r.foundInApp && r.foundInTrms && Math.abs(r.diffs.sellPrice) > 0.01;
+            const srcMismatch = r.foundInApp && r.foundInTrms && Math.abs(r.diffs.src) > 1.0;
+            const loadingMonthMismatch = r.foundInApp && r.foundInTrms && r.diffs.loadingMonth;
+            const deliveryMonthMismatch = r.foundInApp && r.foundInTrms && r.diffs.deliveryMonth;
+
+            const getStatusBadge = () => {
+              if (r.status === 'Matched') {
+                return `<span style="background: #dcfce7; color: #15803d; font-size: 8px; font-weight: 900; padding: 2px 6px; border-radius: 4px; text-transform: uppercase;">Matched</span>`;
+              } else if (r.status === 'App Only') {
+                return `<span style="background: #fef3c7; color: #92400e; font-size: 8px; font-weight: 900; padding: 2px 6px; border-radius: 4px; text-transform: uppercase;">App Only</span>`;
+              } else {
+                return `<span style="background: #f3e8ff; color: #6b21a8; font-size: 8px; font-weight: 900; padding: 2px 6px; border-radius: 4px; text-transform: uppercase;">TRMS Only</span>`;
+              }
             };
 
             return `
-                <tr style="font-family: monospace; background: ${!r.foundInTrms ? '#f8fafc' : 'white'};">
-                    <td style="border: 1px solid #e2e8f0; padding: 12px 16px; font-size: 11px; font-weight: bold; color: #1e293b;">
-                        ${r.strategyName}
-                        <div style="font-size: 9px; margin-top: 4px; color: ${r.foundInTrms ? '#10b981' : '#94a3b8'}; font-weight: 900; text-transform: uppercase;">
-                            ${r.foundInTrms ? '● Matched' : '○ Missing'}
+                <tr style="font-family: monospace; background: ${!r.foundInTrms ? '#fffbeb' : !r.foundInApp ? '#faf5ff' : 'white'};">
+                    <td style="border: 1px solid #e2e8f0; padding: 10px 12px; font-size: 11px; font-weight: bold; color: #1e293b;">
+                        <div>${r.strategyName}</div>
+                        <div style="font-size: 9px; color: #64748b; font-weight: normal; margin-top: 2px;">${r.group || '-'}</div>
+                        <div style="margin-top: 6px; display: flex; gap: 4px; align-items: center;">
+                            ${getStatusBadge()}
+                            ${r.discrepancies.size > 0 && r.status === 'Matched' ? `<span style="background: #ffe4e6; color: #be123c; font-size: 8px; font-weight: 900; padding: 2px 6px; border-radius: 4px;">${r.discrepancies.size} DIFF</span>` : ''}
                         </div>
                     </td>
-                    <td style="border: 1px solid #e2e8f0; padding: 12px 16px; font-size: 10px; background: ${r.foundInTrms ? (loadingMatch ? '#f0fdf4' : '#fef2f2') : 'transparent'};">
-                        <div style="color: #64748b; font-size: 8px; font-weight: bold; text-transform: uppercase;">App Month</div>
-                        <div style="font-weight: bold; color: #1e293b;">${getMonthName(r.app.loadingDate)}</div>
-                        <div style="margin-top: 8px; color: #64748b; font-size: 8px; font-weight: bold; text-transform: uppercase;">TRMS Month</div>
-                        <div style="font-weight: bold; color: #475569;">${getMonthName(r.trms.commWindowEndDate)}</div>
+                    <td style="border: 1px solid #e2e8f0; padding: 10px 12px; font-size: 10px; background: ${pnlMismatch ? '#fef2f2' : 'transparent'};">
+                        <div style="color: #64748b; font-size: 8px; font-weight: bold; text-transform: uppercase;">App: <span style="color: #1e293b; font-weight: 800;">${r.app.pnlBucket}</span></div>
+                        <div style="color: #64748b; font-size: 8px; font-weight: bold; text-transform: uppercase; margin-top: 4px;">TRMS: <span style="color: ${pnlMismatch ? '#ef4444' : '#475569'}; font-weight: 800;">${r.trms.pnlBucket}</span></div>
                     </td>
-                    <td style="border: 1px solid #e2e8f0; padding: 12px 16px; font-size: 10px; background: ${r.foundInTrms ? (deliveryMatch ? '#f0fdf4' : '#fef2f2') : 'transparent'};">
-                        <div style="color: #64748b; font-size: 8px; font-weight: bold; text-transform: uppercase;">App Month</div>
-                        <div style="font-weight: bold; color: #1e293b;">${getMonthName(r.app.deliveryDate)}</div>
-                        <div style="margin-top: 8px; color: #64748b; font-size: 8px; font-weight: bold; text-transform: uppercase;">TRMS Month</div>
-                        <div style="font-weight: bold; color: #475569;">${getMonthName(r.trms.commWindowEndDate)}</div>
+                    <td style="border: 1px solid #e2e8f0; padding: 10px 12px; font-size: 10px; background: ${optMismatch ? '#fef2f2' : 'transparent'};">
+                        <div style="color: #64748b; font-size: 8px; font-weight: bold; text-transform: uppercase;">App: <span style="color: #1e293b; font-weight: 800;">${r.app.optimization}</span></div>
+                        <div style="color: #64748b; font-size: 8px; font-weight: bold; text-transform: uppercase; margin-top: 4px;">TRMS: <span style="color: ${optMismatch ? '#ef4444' : '#475569'}; font-weight: 800;">${r.trms.optimization}</span></div>
                     </td>
-                    <td style="border: 1px solid #e2e8f0; padding: 12px 16px; font-size: 10px;">
-                        <div style="display: inline-block; padding: 2px 6px; border-radius: 4px; background: ${r.app.volumeType === 'Actual' ? '#2563eb' : '#f1f5f9'}; color: ${r.app.volumeType === 'Actual' ? 'white' : '#64748b'}; font-size: 9px; font-weight: bold;">${r.app.volumeType}</div>
-                        <div style="margin-top: 4px; font-size: 9px; color: #94a3b8;">TRMS: ${r.trms.volumeType}</div>
+                    <td style="border: 1px solid #e2e8f0; padding: 10px 12px; font-size: 10px; background: ${unallocMismatch ? '#fef2f2' : 'transparent'};">
+                        <div style="color: #64748b; font-size: 8px; font-weight: bold; text-transform: uppercase;">App: <span style="color: #1e293b; font-weight: 800;">${r.app.unallocatedCargo}</span></div>
+                        <div style="color: #64748b; font-size: 8px; font-weight: bold; text-transform: uppercase; margin-top: 4px;">TRMS: <span style="color: ${unallocMismatch ? '#ef4444' : '#475569'}; font-weight: 800;">${r.trms.unallocatedCargo}</span></div>
                     </td>
-                    <td style="border: 1px solid #e2e8f0; padding: 12px 16px; font-size: 10px;">
-                        <div style="display: inline-block; padding: 2px 6px; border-radius: 4px; background: ${r.app.priceStatus === 'Fixed' ? '#059669' : '#f1f5f9'}; color: ${r.app.priceStatus === 'Fixed' ? 'white' : '#64748b'}; font-size: 9px; font-weight: bold;">${r.app.priceStatus}</div>
-                        <div style="margin-top: 4px; font-size: 9px; color: #94a3b8;">TRMS: ${r.trms.priceStatus}</div>
+                    <td style="border: 1px solid #e2e8f0; padding: 10px 12px; font-size: 10px; background: ${buyVolBg};">
+                        <div style="color: #64748b; font-size: 8px; font-weight: bold; text-transform: uppercase;">App: <span style="color: #1e293b; font-weight: 800;">${r.app.buyVolTotal.toLocaleString()}</span></div>
+                        ${r.app.isTiered ? `<div style="font-size: 8px; color: #6366f1;">T1:${r.app.buyVolT1.toLocaleString()} | T2:${r.app.buyVolT2.toLocaleString()}</div>` : ''}
+                        <div style="color: #64748b; font-size: 8px; font-weight: bold; text-transform: uppercase; margin-top: 4px;">TRMS: <span style="color: ${buyVolPct > 5 ? '#ef4444' : buyVolPct > 0.1 ? '#d97706' : '#475569'}; font-weight: 800;">${r.trms.buyVolTotal.toLocaleString()}</span></div>
+                        ${r.trms.buyVolT2 > 0 ? `<div style="font-size: 8px; color: #8b5cf6;">T1:${r.trms.buyVolT1.toLocaleString()} | T2:${r.trms.buyVolT2.toLocaleString()}</div>` : ''}
                     </td>
-                    <td style="border: 1px solid #e2e8f0; padding: 12px 16px; font-size: 10px; background: ${getBgColor(r.errorPcts.buyPrice)};">
-                        <div style="color: #64748b; font-size: 8px; font-weight: bold; text-transform: uppercase;">App Purchase Price</div>
-                        ${r.app.isTiered ? `
-                            <div style="font-size: 9px; color: #1e293b;">T1: $${r.app.tier1BuyPrice?.toFixed(3)}</div>
-                            <div style="font-size: 9px; color: #1e293b;">T2: $${r.app.tier2BuyPrice?.toFixed(3)}</div>
-                            <div style="font-weight: bold; color: #6366f1; margin-top: 2px;">Eff: $${r.app.effectiveBuyPrice?.toFixed(3)}</div>
-                        ` : `
-                            <div style="font-weight: bold; color: #1e293b;">$${r.app.buyPrice.toFixed(3)}</div>
-                        `}
-                        <div style="margin-top: 4px; font-size: 9px; color: ${getErrorColor(r.errorPcts.buyPrice)}; font-weight: bold;">Err: ${r.errorPcts.buyPrice.toFixed(2)}%</div>
-                        <div style="margin-top: 8px; color: #64748b; font-size: 8px; font-weight: bold; text-transform: uppercase;">TRMS Legs</div>
-                        ${renderLegs(r.trms.buyLegs)}
+                    <td style="border: 1px solid #e2e8f0; padding: 10px 12px; font-size: 10px; background: ${sellVolBg};">
+                        <div style="color: #64748b; font-size: 8px; font-weight: bold; text-transform: uppercase;">App: <span style="color: #1e293b; font-weight: 800;">${r.app.sellVolTotal.toLocaleString()}</span></div>
+                        ${r.app.isTiered ? `<div style="font-size: 8px; color: #6366f1;">T1:${r.app.sellVolT1.toLocaleString()} | T2:${r.app.sellVolT2.toLocaleString()}</div>` : ''}
+                        <div style="color: #64748b; font-size: 8px; font-weight: bold; text-transform: uppercase; margin-top: 4px;">TRMS: <span style="color: ${sellVolPct > 5 ? '#ef4444' : sellVolPct > 0.1 ? '#d97706' : '#475569'}; font-weight: 800;">${r.trms.sellVolTotal.toLocaleString()}</span></div>
+                        ${r.trms.sellVolT2 > 0 ? `<div style="font-size: 8px; color: #8b5cf6;">T1:${r.trms.sellVolT1.toLocaleString()} | T2:${r.trms.sellVolT2.toLocaleString()}</div>` : ''}
                     </td>
-                    <td style="border: 1px solid #e2e8f0; padding: 12px 16px; font-size: 10px; background: ${getBgColor(r.errorPcts.buyVol)};">
-                        <div style="color: #64748b; font-size: 8px; font-weight: bold; text-transform: uppercase;">App Purchase Vol</div>
-                        ${r.app.isTiered ? `
-                            <div style="font-size: 9px; color: #1e293b;">T1: ${r.app.tier1BuyVol?.toLocaleString()}</div>
-                            <div style="font-size: 9px; color: #1e293b;">T2: ${r.app.tier2BuyVol?.toLocaleString()}</div>
-                            <div style="font-weight: bold; color: #6366f1; margin-top: 2px;">Total: ${(r.app.buyVol + (r.app.tier2BuyVol || 0)).toLocaleString()}</div>
-                        ` : `
-                            <div style="font-weight: bold; color: #1e293b;">${r.app.buyVol.toLocaleString()}</div>
-                        `}
-                        <div style="margin-top: 4px; font-size: 9px; color: ${getErrorColor(r.errorPcts.buyVol)}; font-weight: bold;">Err: ${r.errorPcts.buyVol.toFixed(2)}%</div>
+                    <td style="border: 1px solid #e2e8f0; padding: 10px 12px; font-size: 10px; background: ${buyPriceMismatch ? '#fef2f2' : 'transparent'};">
+                        <div style="color: #64748b; font-size: 8px; font-weight: bold; text-transform: uppercase;">App: <span style="color: #1e293b; font-weight: 800;">$${r.app.buyPriceEffective.toFixed(3)}</span></div>
+                        <div style="color: #64748b; font-size: 8px; font-weight: bold; text-transform: uppercase; margin-top: 4px;">TRMS: <span style="color: ${buyPriceMismatch ? '#ef4444' : '#475569'}; font-weight: 800;">$${r.trms.buyPriceEffective.toFixed(3)}</span></div>
                     </td>
-                    <td style="border: 1px solid #e2e8f0; padding: 12px 16px; font-size: 10px; background: ${getBgColor(r.errorPcts.purchaseCost)};">
-                        <div style="color: #64748b; font-size: 8px; font-weight: bold; text-transform: uppercase;">Purchase Cost</div>
-                        <div style="font-weight: bold; color: #1e293b;">${formatUSD(r.app.reconciledPurchaseCost || r.app.buyPrice * r.app.buyVol)}</div>
-                        <div style="margin-top: 4px; font-size: 9px; color: ${getErrorColor(r.errorPcts.purchaseCost)}; font-weight: bold;">Err: ${r.errorPcts.purchaseCost.toFixed(2)}%</div>
+                    <td style="border: 1px solid #e2e8f0; padding: 10px 12px; font-size: 10px; background: ${sellPriceMismatch ? '#fef2f2' : 'transparent'};">
+                        <div style="color: #64748b; font-size: 8px; font-weight: bold; text-transform: uppercase;">App: <span style="color: #1e293b; font-weight: 800;">$${r.app.sellPriceEffective.toFixed(3)}</span></div>
+                        <div style="color: #64748b; font-size: 8px; font-weight: bold; text-transform: uppercase; margin-top: 4px;">TRMS: <span style="color: ${sellPriceMismatch ? '#ef4444' : '#475569'}; font-weight: 800;">$${r.trms.sellPriceEffective.toFixed(3)}</span></div>
                     </td>
-                    <td style="border: 1px solid #e2e8f0; padding: 12px 16px; font-size: 10px; background: ${getBgColor(r.errorPcts.sellPrice)};">
-                        <div style="color: #64748b; font-size: 8px; font-weight: bold; text-transform: uppercase;">App Sales Price</div>
-                        ${r.app.isTiered ? `
-                            <div style="font-size: 9px; color: #1e293b;">T1: $${r.app.tier1SellPrice?.toFixed(3)}</div>
-                            <div style="font-size: 9px; color: #1e293b;">T2: $${r.app.tier2SellPrice?.toFixed(3)}</div>
-                            <div style="font-weight: bold; color: #6366f1; margin-top: 2px;">Eff: $${r.app.effectiveSellPrice?.toFixed(3)}</div>
-                        ` : `
-                            <div style="font-weight: bold; color: #1e293b;">$${r.app.sellPrice.toFixed(3)}</div>
-                        `}
-                        <div style="margin-top: 4px; font-size: 9px; color: ${getErrorColor(r.errorPcts.sellPrice)}; font-weight: bold;">Err: ${r.errorPcts.sellPrice.toFixed(2)}%</div>
-                        <div style="margin-top: 8px; color: #64748b; font-size: 8px; font-weight: bold; text-transform: uppercase;">TRMS Legs</div>
-                        ${renderLegs(r.trms.sellLegs)}
+                    <td style="border: 1px solid #e2e8f0; padding: 10px 12px; font-size: 10px; background: ${srcMismatch ? '#fef2f2' : 'transparent'};">
+                        <div style="color: #64748b; font-size: 8px; font-weight: bold; text-transform: uppercase;">App: <span style="color: #1e293b; font-weight: 800;">${formatUSD(r.app.src)}</span></div>
+                        <div style="color: #64748b; font-size: 8px; font-weight: bold; text-transform: uppercase; margin-top: 4px;">TRMS: <span style="color: ${srcMismatch ? '#ef4444' : '#475569'}; font-weight: 800;">${formatUSD(r.trms.src)}</span></div>
                     </td>
-                    <td style="border: 1px solid #e2e8f0; padding: 12px 16px; font-size: 10px; background: ${getBgColor(r.errorPcts.sellVol)};">
-                        <div style="color: #64748b; font-size: 8px; font-weight: bold; text-transform: uppercase;">App Sales Vol</div>
-                        ${r.app.isTiered ? `
-                            <div style="font-size: 9px; color: #1e293b;">T1: ${r.app.tier1SellVol?.toLocaleString()}</div>
-                            <div style="font-size: 9px; color: #1e293b;">T2: ${r.app.tier2SellVol?.toLocaleString()}</div>
-                            <div style="font-weight: bold; color: #6366f1; margin-top: 2px;">Total: ${(r.app.sellVol + (r.app.tier2SellVol || 0)).toLocaleString()}</div>
-                        ` : `
-                            <div style="font-weight: bold; color: #1e293b;">${r.app.sellVol.toLocaleString()}</div>
-                        `}
-                        <div style="margin-top: 4px; font-size: 9px; color: ${getErrorColor(r.errorPcts.sellVol)}; font-weight: bold;">Err: ${r.errorPcts.sellVol.toFixed(2)}%</div>
+                    <td style="border: 1px solid #e2e8f0; padding: 10px 12px; font-size: 10px; background: ${loadingMonthMismatch ? '#fef2f2' : 'transparent'};">
+                        <div style="color: #64748b; font-size: 8px; font-weight: bold; text-transform: uppercase;">App: <span style="color: #1e293b; font-weight: 800;">${r.app.loadingMonth}</span></div>
+                        <div style="color: #64748b; font-size: 8px; font-weight: bold; text-transform: uppercase; margin-top: 4px;">TRMS: <span style="color: ${loadingMonthMismatch ? '#ef4444' : '#475569'}; font-weight: 800;">${r.trms.loadingMonth}</span></div>
                     </td>
-                    <td style="border: 1px solid #e2e8f0; padding: 12px 16px; font-size: 10px; background: ${getBgColor(r.errorPcts.salesRevenue)};">
-                        <div style="color: #64748b; font-size: 8px; font-weight: bold; text-transform: uppercase;">Sales Revenue</div>
-                        <div style="font-weight: bold; color: #1e293b;">${formatUSD(r.app.reconciledSalesRevenue || r.app.sellPrice * r.app.sellVol)}</div>
-                        <div style="margin-top: 4px; font-size: 9px; color: ${getErrorColor(r.errorPcts.salesRevenue)}; font-weight: bold;">Err: ${r.errorPcts.salesRevenue.toFixed(2)}%</div>
-                    </td>
-                    <td style="border: 1px solid #e2e8f0; padding: 12px 16px; font-size: 10px; background: ${getBgColor(r.errorPcts.src)};">
-                        <div style="color: #64748b; font-size: 8px; font-weight: bold; text-transform: uppercase;">App SRC</div>
-                        <div style="font-weight: bold; color: #1e293b;">${formatUSD(r.app.src)}</div>
-                        <div style="margin-top: 4px; font-size: 9px; color: ${getErrorColor(r.errorPcts.src)}; font-weight: bold;">Err: ${r.errorPcts.src.toFixed(2)}%</div>
-                        <div style="margin-top: 8px; color: #64748b; font-size: 8px; font-weight: bold; text-transform: uppercase;">TRMS Breakdown</div>
-                        ${renderSrcLegs(r.trms.srcLegs)}
-                    </td>
-                    <td style="border: 1px solid #e2e8f0; padding: 12px 16px; font-size: 10px;">
-                        <div style="color: #64748b; font-size: 8px; font-weight: bold; text-transform: uppercase;">App P&L</div>
-                        <div style="font-weight: bold; color: #1e293b;">${formatUSD((r.app.reconciledSalesRevenue || r.app.sellPrice * r.app.sellVol) - (r.app.reconciledPurchaseCost || r.app.buyPrice * r.app.buyVol) - r.app.src)}</div>
-                        <div style="margin-top: 8px; color: #64748b; font-size: 8px; font-weight: bold; text-transform: uppercase;">TRMS Base Value</div>
-                        <div style="font-weight: bold; color: #475569;">${formatUSD(r.trms.commodityValue)}</div>
-                        <div style="margin-top: 8px; color: #ef4444; font-size: 9px; font-weight: bold;">${Array.from(r.discrepancies).join(', ') || ''}</div>
+                    <td style="border: 1px solid #e2e8f0; padding: 10px 12px; font-size: 10px; background: ${deliveryMonthMismatch ? '#fef2f2' : 'transparent'};">
+                        <div style="color: #64748b; font-size: 8px; font-weight: bold; text-transform: uppercase;">App: <span style="color: #1e293b; font-weight: 800;">${r.app.deliveryMonth}</span></div>
+                        <div style="color: #64748b; font-size: 8px; font-weight: bold; text-transform: uppercase; margin-top: 4px;">TRMS: <span style="color: ${deliveryMonthMismatch ? '#ef4444' : '#475569'}; font-weight: 800;">${r.trms.deliveryMonth}</span></div>
                     </td>
                 </tr>
             `;
@@ -1470,54 +1426,116 @@ export const DiscrepancyCheck: React.FC<DiscrepancyCheckProps> = ({
         return '';
     }).join('');
 
+    const totalStrategies = processedData.length;
+    const matchedStrategies = processedData.filter((r: any) => r.status === 'Matched').length;
+    const appOnlyStrategies = processedData.filter((r: any) => r.status === 'App Only').length;
+    const trmsOnlyStrategies = processedData.filter((r: any) => r.status === 'TRMS Only').length;
+
+    const discrepancyStrategies = processedData.filter((r: any) => r.discrepancies && r.discrepancies.size > 0).length;
+    const totalDiscrepancyPoints = processedData.reduce((acc: number, r: any) => acc + (r.discrepancies ? r.discrepancies.size : 0), 0);
+
+    const appBuyVol = processedData.reduce((acc: number, r: any) => acc + (r.app?.buyVolTotal || 0), 0);
+    const trmsBuyVol = processedData.reduce((acc: number, r: any) => acc + (r.trms?.buyVolTotal || 0), 0);
+    const buyVolDiff = appBuyVol - trmsBuyVol;
+
+    const appSellVol = processedData.reduce((acc: number, r: any) => acc + (r.app?.sellVolTotal || 0), 0);
+    const trmsSellVol = processedData.reduce((acc: number, r: any) => acc + (r.trms?.sellVolTotal || 0), 0);
+    const sellVolDiff = appSellVol - trmsSellVol;
+
+    const matchedRows = processedData.filter((r: any) => r.foundInApp && r.foundInTrms);
+    const fieldDiffs = {
+      pnlBucket: matchedRows.filter((r: any) => r.diffs?.pnlBucket).length,
+      optimization: matchedRows.filter((r: any) => r.diffs?.optimization).length,
+      unallocatedCargo: matchedRows.filter((r: any) => r.diffs?.unallocatedCargo).length,
+      buyVol: matchedRows.filter((r: any) => Math.abs(r.app.buyVolTotal - r.trms.buyVolTotal) > 0.1).length,
+      sellVol: matchedRows.filter((r: any) => Math.abs(r.app.sellVolTotal - r.trms.sellVolTotal) > 0.1).length,
+      buyPrice: matchedRows.filter((r: any) => Math.abs(r.diffs?.buyPrice || 0) > 0.01).length,
+      sellPrice: matchedRows.filter((r: any) => Math.abs(r.diffs?.sellPrice || 0) > 0.01).length,
+      src: matchedRows.filter((r: any) => Math.abs(r.diffs?.src || 0) > 1.0).length,
+      loadingMonth: matchedRows.filter((r: any) => r.diffs?.loadingMonth).length,
+      deliveryMonth: matchedRows.filter((r: any) => r.diffs?.deliveryMonth).length,
+    };
+
     const summaryCards = `
-        <div style="display: grid; grid-template-columns: repeat(4, 1fr); gap: 15px; margin-bottom: 30px; font-family: sans-serif;">
-            <div style="background: #0f172a; color: white; padding: 20px; border-radius: 16px; border: 1px solid #1e293b; box-shadow: 0 4px 6px -1px rgba(0,0,0,0.1);">
-                <div style="font-size: 10px; text-transform: uppercase; color: #fb7185; font-weight: 900; letter-spacing: 1px; margin-bottom: 8px;">Total Discrepancies</div>
-                <div style="font-size: 32px; font-weight: 900; font-family: monospace;">${stats.totalDiscrepancies}</div>
-                <div style="font-size: 10px; color: #64748b; margin-top: 8px; font-weight: bold;">POINTS REQUIRING ATTENTION</div>
+        <div style="display: grid; grid-template-columns: repeat(4, 1fr); gap: 15px; margin-bottom: 25px; font-family: sans-serif;">
+            <div style="background: #0f172a; color: white; padding: 18px; border-radius: 16px; border: 1px solid #1e293b;">
+                <div style="font-size: 10px; text-transform: uppercase; color: #94a3b8; font-weight: 800; letter-spacing: 0.5px; margin-bottom: 6px;">Total Strategies</div>
+                <div style="font-size: 28px; font-weight: 900; font-family: monospace;">${totalStrategies}</div>
+                <div style="font-size: 10px; color: #38bdf8; margin-top: 6px; font-weight: bold;">
+                    ${matchedStrategies} Matched • ${appOnlyStrategies} App Only • ${trmsOnlyStrategies} TRMS Only
+                </div>
             </div>
-            <div style="background: white; border: 1px solid #e2e8f0; padding: 20px; border-radius: 16px; grid-column: span 3; box-shadow: 0 1px 3px rgba(0,0,0,0.1);">
-                <div style="font-size: 10px; text-transform: uppercase; color: #94a3b8; font-weight: 900; letter-spacing: 1px; margin-bottom: 15px;">Error Report by Column</div>
-                <div style="display: grid; grid-template-columns: repeat(5, 1fr); gap: 15px;">
-                    <div><div style="font-size: 8px; color: #94a3b8; font-weight: bold; text-transform: uppercase;">Purc Price</div><div style="font-size: 14px; font-weight: 900; font-family: monospace; color: ${stats.errorCounts.buyPrice > 0 ? '#ef4444' : '#10b981'}">${stats.errorCounts.buyPrice}</div></div>
-                    <div><div style="font-size: 8px; color: #94a3b8; font-weight: bold; text-transform: uppercase;">Purc Vol</div><div style="font-size: 14px; font-weight: 900; font-family: monospace; color: ${stats.errorCounts.buyVol > 0 ? '#ef4444' : '#10b981'}">${stats.errorCounts.buyVol}</div></div>
-                    <div><div style="font-size: 8px; color: #94a3b8; font-weight: bold; text-transform: uppercase;">Sales Price</div><div style="font-size: 14px; font-weight: 900; font-family: monospace; color: ${stats.errorCounts.sellPrice > 0 ? '#ef4444' : '#10b981'}">${stats.errorCounts.sellPrice}</div></div>
-                    <div><div style="font-size: 8px; color: #94a3b8; font-weight: bold; text-transform: uppercase;">Sales Vol</div><div style="font-size: 14px; font-weight: 900; font-family: monospace; color: ${stats.errorCounts.sellVol > 0 ? '#ef4444' : '#10b981'}">${stats.errorCounts.sellVol}</div></div>
-                    <div><div style="font-size: 8px; color: #94a3b8; font-weight: bold; text-transform: uppercase;">SRC Cost</div><div style="font-size: 14px; font-weight: 900; font-family: monospace; color: ${stats.errorCounts.src > 0 ? '#ef4444' : '#10b981'}">${stats.errorCounts.src}</div></div>
-                    <div><div style="font-size: 8px; color: #94a3b8; font-weight: bold; text-transform: uppercase;">Purc Cost</div><div style="font-size: 14px; font-weight: 900; font-family: monospace; color: ${stats.errorCounts.purchaseCost > 0 ? '#ef4444' : '#10b981'}">${stats.errorCounts.purchaseCost}</div></div>
-                    <div><div style="font-size: 8px; color: #94a3b8; font-weight: bold; text-transform: uppercase;">Sales Rev</div><div style="font-size: 14px; font-weight: 900; font-family: monospace; color: ${stats.errorCounts.salesRevenue > 0 ? '#ef4444' : '#10b981'}">${stats.errorCounts.salesRevenue}</div></div>
-                    <div><div style="font-size: 8px; color: #94a3b8; font-weight: bold; text-transform: uppercase;">Load Month</div><div style="font-size: 14px; font-weight: 900; font-family: monospace; color: ${stats.errorCounts.loadingMonth > 0 ? '#ef4444' : '#10b981'}">${stats.errorCounts.loadingMonth}</div></div>
-                    <div><div style="font-size: 8px; color: #94a3b8; font-weight: bold; text-transform: uppercase;">Deliv Month</div><div style="font-size: 14px; font-weight: 900; font-family: monospace; color: ${stats.errorCounts.deliveryMonth > 0 ? '#ef4444' : '#10b981'}">${stats.errorCounts.deliveryMonth}</div></div>
-                    <div><div style="font-size: 8px; color: #94a3b8; font-weight: bold; text-transform: uppercase;">Critical</div><div style="font-size: 14px; font-weight: 900; font-family: monospace; color: ${stats.criticalErrorsCount > 0 ? '#ef4444' : '#10b981'}">${stats.criticalErrorsCount}</div></div>
+
+            <div style="background: #0f172a; color: white; padding: 18px; border-radius: 16px; border: 1px solid #1e293b;">
+                <div style="font-size: 10px; text-transform: uppercase; color: #fb7185; font-weight: 800; letter-spacing: 0.5px; margin-bottom: 6px;">Strategies with Discrepancies</div>
+                <div style="font-size: 28px; font-weight: 900; font-family: monospace; color: ${discrepancyStrategies > 0 ? '#f43f5e' : '#34d399'};">${discrepancyStrategies}</div>
+                <div style="font-size: 10px; color: #94a3b8; margin-top: 6px; font-weight: bold;">
+                    ${totalDiscrepancyPoints} Total Discrepancy Points
+                </div>
+            </div>
+
+            <div style="background: #f8fafc; padding: 18px; border-radius: 16px; border: 1px solid #e2e8f0;">
+                <div style="font-size: 10px; text-transform: uppercase; color: #64748b; font-weight: 800; letter-spacing: 0.5px; margin-bottom: 6px;">Purchase Vol Alignment (MT)</div>
+                <div style="font-size: 15px; font-weight: 900; font-family: monospace; color: #0f172a;">App: ${appBuyVol.toLocaleString()}</div>
+                <div style="font-size: 12px; color: #64748b; font-family: monospace;">TRMS: ${trmsBuyVol.toLocaleString()}</div>
+                <div style="font-size: 10px; font-weight: 800; margin-top: 4px; color: ${Math.abs(buyVolDiff) > 100 ? '#e11d48' : '#059669'}; font-family: monospace;">
+                    Diff: ${buyVolDiff > 0 ? '+' : ''}${buyVolDiff.toLocaleString()}
+                </div>
+            </div>
+
+            <div style="background: #f8fafc; padding: 18px; border-radius: 16px; border: 1px solid #e2e8f0;">
+                <div style="font-size: 10px; text-transform: uppercase; color: #64748b; font-weight: 800; letter-spacing: 0.5px; margin-bottom: 6px;">Sales Vol Alignment (MT)</div>
+                <div style="font-size: 15px; font-weight: 900; font-family: monospace; color: #0f172a;">App: ${appSellVol.toLocaleString()}</div>
+                <div style="font-size: 12px; color: #64748b; font-family: monospace;">TRMS: ${trmsSellVol.toLocaleString()}</div>
+                <div style="font-size: 10px; font-weight: 800; margin-top: 4px; color: ${Math.abs(sellVolDiff) > 100 ? '#e11d48' : '#059669'}; font-family: monospace;">
+                    Diff: ${sellVolDiff > 0 ? '+' : ''}${sellVolDiff.toLocaleString()}
                 </div>
             </div>
         </div>
 
-        <div style="display: grid; grid-template-columns: repeat(4, 1fr); gap: 15px; margin-bottom: 30px; font-family: sans-serif;">
-            <div style="background: #f8fafc; padding: 15px; border-radius: 12px; border: 1px solid #e2e8f0;">
-                <div style="font-size: 9px; color: #64748b; font-weight: bold; text-transform: uppercase; margin-bottom: 4px;">Total Volume Alignment</div>
-                <div style="font-size: 16px; font-weight: 900;">App: ${stats.totals.appVol.toLocaleString()}</div>
-                <div style="font-size: 12px; color: #94a3b8;">TRMS: ${stats.totals.trmsVol.toLocaleString()}</div>
-                <div style="font-size: 10px; color: ${Math.abs(stats.totals.appVol - stats.totals.trmsVol) > 1000 ? '#ef4444' : '#10b981'}; font-weight: bold; margin-top: 4px;">Diff: ${(stats.totals.appVol - stats.totals.trmsVol).toLocaleString()}</div>
-            </div>
-            <div style="background: #f8fafc; padding: 15px; border-radius: 12px; border: 1px solid #e2e8f0;">
-                <div style="font-size: 9px; color: #64748b; font-weight: bold; text-transform: uppercase; margin-bottom: 4px;">Total Purchase Cost</div>
-                <div style="font-size: 16px; font-weight: 900;">App: ${formatUSD(stats.totals.appCost)}</div>
-                <div style="font-size: 12px; color: #94a3b8;">TRMS: ${formatUSD(stats.totals.trmsCost)}</div>
-                <div style="font-size: 10px; color: ${Math.abs(stats.totals.appCost - stats.totals.trmsCost) > 10000 ? '#ef4444' : '#10b981'}; font-weight: bold; margin-top: 4px;">Diff: ${formatUSD(stats.totals.appCost - stats.totals.trmsCost)}</div>
-            </div>
-            <div style="background: #f8fafc; padding: 15px; border-radius: 12px; border: 1px solid #e2e8f0;">
-                <div style="font-size: 9px; color: #64748b; font-weight: bold; text-transform: uppercase; margin-bottom: 4px;">Total Sales Revenue</div>
-                <div style="font-size: 16px; font-weight: 900;">App: ${formatUSD(stats.totals.appRev)}</div>
-                <div style="font-size: 12px; color: #94a3b8;">TRMS: ${formatUSD(stats.totals.trmsRev)}</div>
-                <div style="font-size: 10px; color: ${Math.abs(stats.totals.appRev - stats.totals.trmsRev) > 10000 ? '#ef4444' : '#10b981'}; font-weight: bold; margin-top: 4px;">Diff: ${formatUSD(stats.totals.appRev - stats.totals.trmsRev)}</div>
-            </div>
-            <div style="background: #f8fafc; padding: 15px; border-radius: 12px; border: 1px solid #e2e8f0;">
-                <div style="font-size: 9px; color: #64748b; font-weight: bold; text-transform: uppercase; margin-bottom: 4px;">Total SRC Alignment</div>
-                <div style="font-size: 16px; font-weight: 900;">App: ${formatUSD(stats.totals.appSrc)}</div>
-                <div style="font-size: 12px; color: #94a3b8;">TRMS: ${formatUSD(stats.totals.trmsSrc)}</div>
-                <div style="font-size: 10px; color: ${Math.abs(stats.totals.appSrc - stats.totals.trmsSrc) > 1000 ? '#ef4444' : '#10b981'}; font-weight: bold; margin-top: 4px;">Diff: ${formatUSD(stats.totals.appSrc - stats.totals.trmsSrc)}</div>
+        <div style="background: white; border: 1px solid #e2e8f0; padding: 18px; border-radius: 16px; margin-bottom: 30px; box-shadow: 0 1px 3px rgba(0,0,0,0.05);">
+            <div style="font-size: 10px; text-transform: uppercase; color: #64748b; font-weight: 900; letter-spacing: 1px; margin-bottom: 12px;">Field Mismatch Breakdown (${matchedRows.length} Matched Strategies)</div>
+            <div style="display: grid; grid-template-columns: repeat(5, 1fr); gap: 12px; font-family: sans-serif;">
+                <div style="background: #f8fafc; padding: 10px; border-radius: 10px; border: 1px solid #f1f5f9;">
+                    <div style="font-size: 8px; color: #64748b; font-weight: 800; text-transform: uppercase;">P&L Bucket</div>
+                    <div style="font-size: 16px; font-weight: 900; font-family: monospace; color: ${fieldDiffs.pnlBucket > 0 ? '#e11d48' : '#059669'}">${fieldDiffs.pnlBucket}</div>
+                </div>
+                <div style="background: #f8fafc; padding: 10px; border-radius: 10px; border: 1px solid #f1f5f9;">
+                    <div style="font-size: 8px; color: #64748b; font-weight: 800; text-transform: uppercase;">Optimization</div>
+                    <div style="font-size: 16px; font-weight: 900; font-family: monospace; color: ${fieldDiffs.optimization > 0 ? '#e11d48' : '#059669'}">${fieldDiffs.optimization}</div>
+                </div>
+                <div style="background: #f8fafc; padding: 10px; border-radius: 10px; border: 1px solid #f1f5f9;">
+                    <div style="font-size: 8px; color: #64748b; font-weight: 800; text-transform: uppercase;">Unallocated Cargo</div>
+                    <div style="font-size: 16px; font-weight: 900; font-family: monospace; color: ${fieldDiffs.unallocatedCargo > 0 ? '#e11d48' : '#059669'}">${fieldDiffs.unallocatedCargo}</div>
+                </div>
+                <div style="background: #f8fafc; padding: 10px; border-radius: 10px; border: 1px solid #f1f5f9;">
+                    <div style="font-size: 8px; color: #64748b; font-weight: 800; text-transform: uppercase;">Purchase Vol</div>
+                    <div style="font-size: 16px; font-weight: 900; font-family: monospace; color: ${fieldDiffs.buyVol > 0 ? '#e11d48' : '#059669'}">${fieldDiffs.buyVol}</div>
+                </div>
+                <div style="background: #f8fafc; padding: 10px; border-radius: 10px; border: 1px solid #f1f5f9;">
+                    <div style="font-size: 8px; color: #64748b; font-weight: 800; text-transform: uppercase;">Sales Vol</div>
+                    <div style="font-size: 16px; font-weight: 900; font-family: monospace; color: ${fieldDiffs.sellVol > 0 ? '#e11d48' : '#059669'}">${fieldDiffs.sellVol}</div>
+                </div>
+                <div style="background: #f8fafc; padding: 10px; border-radius: 10px; border: 1px solid #f1f5f9;">
+                    <div style="font-size: 8px; color: #64748b; font-weight: 800; text-transform: uppercase;">Purchase Price</div>
+                    <div style="font-size: 16px; font-weight: 900; font-family: monospace; color: ${fieldDiffs.buyPrice > 0 ? '#e11d48' : '#059669'}">${fieldDiffs.buyPrice}</div>
+                </div>
+                <div style="background: #f8fafc; padding: 10px; border-radius: 10px; border: 1px solid #f1f5f9;">
+                    <div style="font-size: 8px; color: #64748b; font-weight: 800; text-transform: uppercase;">Sales Price</div>
+                    <div style="font-size: 16px; font-weight: 900; font-family: monospace; color: ${fieldDiffs.sellPrice > 0 ? '#e11d48' : '#059669'}">${fieldDiffs.sellPrice}</div>
+                </div>
+                <div style="background: #f8fafc; padding: 10px; border-radius: 10px; border: 1px solid #f1f5f9;">
+                    <div style="font-size: 8px; color: #64748b; font-weight: 800; text-transform: uppercase;">SRC Costs</div>
+                    <div style="font-size: 16px; font-weight: 900; font-family: monospace; color: ${fieldDiffs.src > 0 ? '#e11d48' : '#059669'}">${fieldDiffs.src}</div>
+                </div>
+                <div style="background: #f8fafc; padding: 10px; border-radius: 10px; border: 1px solid #f1f5f9;">
+                    <div style="font-size: 8px; color: #64748b; font-weight: 800; text-transform: uppercase;">Loading Month</div>
+                    <div style="font-size: 16px; font-weight: 900; font-family: monospace; color: ${fieldDiffs.loadingMonth > 0 ? '#e11d48' : '#059669'}">${fieldDiffs.loadingMonth}</div>
+                </div>
+                <div style="background: #f8fafc; padding: 10px; border-radius: 10px; border: 1px solid #f1f5f9;">
+                    <div style="font-size: 8px; color: #64748b; font-weight: 800; text-transform: uppercase;">Delivery Month</div>
+                    <div style="font-size: 16px; font-weight: 900; font-family: monospace; color: ${fieldDiffs.deliveryMonth > 0 ? '#e11d48' : '#059669'}">${fieldDiffs.deliveryMonth}</div>
+                </div>
             </div>
         </div>
     `;
@@ -1527,18 +1545,18 @@ export const DiscrepancyCheck: React.FC<DiscrepancyCheckProps> = ({
         <html>
             <head>
                 <meta charset="UTF-8">
-                <title>TRMS Reconciliation Report</title>
+                <title>App vs TRMS Reconciliation Report</title>
                 <style>
                     body { font-family: -apple-system, BlinkMacSystemFont, "Segoe UI", Roboto, Helvetica, Arial, sans-serif; padding: 40px; background-color: #f1f5f9; color: #0f172a; line-height: 1.5; }
                     .container { max-width: 1600px; margin: 0 auto; background: white; padding: 50px; border-radius: 32px; box-shadow: 0 25px 50px -12px rgba(0,0,0,0.15); border: 1px solid #e2e8f0; }
-                    .header { display: flex; justify-content: space-between; align-items: flex-start; margin-bottom: 40px; border-bottom: 2px solid #f1f5f9; padding-bottom: 30px; }
-                    .title-area h1 { font-size: 36px; font-weight: 900; letter-spacing: -1.5px; margin: 0; color: #0f172a; }
-                    .portfolio-info { margin-top: 10px; display: flex; gap: 20px; }
+                    .header { display: flex; justify-content: space-between; align-items: flex-start; margin-bottom: 30px; border-bottom: 2px solid #f1f5f9; padding-bottom: 24px; }
+                    .title-area h1 { font-size: 32px; font-weight: 900; letter-spacing: -1.5px; margin: 0; color: #0f172a; }
+                    .portfolio-info { margin-top: 10px; display: flex; gap: 15px; }
                     .info-pill { background: #f1f5f9; padding: 4px 12px; border-radius: 999px; font-size: 11px; font-weight: 800; color: #475569; text-transform: uppercase; letter-spacing: 0.5px; }
                     .meta { font-size: 11px; color: #94a3b8; font-weight: bold; text-transform: uppercase; letter-spacing: 1px; }
                     table { width: 100%; border-collapse: separate; border-spacing: 0; margin-top: 20px; border: 1px solid #e2e8f0; border-radius: 16px; overflow: hidden; box-shadow: 0 4px 6px -1px rgba(0,0,0,0.05); }
-                    th { text-align: left; background-color: #f8fafc; padding: 14px 16px; font-size: 10px; font-weight: 800; text-transform: uppercase; letter-spacing: 0.5px; color: #475569; border-bottom: 2px solid #e2e8f0; }
-                    td { padding: 14px 16px; border-bottom: 1px solid #f1f5f9; vertical-align: top; }
+                    th { text-align: left; background-color: #f8fafc; padding: 12px 14px; font-size: 10px; font-weight: 800; text-transform: uppercase; letter-spacing: 0.5px; color: #475569; border-bottom: 2px solid #e2e8f0; }
+                    td { padding: 10px 12px; border-bottom: 1px solid #f1f5f9; vertical-align: top; }
                     tr:last-child td { border-bottom: none; }
                     tr:hover { background-color: #f8fafc; }
                 </style>
@@ -1547,7 +1565,7 @@ export const DiscrepancyCheck: React.FC<DiscrepancyCheckProps> = ({
                 <div class="container">
                     <div class="header">
                         <div class="title-area">
-                            <h1>TRMS Reconciliation Report</h1>
+                            <h1>App vs TRMS Reconciliation Report</h1>
                             <div class="portfolio-info">
                                 <span class="info-pill">Portfolio: ${trmsData.portfolioName || 'N/A'}</span>
                                 <span class="info-pill">Year: ${trmsData.portfolioYear || 'N/A'}</span>
@@ -1555,7 +1573,7 @@ export const DiscrepancyCheck: React.FC<DiscrepancyCheckProps> = ({
                         </div>
                         <div style="text-align: right;">
                             <div class="meta">Generated on ${new Date().toLocaleString()}</div>
-                            <div style="font-size: 10px; color: #6366f1; font-weight: 900; margin-top: 5px; text-transform: uppercase;">App Version 2.5 • Verified</div>
+                            <div style="font-size: 10px; color: #6366f1; font-weight: 900; margin-top: 5px; text-transform: uppercase;">App vs TRMS Engine</div>
                         </div>
                     </div>
                     
@@ -1566,12 +1584,9 @@ export const DiscrepancyCheck: React.FC<DiscrepancyCheckProps> = ({
                         <tbody>${tableRows}</tbody>
                     </table>
                     
-                    <div style="margin-top: 50px; padding: 30px; background: #f8fafc; border-radius: 16px; border: 1px solid #e2e8f0; text-align: center;">
-                        <div style="font-size: 11px; color: #94a3b8; font-weight: 900; text-transform: uppercase; letter-spacing: 3px;">
-                            End of Reconciliation Report • Confidential Data
-                        </div>
-                        <div style="font-size: 9px; color: #cbd5e1; margin-top: 10px;">
-                            This report was generated automatically by the TRMS Reconciliation Engine.
+                    <div style="margin-top: 40px; padding: 24px; background: #f8fafc; border-radius: 16px; border: 1px solid #e2e8f0; text-align: center;">
+                        <div style="font-size: 11px; color: #94a3b8; font-weight: 900; text-transform: uppercase; letter-spacing: 2px;">
+                            End of App vs TRMS Reconciliation Report
                         </div>
                     </div>
                 </div>
@@ -1586,7 +1601,7 @@ export const DiscrepancyCheck: React.FC<DiscrepancyCheckProps> = ({
     const url = URL.createObjectURL(blob);
     const a = document.createElement('a');
     a.href = url;
-    a.download = `TRMS_Reconciliation_Report_${new Date().toISOString().split('T')[0]}.html`;
+    a.download = `App_vs_TRMS_Reconciliation_Report_${new Date().toISOString().split('T')[0]}.html`;
     document.body.appendChild(a);
     a.click();
     document.body.removeChild(a);
@@ -1598,51 +1613,58 @@ export const DiscrepancyCheck: React.FC<DiscrepancyCheckProps> = ({
     const reportData = processedData.map((row: any) => {
       if (activeTab === 'reconcile') {
         const r = row as ReconciliationRow;
+        const buyVolDiff = r.app.buyVolTotal - r.trms.buyVolTotal;
+        const sellVolDiff = r.app.sellVolTotal - r.trms.sellVolTotal;
+        const buyPriceDiff = r.app.buyPriceEffective - r.trms.buyPriceEffective;
+        const sellPriceDiff = r.app.sellPriceEffective - r.trms.sellPriceEffective;
+        const srcDiff = r.app.src - r.trms.src;
+
         return {
           'Strategy Name': r.strategyName,
-          'Matched in TRMS': r.foundInTrms ? 'Yes' : 'No',
-          'App Loading Month': getMonthStr(r.app.loadingDate),
-          'TRMS Loading Month': getMonthStr(r.trms.commWindowEndDate),
-          'Loading Month Error %': r.errorPcts.loadingDate,
-          'App Delivery Month': getMonthStr(r.app.deliveryDate),
-          'TRMS Delivery Month': getMonthStr(r.trms.commWindowEndDate),
-          'Delivery Month Error %': r.errorPcts.deliveryDate,
-          'App Volume Type': r.app.volumeType,
-          'TRMS Volume Type': r.trms.volumeType,
-          'App Price Status': r.app.priceStatus,
-          'TRMS Price Status': r.trms.priceStatus,
-          'App Purchase Price': r.app.buyPrice,
-          'App Purchase Price Tier 2': r.app.tier2BuyPrice || 0,
-          'App Effective Purchase Price': r.app.effectiveBuyPrice || r.app.buyPrice,
-          'TRMS Purchase Price (Best Match)': r.trms.buyLegs.length > 0 ? r.trms.buyLegs.reduce((prev, curr) => Math.abs(curr.price - r.app.buyPrice) < Math.abs(prev.price - r.app.buyPrice) ? curr : prev).price : 0,
-          'Purchase Price Error %': r.errorPcts.buyPrice,
-          'App Purchase Volume': r.app.buyVol,
-          'App Purchase Volume Tier 2': r.app.tier2BuyVol || 0,
-          'App Total Purchase Volume': r.app.buyVol + (r.app.tier2BuyVol || 0),
-          'TRMS Purchase Volume (Best Match)': r.trms.buyLegs.length > 0 ? r.trms.buyLegs.reduce((prev, curr) => Math.abs(curr.vol - r.app.buyVol) < Math.abs(prev.vol - r.app.buyVol) ? curr : prev).vol : 0,
-          'Purchase Volume Error %': r.errorPcts.buyVol,
-          'App Purchase Cost': r.app.reconciledPurchaseCost > 0 ? r.app.reconciledPurchaseCost : r.app.buyPrice * r.app.buyVol,
-          'TRMS Purchase Value (Best Match)': r.trms.buyLegs.length > 0 ? r.trms.buyLegs.reduce((prev, curr) => Math.abs(Math.abs(curr.valueUSD) - (r.app.reconciledPurchaseCost > 0 ? r.app.reconciledPurchaseCost : r.app.buyPrice * r.app.buyVol)) < Math.abs(Math.abs(prev.valueUSD) - (r.app.reconciledPurchaseCost > 0 ? r.app.reconciledPurchaseCost : r.app.buyPrice * r.app.buyVol)) ? curr : prev).valueUSD : 0,
-          'Purchase Cost Error %': r.errorPcts.purchaseCost,
-          'App Sales Price': r.app.sellPrice,
-          'App Sales Price Tier 2': r.app.tier2SellPrice || 0,
-          'App Effective Sales Price': r.app.effectiveSellPrice || r.app.sellPrice,
-          'TRMS Sales Price (Best Match)': r.trms.sellLegs.length > 0 ? r.trms.sellLegs.reduce((prev, curr) => Math.abs(curr.price - r.app.sellPrice) < Math.abs(prev.price - r.app.sellPrice) ? curr : prev).price : 0,
-          'Sales Price Error %': r.errorPcts.sellPrice,
-          'App Sales Volume': r.app.sellVol,
-          'App Sales Volume Tier 2': r.app.tier2SellVol || 0,
-          'App Total Sales Volume': r.app.sellVol + (r.app.tier2SellVol || 0),
-          'TRMS Sales Volume (Best Match)': r.trms.sellLegs.length > 0 ? r.trms.sellLegs.reduce((prev, curr) => Math.abs(curr.vol - r.app.sellVol) < Math.abs(prev.vol - r.app.sellVol) ? curr : prev).vol : 0,
-          'Sales Volume Error %': r.errorPcts.sellVol,
-          'App Sales Revenue': r.app.reconciledSalesRevenue > 0 ? r.app.reconciledSalesRevenue : r.app.sellPrice * r.app.sellVol,
-          'TRMS Sales Value (Best Match)': r.trms.sellLegs.length > 0 ? r.trms.sellLegs.reduce((prev, curr) => Math.abs(Math.abs(curr.valueUSD) - (r.app.reconciledSalesRevenue > 0 ? r.app.reconciledSalesRevenue : r.app.sellPrice * r.app.sellVol)) < Math.abs(Math.abs(prev.valueUSD) - (r.app.reconciledSalesRevenue > 0 ? r.app.reconciledSalesRevenue : r.app.sellPrice * r.app.sellVol)) ? curr : prev).valueUSD : 0,
-          'Sales Revenue Error %': r.errorPcts.salesRevenue,
-          'App SRC Cost': r.app.src,
-          'TRMS SRC Cost (Best Match)': r.trms.srcLegs.length > 0 ? r.trms.srcLegs.reduce((prev, curr) => Math.abs(curr.value - r.app.src) < Math.abs(prev.value - r.app.src) ? curr : prev).value : 0,
-          'SRC Cost Error %': r.errorPcts.src,
-          'App Physical P&L': (r.app.reconciledSalesRevenue > 0 ? r.app.reconciledSalesRevenue : r.app.sellPrice * r.app.sellVol) - (r.app.reconciledPurchaseCost > 0 ? r.app.reconciledPurchaseCost : r.app.buyPrice * r.app.buyVol) - r.app.src,
-          'TRMS Base Value': r.trms.commodityValue,
-          'Discrepancies': Array.from(r.discrepancies).join(', ') || 'None'
+          'Group': r.group || '-',
+          'Status': r.status,
+          'Discrepancies Count': r.discrepancies.size,
+          'Discrepancies List': Array.from(r.discrepancies).join(', ') || 'None',
+
+          'App P&L Bucket': r.app.pnlBucket,
+          'TRMS P&L Bucket': r.trms.pnlBucket,
+          'P&L Bucket Match': !r.diffs.pnlBucket ? 'Match' : 'Mismatch',
+
+          'App Optimization': r.app.optimization,
+          'TRMS Optimization': r.trms.optimization,
+          'Optimization Match': !r.diffs.optimization ? 'Match' : 'Mismatch',
+
+          'App Unallocated Cargo': r.app.unallocatedCargo,
+          'TRMS Unallocated Cargo': r.trms.unallocatedCargo,
+          'Unallocated Cargo Match': !r.diffs.unallocatedCargo ? 'Match' : 'Mismatch',
+
+          'App Purchase Vol (MT)': r.app.buyVolTotal,
+          'TRMS Purchase Vol (MT)': r.trms.buyVolTotal,
+          'Purchase Vol Diff (MT)': buyVolDiff,
+
+          'App Sales Vol (MT)': r.app.sellVolTotal,
+          'TRMS Sales Vol (MT)': r.trms.sellVolTotal,
+          'Sales Vol Diff (MT)': sellVolDiff,
+
+          'App Purchase Price ($)': r.app.buyPriceEffective,
+          'TRMS Purchase Price ($)': r.trms.buyPriceEffective,
+          'Purchase Price Diff ($)': buyPriceDiff,
+
+          'App Sales Price ($)': r.app.sellPriceEffective,
+          'TRMS Sales Price ($)': r.trms.sellPriceEffective,
+          'Sales Price Diff ($)': sellPriceDiff,
+
+          'App SRC Costs ($)': r.app.src,
+          'TRMS SRC Costs ($)': r.trms.src,
+          'SRC Costs Diff ($)': srcDiff,
+
+          'App Loading Month': r.app.loadingMonth,
+          'TRMS Loading Month': r.trms.loadingMonth,
+          'Loading Month Match': !r.diffs.loadingMonth ? 'Match' : 'Mismatch',
+
+          'App Delivery Month': r.app.deliveryMonth,
+          'TRMS Delivery Month': r.trms.deliveryMonth,
+          'Delivery Month Match': !r.diffs.deliveryMonth ? 'Match' : 'Mismatch'
         };
       }
       return row;
@@ -1650,8 +1672,8 @@ export const DiscrepancyCheck: React.FC<DiscrepancyCheckProps> = ({
 
     const ws = XLSX.utils.json_to_sheet(reportData);
     const wb = XLSX.utils.book_new();
-    XLSX.utils.book_append_sheet(wb, ws, "Reconciliation Report");
-    XLSX.writeFile(wb, `TRMS_Reconciliation_Report_${new Date().toISOString().split('T')[0]}.xlsx`);
+    XLSX.utils.book_append_sheet(wb, ws, "App vs TRMS Report");
+    XLSX.writeFile(wb, `App_vs_TRMS_Reconciliation_Report_${new Date().toISOString().split('T')[0]}.xlsx`);
     toast.success("Excel report downloaded successfully.");
   };
 
