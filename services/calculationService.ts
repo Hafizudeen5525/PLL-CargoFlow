@@ -241,13 +241,81 @@ const STORAGE_KEY_CURVES = 'forward_curves_data';
 const STORAGE_KEY_GRM_CURVES = 'grm_forward_curves_data';
 const STORAGE_KEY_HISTORICAL = 'historical_market_data';
 
-export const GROUPS = ['PL9SB', 'PFLNG1', 'PFLNG2', 'LNGC', 'Spot', 'Cheniere'];
+export const STORAGE_KEY_SN_GROUP_OVERRIDES = 'sn_group_overrides';
+export const STORAGE_KEY_CUSTOM_GROUPS = 'custom_portfolio_groups';
+
+export const DEFAULT_GROUPS = ['PL9SB', 'FLNG1', 'FLNG2', 'LNGC', 'Spot', 'Cheniere'];
+export const GROUPS = ['PL9SB', 'FLNG1', 'FLNG2', 'LNGC', 'Spot', 'Cheniere'];
+
+export function getCustomGroups(): string[] {
+    try {
+        const stored = localStorage.getItem(STORAGE_KEY_CUSTOM_GROUPS);
+        if (stored) {
+            const parsed = JSON.parse(stored);
+            if (Array.isArray(parsed) && parsed.length > 0) return parsed;
+        }
+    } catch (e) {
+        console.error('Error reading custom groups:', e);
+    }
+    return DEFAULT_GROUPS;
+}
+
+export function saveCustomGroups(groups: string[]): void {
+    try {
+        localStorage.setItem(STORAGE_KEY_CUSTOM_GROUPS, JSON.stringify(groups));
+        window.dispatchEvent(new Event('sn_groups_updated'));
+    } catch (e) {
+        console.error('Error saving custom groups:', e);
+    }
+}
+
+export function getSnGroupOverrides(): Record<string, string> {
+    try {
+        const stored = localStorage.getItem(STORAGE_KEY_SN_GROUP_OVERRIDES);
+        if (stored) {
+            return JSON.parse(stored);
+        }
+    } catch (e) {
+        console.error('Error reading SN group overrides:', e);
+    }
+    return {};
+}
+
+export function saveSnGroupOverrides(overrides: Record<string, string>): void {
+    try {
+        localStorage.setItem(STORAGE_KEY_SN_GROUP_OVERRIDES, JSON.stringify(overrides));
+        window.dispatchEvent(new Event('sn_groups_updated'));
+    } catch (e) {
+        console.error('Error saving SN group overrides:', e);
+    }
+}
+
+export function normalizeSnKey(sn: string): string {
+    return String(sn || '').trim().toLowerCase().replace(/[^a-z0-9]/g, '');
+}
 
 export function getGroupName(strategyName: string = ''): string {
-    const sn = strategyName.toUpperCase();
-    for (const group of GROUPS) {
-        if (sn.includes(group.toUpperCase())) return group;
+    if (!strategyName) return 'Others';
+    const cleanSn = String(strategyName).trim();
+    const overrides = getSnGroupOverrides();
+    
+    // Check exact raw match or normalized key match
+    if (overrides[cleanSn]) {
+        return overrides[cleanSn];
     }
+    const normKey = normalizeSnKey(cleanSn);
+    if (overrides[normKey]) {
+        return overrides[normKey];
+    }
+
+    const sn = cleanSn.toUpperCase();
+    if (sn.includes('PL9SB')) return 'PL9SB';
+    if (sn.includes('FLNG1') || sn.includes('PFLNG1')) return 'FLNG1';
+    if (sn.includes('FLNG2') || sn.includes('PFLNG2')) return 'FLNG2';
+    if (sn.includes('LNGC')) return 'LNGC';
+    if (sn.includes('SPOT')) return 'Spot';
+    if (sn.includes('CHENIERE') || sn.includes('SPL') || sn.includes('CCL')) return 'Cheniere';
+
     return 'Others';
 }
 

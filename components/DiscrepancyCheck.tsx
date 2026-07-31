@@ -718,11 +718,24 @@ export const DiscrepancyCheck: React.FC<DiscrepancyCheckProps> = ({
       }
     });
 
+    profiles.forEach((p: any) => {
+      const match = p.strategyName?.match(/\b(20\d\d)\b/);
+      if (match) years.add(match[1]);
+      if (p.deliveryDate || p.loadingDate) {
+        const yr = new Date(p.deliveryDate || p.loadingDate).getFullYear();
+        if (yr && !isNaN(yr)) years.add(String(yr));
+      }
+      if (p.deliveryMonth) {
+        const matchM = p.deliveryMonth.match(/\b(20\d\d)\b/);
+        if (matchM) years.add(matchM[1]);
+      }
+    });
+
     return {
       eodDates: Array.from(eodDates).sort(),
       years: Array.from(years).sort()
     };
-  }, [trmsData.extractedRows]);
+  }, [trmsData.extractedRows, profiles]);
 
   const reconciliationData = useMemo(() => {
     const activeProfiles = profiles.filter(p => !p.deleted);
@@ -1066,9 +1079,29 @@ export const DiscrepancyCheck: React.FC<DiscrepancyCheckProps> = ({
         if (row.app.unallocatedCargo !== reconUnallocatedFilter && row.trms.unallocatedCargo !== reconUnallocatedFilter) return false;
       }
 
+      if (selectedYear !== 'all') {
+        const yr = selectedYear.trim();
+        const trmsMatch = row.trms && (
+          row.strategyName.includes(yr) ||
+          (row.trms.rawRows && row.trms.rawRows.some((r: any) => {
+            const rowYr = String(r['Plsb Year Bucket'] || r['Plsb_Year_Bucket'] || r['PLSB Year'] || r['Year'] || '').trim();
+            return rowYr.includes(yr);
+          }))
+        );
+        const appMatch = row.app && (
+          row.strategyName.includes(yr) ||
+          (row.app.deliveryDate && String(new Date(row.app.deliveryDate).getFullYear()) === yr) ||
+          (row.app.loadingDate && String(new Date(row.app.loadingDate).getFullYear()) === yr) ||
+          String(row.app.deliveryMonth || '').includes(yr) ||
+          String(row.app.loadingMonth || '').includes(yr)
+        );
+
+        if (!trmsMatch && !appMatch) return false;
+      }
+
       return true;
     });
-  }, [reconciliationData, searchTerm, reconStatusFilter, reconGroupFilter, reconPnlBucketFilter, reconOptimizationFilter, reconUnallocatedFilter]);
+  }, [reconciliationData, searchTerm, reconStatusFilter, reconGroupFilter, reconPnlBucketFilter, reconOptimizationFilter, reconUnallocatedFilter, selectedYear]);
 
   const currentRawData = useMemo(() => {
     if (activeTab === 'reconcile') return filteredReconciliationData;
@@ -1914,6 +1947,12 @@ export const DiscrepancyCheck: React.FC<DiscrepancyCheckProps> = ({
                       </button>
                     </div>
 
+                    {/* Year Dropdown */}
+                    <select value={selectedYear} onChange={(e) => setSelectedYear(e.target.value)} className="bg-slate-800 text-slate-200 border border-slate-700 text-[10px] font-bold rounded-lg px-2.5 py-1 focus:ring-1 focus:ring-indigo-500 outline-none cursor-pointer">
+                      <option value="all">Year: All ({trmsFilterOptions.years.length})</option>
+                      {trmsFilterOptions.years.map(y => <option key={y} value={y}>{y}</option>)}
+                    </select>
+
                     {/* Group Dropdown */}
                     <select value={reconGroupFilter} onChange={(e) => setReconGroupFilter(e.target.value)} className="bg-slate-800 text-slate-200 border border-slate-700 text-[10px] font-bold rounded-lg px-2.5 py-1 focus:ring-1 focus:ring-indigo-500 outline-none">
                       <option value="all">Group: All ({allGroups.length})</option>
@@ -1943,13 +1982,14 @@ export const DiscrepancyCheck: React.FC<DiscrepancyCheckProps> = ({
                     </select>
                   </div>
 
-                  {(reconStatusFilter !== 'all' || reconGroupFilter !== 'all' || reconPnlBucketFilter !== 'all' || reconOptimizationFilter !== 'all' || reconUnallocatedFilter !== 'all') && (
+                  {(reconStatusFilter !== 'all' || reconGroupFilter !== 'all' || reconPnlBucketFilter !== 'all' || reconOptimizationFilter !== 'all' || reconUnallocatedFilter !== 'all' || selectedYear !== 'all') && (
                     <button onClick={() => {
                       setReconStatusFilter('all');
                       setReconGroupFilter('all');
                       setReconPnlBucketFilter('all');
                       setReconOptimizationFilter('all');
                       setReconUnallocatedFilter('all');
+                      setSelectedYear('all');
                     }} className="text-[10px] font-bold text-rose-400 hover:text-rose-300 underline">
                       Reset Quick Filters
                     </button>
@@ -2539,11 +2579,39 @@ const ReconciliationRowItem = memo(({ row, activeTab, columnWidths, handleRowEdi
     );
   }
 
+  const getVolHighlight = (appVol: number, trmsVol: number, foundInApp: boolean, foundInTrms: boolean) => {
+    if (!foundInApp && !foundInTrms) return { bgClass: '', textClass: 'text-slate-700', pctDiff: 0, level: 'match' };
+
+    const diff = Math.abs(appVol - trmsVol);
+    if (diff <= 0.1) {
+      return { bgClass: '', textClass: 'text-slate-700', pctDiff: 0, level: 'match' };
+    }
+
+    const maxVol = Math.max(Math.abs(appVol), Math.abs(trmsVol));
+    const pctDiff = maxVol > 0 ? (diff / maxVol) * 100 : 100;
+
+    if (pctDiff > 5.0) {
+      return {
+        bgClass: 'bg-rose-100/90 border border-rose-200',
+        textClass: 'text-rose-700 font-extrabold',
+        pctDiff,
+        level: 'red'
+      };
+    } else {
+      return {
+        bgClass: 'bg-amber-100/90 border border-amber-200',
+        textClass: 'text-amber-800 font-extrabold',
+        pctDiff,
+        level: 'yellow'
+      };
+    }
+  };
+
   const pnlMismatch = r.foundInApp && r.foundInTrms && r.diffs.pnlBucket;
   const optMismatch = r.foundInApp && r.foundInTrms && r.diffs.optimization;
   const unallocMismatch = r.foundInApp && r.foundInTrms && r.diffs.unallocatedCargo;
-  const buyVolMismatch = r.foundInApp && r.foundInTrms && Math.abs(r.diffs.buyVol) > 1.0;
-  const sellVolMismatch = r.foundInApp && r.foundInTrms && Math.abs(r.diffs.sellVol) > 1.0;
+  const buyVolHighlight = getVolHighlight(r.app.buyVolTotal, r.trms.buyVolTotal, r.foundInApp, r.foundInTrms);
+  const sellVolHighlight = getVolHighlight(r.app.sellVolTotal, r.trms.sellVolTotal, r.foundInApp, r.foundInTrms);
   const buyPriceMismatch = r.foundInApp && r.foundInTrms && Math.abs(r.diffs.buyPrice) > 0.01;
   const sellPriceMismatch = r.foundInApp && r.foundInTrms && Math.abs(r.diffs.sellPrice) > 0.01;
   const srcMismatch = r.foundInApp && r.foundInTrms && Math.abs(r.diffs.src) > 1.0;
@@ -2627,7 +2695,7 @@ const ReconciliationRowItem = memo(({ row, activeTab, columnWidths, handleRowEdi
       </div>
 
       {/* 5. Purchase Volume */}
-      <div className={`px-3 py-2 shrink-0 flex flex-col justify-center border-r border-slate-100 overflow-hidden ${buyVolMismatch ? 'bg-rose-50/70' : ''}`} style={{ width: columnWidths['Purchase Volume'] || 160 }}>
+      <div className={`px-3 py-2 shrink-0 flex flex-col justify-center border-r border-slate-100 overflow-hidden ${buyVolHighlight.bgClass}`} style={{ width: columnWidths['Purchase Volume'] || 160 }} title={buyVolHighlight.level !== 'match' ? `Volume diff: ${buyVolHighlight.pctDiff?.toFixed(1)}% (${buyVolHighlight.level === 'red' ? '>5%' : '≤5%'})` : undefined}>
         <div className="flex flex-col mb-1 pb-1 border-b border-slate-100">
           <div className="flex justify-between items-center text-[8px] text-slate-400 font-bold uppercase">
             <span>App Buy Vol</span>
@@ -2649,13 +2717,13 @@ const ReconciliationRowItem = memo(({ row, activeTab, columnWidths, handleRowEdi
             {r.trms.buyVolT2 > 0 ? (
               <span className="text-slate-500 text-[8px]">T1:{r.trms.buyVolT1.toLocaleString()} | T2:{r.trms.buyVolT2.toLocaleString()}</span>
             ) : null}
-            <span className={`font-bold ml-auto ${buyVolMismatch ? 'text-rose-600' : 'text-slate-700'}`}>{r.trms.buyVolTotal.toLocaleString()}</span>
+            <span className={`font-bold ml-auto ${buyVolHighlight.textClass}`}>{r.trms.buyVolTotal.toLocaleString()}</span>
           </div>
         </div>
       </div>
 
       {/* 6. Sales Volume */}
-      <div className={`px-3 py-2 shrink-0 flex flex-col justify-center border-r border-slate-100 overflow-hidden ${sellVolMismatch ? 'bg-rose-50/70' : ''}`} style={{ width: columnWidths['Sales Volume'] || 160 }}>
+      <div className={`px-3 py-2 shrink-0 flex flex-col justify-center border-r border-slate-100 overflow-hidden ${sellVolHighlight.bgClass}`} style={{ width: columnWidths['Sales Volume'] || 160 }} title={sellVolHighlight.level !== 'match' ? `Volume diff: ${sellVolHighlight.pctDiff?.toFixed(1)}% (${sellVolHighlight.level === 'red' ? '>5%' : '≤5%'})` : undefined}>
         <div className="flex flex-col mb-1 pb-1 border-b border-slate-100">
           <div className="flex justify-between items-center text-[8px] text-slate-400 font-bold uppercase">
             <span>App Sell Vol</span>
@@ -2677,7 +2745,7 @@ const ReconciliationRowItem = memo(({ row, activeTab, columnWidths, handleRowEdi
             {r.trms.sellVolT2 > 0 ? (
               <span className="text-slate-500 text-[8px]">T1:{r.trms.sellVolT1.toLocaleString()} | T2:{r.trms.sellVolT2.toLocaleString()}</span>
             ) : null}
-            <span className={`font-bold ml-auto ${sellVolMismatch ? 'text-rose-600' : 'text-slate-700'}`}>{r.trms.sellVolTotal.toLocaleString()}</span>
+            <span className={`font-bold ml-auto ${sellVolHighlight.textClass}`}>{r.trms.sellVolTotal.toLocaleString()}</span>
           </div>
         </div>
       </div>

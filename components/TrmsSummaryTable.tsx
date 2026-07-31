@@ -34,8 +34,18 @@ import {
   FileSpreadsheet,
   BookOpen,
   Ship,
-  Zap
+  Zap,
+  FolderKanban
 } from 'lucide-react';
+import { 
+  getGroupName, 
+  getCustomGroups, 
+  saveCustomGroups, 
+  getSnGroupOverrides, 
+  saveSnGroupOverrides, 
+  normalizeSnKey, 
+  DEFAULT_GROUPS 
+} from '../services/calculationService';
 import { 
   BarChart, 
   Bar, 
@@ -88,14 +98,7 @@ const getRowExposureMonth = (row: any) => {
 };
 
 const getTrmsGroupName = (strategyName: string = ''): string => {
-  const sn = strategyName.toUpperCase();
-  if (sn.includes('PL9SB')) return 'PL9SB';
-  if (sn.includes('FLNG1') || sn.includes('PFLNG1')) return 'FLNG1';
-  if (sn.includes('FLNG2') || sn.includes('PFLNG2')) return 'FLNG2';
-  if (sn.includes('LNGC')) return 'LNGC';
-  if (sn.includes('SPOT')) return 'Spot';
-  if (sn.includes('CHENIERE') || sn.includes('SPL') || sn.includes('CCL')) return 'Cheniere';
-  return 'Others';
+  return getGroupName(strategyName);
 };
 
 const getRowPriceIndex = (row: any) => {
@@ -352,6 +355,28 @@ export const TrmsSummaryTable: React.FC<TrmsSummaryTableProps> = ({ trmsData, vi
   const [selectedUnit, setSelectedUnit] = useState<string>('ALL');
   const [indexBreakdownUnit, setIndexBreakdownUnit] = useState<'MMBtu' | 'Bbl' | 'Ratio'>('MMBtu');
 
+  // Custom Portfolio Group Categorization State
+  const [isCustomGroupModalOpen, setIsCustomGroupModalOpen] = useState(false);
+  const [customGroupsList, setCustomGroupsList] = useState<string[]>(() => getCustomGroups());
+  const [customSnOverrides, setCustomSnOverrides] = useState<Record<string, string>>(() => getSnGroupOverrides());
+  const [groupUpdateTrigger, setGroupUpdateTrigger] = useState(0);
+
+  const [newGroupNameInput, setNewGroupNameInput] = useState('');
+  const [modalSearchTerm, setModalSearchTerm] = useState('');
+  const [modalFilterGroup, setModalFilterGroup] = useState('ALL');
+  const [selectedModalSns, setSelectedModalSns] = useState<Set<string>>(new Set());
+  const [batchTargetGroup, setBatchTargetGroup] = useState('Carved Out');
+
+  useEffect(() => {
+    const handleUpdate = () => {
+      setCustomGroupsList(getCustomGroups());
+      setCustomSnOverrides(getSnGroupOverrides());
+      setGroupUpdateTrigger(prev => prev + 1);
+    };
+    window.addEventListener('sn_groups_updated', handleUpdate);
+    return () => window.removeEventListener('sn_groups_updated', handleUpdate);
+  }, []);
+
   const formatUnitVolumes = useCallback((
     volumes: { [unit: string]: number } | undefined, 
     separator: string = ' | ',
@@ -361,7 +386,7 @@ export const TrmsSummaryTable: React.FC<TrmsSummaryTableProps> = ({ trmsData, vi
     const entries = Object.entries(volumes).filter(([_, val]) => Math.abs(val) > 0.0001);
     if (entries.length === 0) return '—';
 
-    const signPrefix = type === 'buy' ? '+' : type === 'sell' ? '-' : '';
+    const signPrefix = type === 'buy' ? '+' : '';
 
     if (selectedUnit !== 'ALL') {
       const match = entries.find(([unit]) => unit.toUpperCase() === selectedUnit.toUpperCase());
@@ -535,6 +560,137 @@ export const TrmsSummaryTable: React.FC<TrmsSummaryTableProps> = ({ trmsData, vi
     };
   }, []);
 
+  // Custom Portfolio Group Categorization Handlers
+  const getDefaultRuleGroup = useCallback((strategyName: string) => {
+    const sn = (strategyName || '').toUpperCase();
+    if (sn.includes('PL9SB')) return 'PL9SB';
+    if (sn.includes('FLNG1') || sn.includes('PFLNG1')) return 'FLNG1';
+    if (sn.includes('FLNG2') || sn.includes('PFLNG2')) return 'FLNG2';
+    if (sn.includes('LNGC')) return 'LNGC';
+    if (sn.includes('SPOT')) return 'Spot';
+    if (sn.includes('CHENIERE') || sn.includes('SPL') || sn.includes('CCL')) return 'Cheniere';
+    return 'Others';
+  }, []);
+
+  const handleAddCustomGroup = () => {
+    const trimmed = newGroupNameInput.trim();
+    if (!trimmed) return;
+    if (customGroupsList.some(g => g.toLowerCase() === trimmed.toLowerCase())) {
+      toast.error(`Group "${trimmed}" already exists`);
+      return;
+    }
+    const updated = [...customGroupsList, trimmed];
+    saveCustomGroups(updated);
+    setNewGroupNameInput('');
+    toast.success(`Created portfolio group "${trimmed}"`);
+  };
+
+  const handleRemoveCustomGroup = (groupName: string) => {
+    if (DEFAULT_GROUPS.includes(groupName)) {
+      toast.error(`Cannot delete default group "${groupName}"`);
+      return;
+    }
+    const updatedGroups = customGroupsList.filter(g => g !== groupName);
+    saveCustomGroups(updatedGroups);
+
+    const overrides = getSnGroupOverrides();
+    let changed = false;
+    Object.entries(overrides).forEach(([snKey, grp]) => {
+      if (grp === groupName) {
+        delete overrides[snKey];
+        changed = true;
+      }
+    });
+    if (changed) {
+      saveSnGroupOverrides(overrides);
+    }
+    toast.success(`Removed portfolio group "${groupName}"`);
+  };
+
+  const handleSingleSnGroupChange = (sn: string, targetGroup: string) => {
+    const overrides = { ...getSnGroupOverrides() };
+    const normKey = normalizeSnKey(sn);
+    const defaultGrp = getDefaultRuleGroup(sn);
+
+    if (targetGroup === defaultGrp) {
+      delete overrides[normKey];
+      delete overrides[sn];
+    } else {
+      overrides[normKey] = targetGroup;
+      overrides[sn] = targetGroup;
+    }
+    saveSnGroupOverrides(overrides);
+    toast.success(`Assigned "${sn}" to ${targetGroup}`);
+  };
+
+  const handleApplyBatchGroup = () => {
+    if (selectedModalSns.size === 0) return;
+    const overrides = { ...getSnGroupOverrides() };
+    selectedModalSns.forEach(sn => {
+      const normKey = normalizeSnKey(sn);
+      const defaultGrp = getDefaultRuleGroup(sn);
+      if (batchTargetGroup === defaultGrp) {
+        delete overrides[normKey];
+        delete overrides[sn];
+      } else {
+        overrides[normKey] = batchTargetGroup;
+        overrides[sn] = batchTargetGroup;
+      }
+    });
+    saveSnGroupOverrides(overrides);
+    toast.success(`Assigned ${selectedModalSns.size} strategy names to "${batchTargetGroup}"`);
+    setSelectedModalSns(new Set());
+  };
+
+  const handleResetSnOverride = (sn: string) => {
+    const overrides = { ...getSnGroupOverrides() };
+    delete overrides[normalizeSnKey(sn)];
+    delete overrides[sn];
+    saveSnGroupOverrides(overrides);
+    toast.success(`Reset "${sn}" to default group`);
+  };
+
+  const handleResetAllOverrides = () => {
+    if (window.confirm('Are you sure you want to reset all custom strategy group categorizations to default?')) {
+      saveSnGroupOverrides({});
+      saveCustomGroups(DEFAULT_GROUPS);
+      toast.success('All strategy group overrides reset to defaults');
+    }
+  };
+
+  // Get all unique Strategy Names from data
+  const allModalSns = useMemo(() => {
+    const set = new Set<string>();
+    rows.forEach((r: any) => {
+      const sn = String(r['Strategy Name'] || r['Strategy'] || '').trim();
+      if (sn) set.add(sn);
+    });
+    return Array.from(set).sort();
+  }, [rows]);
+
+  const filteredModalSns = useMemo(() => {
+    void groupUpdateTrigger;
+    return allModalSns.filter(sn => {
+      const currentGrp = getGroupName(sn);
+      const normKey = normalizeSnKey(sn);
+      const hasOverride = !!customSnOverrides[normKey] || !!customSnOverrides[sn];
+
+      // Group filter
+      if (modalFilterGroup === 'OVERRIDDEN' && !hasOverride) return false;
+      if (modalFilterGroup !== 'ALL' && modalFilterGroup !== 'OVERRIDDEN' && currentGrp !== modalFilterGroup) return false;
+
+      // Search filter
+      if (modalSearchTerm.trim()) {
+        const term = modalSearchTerm.toLowerCase();
+        if (!sn.toLowerCase().includes(term) && !currentGrp.toLowerCase().includes(term)) {
+          return false;
+        }
+      }
+
+      return true;
+    });
+  }, [allModalSns, customSnOverrides, modalFilterGroup, modalSearchTerm, groupUpdateTrigger]);
+
   // Extract all unique PLSB Year Buckets dynamically
   const availableYears = useMemo(() => {
     const years = new Set<string>();
@@ -588,6 +744,7 @@ export const TrmsSummaryTable: React.FC<TrmsSummaryTableProps> = ({ trmsData, vi
 
   // Strategy Summaries calculation engine (grouped purely by Strategy Name)
   const summaryData = useMemo(() => {
+    void groupUpdateTrigger;
     const map: Record<string, {
       strategyName: string;
       underlyingRows: any[];
@@ -1001,23 +1158,24 @@ export const TrmsSummaryTable: React.FC<TrmsSummaryTableProps> = ({ trmsData, vi
 
       buyCalcRows.forEach(r => {
         const rawVol = Number(String(r['Volume'] || '').replace(/[^0-9.-]/g, ''));
+        const absVol = isNaN(rawVol) ? 0 : Math.abs(rawVol);
         const unit = r['Unit'] || r['unit'];
         const val = Number(String(r['Base_Total_Value_USD'] || '').replace(/[^0-9.-]/g, ''));
         const price = Number(String(r['Price'] || '').replace(/[^0-9.-]/g, ''));
 
-        if (!isNaN(rawVol)) {
-          purchaseVolume += rawVol;
-          addUnitVolume(purchaseVolumeByUnit, rawVol, unit);
+        if (absVol > 0) {
+          purchaseVolume += absVol;
+          addUnitVolume(purchaseVolumeByUnit, absVol, unit);
         }
         if (!isNaN(val)) {
           purchaseCost += Math.abs(val);
         }
-        if (!isNaN(price)) {
-          if (!isNaN(rawVol) && rawVol > 0) {
-            weightedBuyPriceSum += price * rawVol;
-            buyPriceVolSum += rawVol;
+        if (!isNaN(price) && Math.abs(price) > 0) {
+          if (absVol > 0) {
+            weightedBuyPriceSum += Math.abs(price) * absVol;
+            buyPriceVolSum += absVol;
           }
-          simpleBuyPriceSum += price;
+          simpleBuyPriceSum += Math.abs(price);
           buyPriceCount++;
         }
       });
@@ -1027,37 +1185,39 @@ export const TrmsSummaryTable: React.FC<TrmsSummaryTableProps> = ({ trmsData, vi
       if (sellCalcRows.length === 2) {
         sellTiers = sellCalcRows.map(r => {
           const rawVol = Number(String(r['Volume'] || '').replace(/[^0-9.-]/g, ''));
+          const absVol = isNaN(rawVol) ? 0 : Math.abs(rawVol);
           const unit = String(r['Unit'] || r['unit'] || 'MMBtu').trim();
           const val = Number(String(r['Base_Total_Value_USD'] || '').replace(/[^0-9.-]/g, ''));
           const price = Number(String(r['Price'] || '').replace(/[^0-9.-]/g, ''));
           return {
-            vol: isNaN(rawVol) ? 0 : rawVol,
+            vol: absVol,
             unit,
-            val: isNaN(val) ? 0 : val,
-            price: isNaN(price) ? 0 : price
+            val: isNaN(val) ? 0 : Math.abs(val),
+            price: isNaN(price) ? 0 : Math.abs(price)
           };
         });
       }
 
       sellCalcRows.forEach(r => {
         const rawVol = Number(String(r['Volume'] || '').replace(/[^0-9.-]/g, ''));
+        const absVol = isNaN(rawVol) ? 0 : Math.abs(rawVol);
         const unit = r['Unit'] || r['unit'];
         const val = Number(String(r['Base_Total_Value_USD'] || '').replace(/[^0-9.-]/g, ''));
         const price = Number(String(r['Price'] || '').replace(/[^0-9.-]/g, ''));
 
-        if (!isNaN(rawVol)) {
-          salesVolume += rawVol;
-          addUnitVolume(salesVolumeByUnit, rawVol, unit);
+        if (absVol > 0) {
+          salesVolume += absVol;
+          addUnitVolume(salesVolumeByUnit, absVol, unit);
         }
         if (!isNaN(val)) {
           salesRevenue += Math.abs(val);
         }
-        if (!isNaN(price)) {
-          if (!isNaN(rawVol) && rawVol > 0) {
-            weightedSellPriceSum += price * rawVol;
-            sellPriceVolSum += rawVol;
+        if (!isNaN(price) && Math.abs(price) > 0) {
+          if (absVol > 0) {
+            weightedSellPriceSum += Math.abs(price) * absVol;
+            sellPriceVolSum += absVol;
           }
-          simpleSellPriceSum += price;
+          simpleSellPriceSum += Math.abs(price);
           sellPriceCount++;
         }
       });
@@ -1450,7 +1610,7 @@ export const TrmsSummaryTable: React.FC<TrmsSummaryTableProps> = ({ trmsData, vi
         underlyingRows
       };
     });
-  }, [dateAndYearFilteredRows]);
+  }, [dateAndYearFilteredRows, groupUpdateTrigger]);
 
   const allAvailableUnits = useMemo(() => {
     const unitsSet = new Set<string>();
@@ -1464,6 +1624,29 @@ export const TrmsSummaryTable: React.FC<TrmsSummaryTableProps> = ({ trmsData, vi
     });
     return Array.from(unitsSet).sort();
   }, [summaryData]);
+
+  const availableTrmsGroups = useMemo(() => {
+    void groupUpdateTrigger;
+    const custom = getCustomGroups();
+    const present = new Set<string>(custom);
+    summaryData.forEach(item => {
+      present.add(getGroupName(item.strategyName));
+    });
+    present.add('Carved Out');
+    present.add('Others');
+
+    const list = Array.from(present);
+    const order = ['All', ...DEFAULT_GROUPS, 'Carved Out'];
+    list.sort((a, b) => {
+      const idxA = order.indexOf(a);
+      const idxB = order.indexOf(b);
+      if (idxA !== -1 && idxB !== -1) return idxA - idxB;
+      if (idxA !== -1) return -1;
+      if (idxB !== -1) return 1;
+      return a.localeCompare(b);
+    });
+    return ['All', ...list.filter(g => g !== 'All')];
+  }, [summaryData, groupUpdateTrigger]);
 
   const referenceValidationAlerts = useMemo(() => {
     const list: { row: any; error: string; strategyName: string }[] = [];
@@ -2154,8 +2337,8 @@ export const TrmsSummaryTable: React.FC<TrmsSummaryTableProps> = ({ trmsData, vi
       });
     });
 
-    // Aggregate P&L tracks Revenue - Cost - SRC - Hedging
-    const aggregatePnL = aggregateSalesRevenue - aggregatePurchaseCost - aggregateShippingCosts - aggregateHedgingPnL;
+    // Aggregate P&L tracks (Sales - Purchase) + Hedging + SRC
+    const aggregatePnL = aggregateSalesRevenue - aggregatePurchaseCost + aggregateShippingCosts + aggregateHedgingPnL;
 
     const maxAggPhysicalVol = Math.max(aggregatePurchaseVolume, aggregateSalesVolume) || aggregatePurchaseVolume || aggregateSalesVolume || 1;
 
@@ -2520,10 +2703,10 @@ export const TrmsSummaryTable: React.FC<TrmsSummaryTableProps> = ({ trmsData, vi
           return (
             <div className="flex flex-col items-end text-right">
               <span className="text-[10px] text-slate-300 font-medium">
-                -{v1.toLocaleString(undefined, { maximumFractionDigits: 0 })} {u1} <span className="text-[9px] text-slate-500 font-normal">(T1)</span>
+                {Math.abs(v1).toLocaleString(undefined, { maximumFractionDigits: 0 })} {u1} <span className="text-[9px] text-slate-500 font-normal">(T1)</span>
               </span>
               <span className="text-[10px] text-slate-300 font-medium">
-                -{v2.toLocaleString(undefined, { maximumFractionDigits: 0 })} {u2} <span className="text-[9px] text-slate-500 font-normal">(T2)</span>
+                {Math.abs(v2).toLocaleString(undefined, { maximumFractionDigits: 0 })} {u2} <span className="text-[9px] text-slate-500 font-normal">(T2)</span>
               </span>
               <span className="text-[9px] text-indigo-400 font-bold border-t border-slate-800/80 mt-0.5 pt-0.5 w-full">
                 Σ {formatUnitVolumes(item.salesVolumeByUnit, ' | ', 'sell')}
@@ -5454,12 +5637,21 @@ export const TrmsSummaryTable: React.FC<TrmsSummaryTableProps> = ({ trmsData, vi
       <div className="flex flex-col gap-3 p-3 px-4 border-b border-slate-850 bg-slate-900 text-slate-150">
         {/* TRMS Group Filter Navigation Tabs */}
         <div className="flex flex-col gap-2">
-          <span className="text-[10px] uppercase font-bold text-slate-400 font-mono tracking-widest flex items-center gap-1">
-            <TableProperties className="w-3.5 h-3.5 text-blue-400" />
-            Filter TRMS Group Portfolio:
-          </span>
+          <div className="flex items-center justify-between gap-2 flex-wrap">
+            <span className="text-[10px] uppercase font-bold text-slate-400 font-mono tracking-widest flex items-center gap-1">
+              <TableProperties className="w-3.5 h-3.5 text-blue-400" />
+              Filter TRMS Group Portfolio:
+            </span>
+            <button
+              onClick={() => setIsCustomGroupModalOpen(true)}
+              className="px-3 py-1 bg-gradient-to-r from-blue-600 to-indigo-600 hover:from-blue-500 hover:to-indigo-500 text-white text-xs font-bold rounded-lg transition-all shadow-sm flex items-center gap-1.5 border border-blue-400/30 cursor-pointer"
+            >
+              <FolderKanban className="w-3.5 h-3.5" />
+              <span>Categorize SNs / Custom Portfolios</span>
+            </button>
+          </div>
           <div className="flex flex-wrap gap-1.5">
-            {['All', 'PL9SB', 'FLNG1', 'FLNG2', 'LNGC', 'Spot', 'Cheniere', 'Others'].map((grp) => (
+            {availableTrmsGroups.map((grp) => (
               <button
                 key={grp}
                 onClick={() => {
@@ -5679,7 +5871,7 @@ export const TrmsSummaryTable: React.FC<TrmsSummaryTableProps> = ({ trmsData, vi
         {/* Aggregate P&L */}
         <div className="bg-slate-900 p-3 rounded-xl border border-slate-800 shadow-sm col-span-2 lg:col-span-1 flex flex-col justify-between">
           <div>
-            <div className="text-[10px] uppercase text-slate-300 font-mono font-extrabold tracking-wider" title="Revenue - Cost - SRC - Hedging">
+            <div className="text-[10px] uppercase text-slate-300 font-mono font-extrabold tracking-wider" title="(Sales - Purchase) + Hedging + SRC">
               Aggregate P&amp;L
             </div>
             <div className={`text-lg font-extrabold mt-1 font-mono ${kpis.aggregatePnL >= 0 ? 'text-emerald-400' : 'text-rose-400'}`}>
@@ -6901,8 +7093,294 @@ export const TrmsSummaryTable: React.FC<TrmsSummaryTableProps> = ({ trmsData, vi
           </div>
         )}
       </div>
-      </>
+    </>
     )}
+
+      {/* Custom Group Categorization Modal */}
+      <AnimatePresence>
+        {isCustomGroupModalOpen && (
+          <div className="fixed inset-0 z-50 flex items-center justify-center p-4 bg-slate-950/80 backdrop-blur-sm">
+            <motion.div 
+              initial={{ opacity: 0, scale: 0.95, y: 10 }}
+              animate={{ opacity: 1, scale: 1, y: 0 }}
+              exit={{ opacity: 0, scale: 0.95, y: 10 }}
+              className="bg-slate-900 border border-slate-700 rounded-2xl shadow-2xl max-w-4xl w-full max-h-[90vh] flex flex-col overflow-hidden text-slate-100"
+            >
+              {/* Modal Header */}
+              <div className="p-5 border-b border-slate-800 bg-slate-950 flex items-center justify-between">
+                <div className="flex items-center gap-3">
+                  <div className="p-2.5 bg-blue-500/10 border border-blue-500/30 rounded-xl text-blue-400">
+                    <FolderKanban className="w-5 h-5" />
+                  </div>
+                  <div>
+                    <h2 className="text-base font-bold text-white flex items-center gap-2">
+                      Custom Portfolio Categorization
+                      <span className="text-xs bg-blue-500/20 text-blue-300 px-2 py-0.5 rounded-full font-mono font-semibold border border-blue-500/30">
+                        {Object.keys(customSnOverrides).length} Overrides Active
+                      </span>
+                    </h2>
+                    <p className="text-xs text-slate-400">
+                      Group Strategy Names (SNs) into custom portfolios like <span className="text-blue-300 font-semibold font-mono">"Carved Out"</span> or custom groups.
+                    </p>
+                  </div>
+                </div>
+                <button
+                  onClick={() => setIsCustomGroupModalOpen(false)}
+                  className="p-2 text-slate-400 hover:text-white hover:bg-slate-800 rounded-lg transition-colors cursor-pointer"
+                >
+                  <X className="w-5 h-5" />
+                </button>
+              </div>
+
+              {/* Modal Body */}
+              <div className="p-6 overflow-y-auto space-y-6 flex-1">
+                {/* Section 1: Create New Group Portfolio */}
+                <div className="bg-slate-950/60 p-4 rounded-xl border border-slate-800 space-y-3">
+                  <h3 className="text-xs font-bold text-slate-300 uppercase tracking-wider flex items-center gap-2">
+                    <Boxes className="w-4 h-4 text-blue-400" />
+                    1. Add New Group Portfolio
+                  </h3>
+                  <div className="flex items-center gap-2">
+                    <input
+                      type="text"
+                      value={newGroupNameInput}
+                      onChange={(e) => setNewGroupNameInput(e.target.value)}
+                      onKeyDown={(e) => e.key === 'Enter' && handleAddCustomGroup()}
+                      placeholder="e.g. Carved Out, Project Alpha, Strategic Reserve..."
+                      className="flex-1 bg-slate-900 border border-slate-700 rounded-lg px-3 py-2 text-xs text-white placeholder-slate-500 focus:outline-none focus:border-blue-500 font-mono"
+                    />
+                    <button
+                      onClick={handleAddCustomGroup}
+                      className="px-4 py-2 bg-blue-600 hover:bg-blue-500 text-white font-bold text-xs rounded-lg transition-colors flex items-center gap-1.5 shadow-sm cursor-pointer"
+                    >
+                      <span>+</span> Add Portfolio Group
+                    </button>
+                  </div>
+                  
+                  {/* List of active group portfolios */}
+                  <div className="flex flex-wrap items-center gap-2 pt-1">
+                    <span className="text-[10px] text-slate-400 uppercase font-mono font-semibold">Active Groups:</span>
+                    {customGroupsList.map(grp => (
+                      <span key={grp} className="inline-flex items-center gap-1 px-2.5 py-1 bg-slate-850 border border-slate-700 text-slate-200 text-xs rounded-md font-mono font-semibold">
+                        <span>{grp}</span>
+                        {!DEFAULT_GROUPS.includes(grp) && grp !== 'Others' && (
+                          <button 
+                            onClick={() => handleRemoveCustomGroup(grp)}
+                            className="hover:text-rose-400 ml-1 text-slate-400 cursor-pointer"
+                            title="Delete group portfolio"
+                          >
+                            ×
+                          </button>
+                        )}
+                      </span>
+                    ))}
+                  </div>
+                </div>
+
+                {/* Section 2: Strategy Names Categorization Table */}
+                <div className="space-y-3">
+                  <div className="flex flex-col sm:flex-row sm:items-center justify-between gap-3">
+                    <div className="flex items-center gap-2">
+                      <h3 className="text-xs font-bold text-slate-300 uppercase tracking-wider flex items-center gap-2">
+                        <ListFilter className="w-4 h-4 text-blue-400" />
+                        2. Categorize Strategy Names (SNs)
+                      </h3>
+                      <span className="text-[10px] font-mono bg-slate-800 text-slate-300 px-2 py-0.5 rounded-full">
+                        {filteredModalSns.length} SNs Total
+                      </span>
+                    </div>
+
+                    <div className="flex items-center gap-2">
+                      {/* Search */}
+                      <div className="relative">
+                        <Search className="w-3.5 h-3.5 text-slate-400 absolute left-2.5 top-2.5" />
+                        <input
+                          type="text"
+                          value={modalSearchTerm}
+                          onChange={(e) => setModalSearchTerm(e.target.value)}
+                          placeholder="Search Strategy Names..."
+                          className="bg-slate-950 border border-slate-700 rounded-lg pl-8 pr-3 py-1.5 text-xs text-white placeholder-slate-500 focus:outline-none focus:border-blue-500 font-mono w-48"
+                        />
+                      </div>
+
+                      {/* Filter by current group */}
+                      <select
+                        value={modalFilterGroup}
+                        onChange={(e) => setModalFilterGroup(e.target.value)}
+                        className="bg-slate-950 border border-slate-700 rounded-lg px-2.5 py-1.5 text-xs text-slate-300 focus:outline-none focus:border-blue-500 font-mono cursor-pointer"
+                      >
+                        <option value="ALL">All Groups</option>
+                        {customGroupsList.map(g => (
+                          <option key={g} value={g}>{g}</option>
+                        ))}
+                        <option value="Others">Others</option>
+                        <option value="OVERRIDDEN">Custom Overridden Only</option>
+                      </select>
+                    </div>
+                  </div>
+
+                  {/* Batch Action Bar if items selected */}
+                  {selectedModalSns.size > 0 && (
+                    <div className="bg-blue-950/60 border border-blue-800/80 p-3 rounded-xl flex items-center justify-between gap-3 text-xs animate-fadeIn">
+                      <span className="font-bold text-blue-200 flex items-center gap-2">
+                        <CheckCircle2 className="w-4 h-4 text-blue-400" />
+                        {selectedModalSns.size} Strategy Name(s) selected
+                      </span>
+                      <div className="flex items-center gap-2">
+                        <span className="text-slate-300 font-semibold">Move to:</span>
+                        <select
+                          value={batchTargetGroup}
+                          onChange={(e) => setBatchTargetGroup(e.target.value)}
+                          className="bg-slate-900 border border-slate-700 text-white rounded-lg px-2.5 py-1 text-xs focus:outline-none focus:border-blue-400 font-mono cursor-pointer"
+                        >
+                          {customGroupsList.map(g => (
+                            <option key={g} value={g}>{g}</option>
+                          ))}
+                          <option value="Carved Out">Carved Out</option>
+                          <option value="Others">Others</option>
+                        </select>
+                        <button
+                          onClick={handleApplyBatchGroup}
+                          className="bg-blue-600 hover:bg-blue-500 text-white font-bold px-3 py-1 rounded-lg transition-colors shadow-sm cursor-pointer"
+                        >
+                          Apply Group
+                        </button>
+                        <button
+                          onClick={() => setSelectedModalSns(new Set())}
+                          className="text-slate-400 hover:text-white px-2 py-1 cursor-pointer"
+                        >
+                          Clear
+                        </button>
+                      </div>
+                    </div>
+                  )}
+
+                  {/* Table of SNs */}
+                  <div className="border border-slate-800 rounded-xl overflow-hidden bg-slate-950/40 max-h-96 overflow-y-auto">
+                    <table className="w-full text-left border-collapse text-xs">
+                      <thead className="bg-slate-950 text-slate-400 uppercase font-mono text-[10px] sticky top-0 z-10 border-b border-slate-800">
+                        <tr>
+                          <th className="p-3 w-10 text-center">
+                            <input
+                              type="checkbox"
+                              checked={filteredModalSns.length > 0 && filteredModalSns.every(sn => selectedModalSns.has(sn))}
+                              onChange={(e) => {
+                                if (e.target.checked) {
+                                  setSelectedModalSns(new Set(filteredModalSns));
+                                } else {
+                                  setSelectedModalSns(new Set());
+                                }
+                              }}
+                              className="rounded border-slate-700 bg-slate-900 text-blue-600 focus:ring-0 cursor-pointer"
+                            />
+                          </th>
+                          <th className="p-3">Strategy Name (SN)</th>
+                          <th className="p-3">Default Rule Group</th>
+                          <th className="p-3">Assigned Group Portfolio</th>
+                          <th className="p-3 text-right">Action</th>
+                        </tr>
+                      </thead>
+                      <tbody className="divide-y divide-slate-800/60 font-mono text-xs">
+                        {filteredModalSns.map((sn) => {
+                          const normKey = normalizeSnKey(sn);
+                          const hasOverride = !!customSnOverrides[normKey] || !!customSnOverrides[sn];
+                          const currentGroup = getGroupName(sn);
+                          const defaultRuleGroup = getDefaultRuleGroup(sn);
+                          const isSelected = selectedModalSns.has(sn);
+
+                          return (
+                            <tr 
+                              key={sn} 
+                              className={`hover:bg-slate-850/80 transition-colors ${
+                                isSelected ? 'bg-blue-950/30' : hasOverride ? 'bg-blue-950/10' : ''
+                              }`}
+                            >
+                              <td className="p-3 text-center">
+                                <input
+                                  type="checkbox"
+                                  checked={isSelected}
+                                  onChange={(e) => {
+                                    const next = new Set(selectedModalSns);
+                                    if (e.target.checked) next.add(sn);
+                                    else next.delete(sn);
+                                    setSelectedModalSns(next);
+                                  }}
+                                  className="rounded border-slate-700 bg-slate-900 text-blue-600 focus:ring-0 cursor-pointer"
+                                />
+                              </td>
+                              <td className="p-3 font-semibold text-white">
+                                {sn}
+                              </td>
+                              <td className="p-3 text-slate-400">
+                                <span className="px-2 py-0.5 rounded bg-slate-900 border border-slate-800 text-[10px]">
+                                  {defaultRuleGroup}
+                                </span>
+                              </td>
+                              <td className="p-3">
+                                <select
+                                  value={currentGroup}
+                                  onChange={(e) => handleSingleSnGroupChange(sn, e.target.value)}
+                                  className={`px-2.5 py-1 rounded-md text-xs font-bold border font-mono focus:outline-none cursor-pointer ${
+                                    hasOverride 
+                                      ? 'bg-blue-950 text-blue-200 border-blue-700 shadow-sm'
+                                      : 'bg-slate-900 text-slate-300 border-slate-700'
+                                  }`}
+                                >
+                                  {customGroupsList.map(g => (
+                                    <option key={g} value={g}>{g}</option>
+                                  ))}
+                                  <option value="Carved Out">Carved Out</option>
+                                  <option value="Others">Others</option>
+                                </select>
+                              </td>
+                              <td className="p-3 text-right">
+                                {hasOverride ? (
+                                  <button
+                                    onClick={() => handleResetSnOverride(sn)}
+                                    className="text-[10px] text-rose-400 hover:text-rose-300 hover:underline cursor-pointer"
+                                  >
+                                    Reset
+                                  </button>
+                                ) : (
+                                  <span className="text-[10px] text-slate-500">Default</span>
+                                )}
+                              </td>
+                            </tr>
+                          );
+                        })}
+                        {filteredModalSns.length === 0 && (
+                          <tr>
+                            <td colSpan={5} className="p-8 text-center text-slate-500">
+                              No Strategy Names found matching criteria.
+                            </td>
+                          </tr>
+                        )}
+                      </tbody>
+                    </table>
+                  </div>
+                </div>
+              </div>
+
+              {/* Modal Footer */}
+              <div className="p-4 border-t border-slate-800 bg-slate-950 flex items-center justify-between">
+                <button
+                  onClick={handleResetAllOverrides}
+                  className="text-xs text-rose-400 hover:text-rose-300 hover:underline flex items-center gap-1 font-mono cursor-pointer"
+                >
+                  <RefreshCw className="w-3.5 h-3.5" />
+                  Reset All Custom Categorization Overrides
+                </button>
+                <button
+                  onClick={() => setIsCustomGroupModalOpen(false)}
+                  className="px-5 py-2 bg-blue-600 hover:bg-blue-500 text-white font-bold text-xs rounded-xl transition-all shadow-md cursor-pointer"
+                >
+                  Done &amp; Save
+                </button>
+              </div>
+            </motion.div>
+          </div>
+        )}
+      </AnimatePresence>
 
     </div>
   );
