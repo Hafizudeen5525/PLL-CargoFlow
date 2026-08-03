@@ -422,6 +422,8 @@ export const TrmsSummaryTable: React.FC<TrmsSummaryTableProps> = ({ trmsData, vi
 
   const [selectedEodDate, setSelectedEodDate] = useState<string>('all');
   const [selectedYear, setSelectedYear] = useState<string>('all');
+  const [showBuyer, setShowBuyer] = useState(true);
+  const [showSeller, setShowSeller] = useState(false);
   const [showExposureMonths, setShowExposureMonths] = useState(false);
   const [showLoadingMonth, setShowLoadingMonth] = useState(false);
   const [showDeliveryMonth, setShowDeliveryMonth] = useState(false);
@@ -801,12 +803,24 @@ export const TrmsSummaryTable: React.FC<TrmsSummaryTableProps> = ({ trmsData, vi
         optimisationStatus = '';
       }
 
-      // calculation C: Unallocated Cargo status
-      const hasBuy = underlyingRows.some(r => {
+      // Physical cargo rows (Base LNG or Optimization LNG only, excluding DH LNG, DFT LNG, Hedging LNG)
+      const physicalCargoRows = underlyingRows.filter(r => {
+        const ins = String(r['Ins Type'] || r['Instrument Type'] || '').trim().toUpperCase();
+        const cflow = String(r['Cflow Type'] || '').trim().toLowerCase();
+        const port = String(r['Internal Portfolio'] || r['Portfolio'] || '').trim().toLowerCase();
+
+        const isCommodityPhys = ins === 'COMM-PHYS' && cflow === 'commodity';
+        const isPaperOrHedge = port === 'dh lng' || port === 'dft lng' || port === 'hedging lng' || port.includes('dh') || port.includes('dft') || port.includes('hedging');
+
+        return isCommodityPhys && !isPaperOrHedge;
+      });
+
+      const hasBuy = physicalCargoRows.some(r => {
         const buySell = String(r['Buy_Sell'] || r['BuySell'] || '').trim().toLowerCase();
         return buySell === 'buy' || buySell === 'buys';
       });
-      const hasSell = underlyingRows.some(r => {
+
+      const hasSell = physicalCargoRows.some(r => {
         const buySell = String(r['Buy_Sell'] || r['BuySell'] || '').trim().toLowerCase();
         if (buySell !== 'sell' && buySell !== 'sells') return false;
         const entity = String(r['External Legal Entity'] || r['Buyer'] || r['Legal Entity'] || '').trim();
@@ -878,6 +892,17 @@ export const TrmsSummaryTable: React.FC<TrmsSummaryTableProps> = ({ trmsData, vi
             const isOpt = port === 'optimization lng' || port.includes('optimization');
             return isBuy && cflowType === 'commodity' && insType === 'COMM-PHYS' && isOpt && sett !== 'Physical Settlement';
           });
+          if (buyCalcRows.length === 0) {
+            buyCalcRows = underlyingRows.filter(r => {
+              const isBuy = String(r['Buy_Sell'] || r['BuySell'] || '').toLowerCase() === 'buy' || String(r['Buy_Sell'] || r['Buy_Sell'] || '').toLowerCase() === 'buys';
+              const cflowType = String(r['Cflow Type'] || '').trim().toLowerCase();
+              const port = String(r['Internal Portfolio'] || r['Portfolio'] || '').trim().toLowerCase();
+              const insType = String(r['Ins Type'] || r['Instrument Type'] || '').trim().toUpperCase();
+              const isOpt = port === 'optimization lng' || port.includes('optimization');
+              return isBuy && cflowType === 'commodity' && insType === 'COMM-PHYS' && isOpt;
+            });
+          }
+
           sellCalcRows = underlyingRows.filter(r => {
             const isSell = String(r['Buy_Sell'] || r['BuySell'] || '').toLowerCase() === 'sell' || String(r['Buy_Sell'] || r['Buy_Sell'] || '').toLowerCase() === 'sells';
             const cflowType = String(r['Cflow Type'] || '').trim().toLowerCase();
@@ -887,16 +912,18 @@ export const TrmsSummaryTable: React.FC<TrmsSummaryTableProps> = ({ trmsData, vi
             const isOpt = port === 'optimization lng' || port.includes('optimization');
             return isSell && cflowType === 'commodity' && insType === 'COMM-PHYS' && isOpt && sett !== 'Physical Settlement';
           });
+          if (sellCalcRows.length === 0) {
+            sellCalcRows = underlyingRows.filter(r => {
+              const isSell = String(r['Buy_Sell'] || r['BuySell'] || '').toLowerCase() === 'sell' || String(r['Buy_Sell'] || r['Buy_Sell'] || '').toLowerCase() === 'sells';
+              const cflowType = String(r['Cflow Type'] || '').trim().toLowerCase();
+              const port = String(r['Internal Portfolio'] || r['Portfolio'] || '').trim().toLowerCase();
+              const insType = String(r['Ins Type'] || r['Instrument Type'] || '').trim().toUpperCase();
+              const isOpt = port === 'optimization lng' || port.includes('optimization');
+              return isSell && cflowType === 'commodity' && insType === 'COMM-PHYS' && isOpt;
+            });
+          }
         } else if (unallocatedCargo === 'Open on Buy Leg') {
-          buyCalcRows = underlyingRows.filter(r => {
-            const isSell = String(r['Buy_Sell'] || r['Buy_Sell'] || r['BuySell'] || '').toLowerCase() === 'sell' || String(r['Buy_Sell'] || r['Buy_Sell'] || r['BuySell'] || '').toLowerCase() === 'sells';
-            const cflowType = String(r['Cflow Type'] || '').trim().toLowerCase();
-            const port = String(r['Internal Portfolio'] || r['Portfolio'] || '').trim().toLowerCase();
-            const sett = String(r['Settlement Type'] || '').trim();
-            const insType = String(r['Ins Type'] || r['Instrument Type'] || '').trim().toUpperCase();
-            const isOpt = port === 'optimization lng' || port.includes('optimization');
-            return isSell && cflowType === 'commodity' && insType === 'COMM-PHYS' && isOpt && sett === 'Physical Settlement';
-          });
+          buyCalcRows = [];
           sellCalcRows = underlyingRows.filter(r => {
             const isSell = String(r['Buy_Sell'] || r['Buy_Sell'] || r['BuySell'] || '').toLowerCase() === 'sell' || String(r['Buy_Sell'] || r['Buy_Sell'] || r['BuySell'] || '').toLowerCase() === 'sells';
             const cflowType = String(r['Cflow Type'] || '').trim().toLowerCase();
@@ -906,16 +933,18 @@ export const TrmsSummaryTable: React.FC<TrmsSummaryTableProps> = ({ trmsData, vi
             const isOpt = port === 'optimization lng' || port.includes('optimization');
             return isSell && cflowType === 'commodity' && insType === 'COMM-PHYS' && isOpt && sett !== 'Physical Settlement';
           });
+          if (sellCalcRows.length === 0) {
+            sellCalcRows = underlyingRows.filter(r => {
+              const isSell = String(r['Buy_Sell'] || r['Buy_Sell'] || r['BuySell'] || '').toLowerCase() === 'sell' || String(r['Buy_Sell'] || r['Buy_Sell'] || r['BuySell'] || '').toLowerCase() === 'sells';
+              const cflowType = String(r['Cflow Type'] || '').trim().toLowerCase();
+              const port = String(r['Internal Portfolio'] || r['Portfolio'] || '').trim().toLowerCase();
+              const insType = String(r['Ins Type'] || r['Instrument Type'] || '').trim().toUpperCase();
+              const isOpt = port === 'optimization lng' || port.includes('optimization');
+              return isSell && cflowType === 'commodity' && insType === 'COMM-PHYS' && isOpt;
+            });
+          }
         } else if (unallocatedCargo === 'Open on Sell Leg') {
-          sellCalcRows = underlyingRows.filter(r => {
-            const isBuy = String(r['Buy_Sell'] || r['Buy_Sell'] || r['BuySell'] || '').toLowerCase() === 'buy' || String(r['Buy_Sell'] || r['Buy_Sell'] || r['BuySell'] || '').toLowerCase() === 'buys';
-            const cflowType = String(r['Cflow Type'] || '').trim().toLowerCase();
-            const port = String(r['Internal Portfolio'] || r['Portfolio'] || '').trim().toLowerCase();
-            const sett = String(r['Settlement Type'] || '').trim();
-            const insType = String(r['Ins Type'] || r['Instrument Type'] || '').trim().toUpperCase();
-            const isOpt = port === 'optimization lng' || port.includes('optimization');
-            return isBuy && cflowType === 'commodity' && insType === 'COMM-PHYS' && isOpt && sett === 'Physical Settlement';
-          });
+          sellCalcRows = [];
           buyCalcRows = underlyingRows.filter(r => {
             const isBuy = String(r['Buy_Sell'] || r['Buy_Sell'] || r['BuySell'] || '').toLowerCase() === 'buy' || String(r['Buy_Sell'] || r['Buy_Sell'] || r['BuySell'] || '').toLowerCase() === 'buys';
             const cflowType = String(r['Cflow Type'] || '').trim().toLowerCase();
@@ -925,6 +954,16 @@ export const TrmsSummaryTable: React.FC<TrmsSummaryTableProps> = ({ trmsData, vi
             const isOpt = port === 'optimization lng' || port.includes('optimization');
             return isBuy && cflowType === 'commodity' && insType === 'COMM-PHYS' && isOpt && sett !== 'Physical Settlement';
           });
+          if (buyCalcRows.length === 0) {
+            buyCalcRows = underlyingRows.filter(r => {
+              const isBuy = String(r['Buy_Sell'] || r['Buy_Sell'] || r['BuySell'] || '').toLowerCase() === 'buy' || String(r['Buy_Sell'] || r['Buy_Sell'] || r['BuySell'] || '').toLowerCase() === 'buys';
+              const cflowType = String(r['Cflow Type'] || '').trim().toLowerCase();
+              const port = String(r['Internal Portfolio'] || r['Portfolio'] || '').trim().toLowerCase();
+              const insType = String(r['Ins Type'] || r['Instrument Type'] || '').trim().toUpperCase();
+              const isOpt = port === 'optimization lng' || port.includes('optimization');
+              return isBuy && cflowType === 'commodity' && insType === 'COMM-PHYS' && isOpt;
+            });
+          }
         } else {
           buyCalcRows = underlyingRows.filter(r => {
             const isBuy = String(r['Buy_Sell'] || r['BuySell'] || '').toLowerCase() === 'buy' || String(r['Buy_Sell'] || r['Buy_Sell'] || '').toLowerCase() === 'buys';
@@ -942,16 +981,8 @@ export const TrmsSummaryTable: React.FC<TrmsSummaryTableProps> = ({ trmsData, vi
           });
         }
       } else {
-        if (!hasBuy && hasSell) {
-          // Open on Buy Leg (the buy leg does not have any deal yet): physical for buy, cash for sell
-          // Sell rows with Physical Settlement go to buyCalcRows, other Sell rows with Cash Settlement go to sellCalcRows
-          buyCalcRows = underlyingRows.filter(r => {
-            const isSell = String(r['Buy_Sell'] || r['Buy_Sell'] || r['BuySell'] || '').toLowerCase() === 'sell' || String(r['Buy_Sell'] || r['Buy_Sell'] || r['BuySell'] || '').toLowerCase() === 'sells';
-            const cflowType = String(r['Cflow Type'] || '').trim().toLowerCase();
-            const sett = String(r['Settlement Type'] || '').trim();
-            const insType = String(r['Ins Type'] || r['Instrument Type'] || '').trim().toUpperCase();
-            return isSell && cflowType === 'commodity' && insType === 'COMM-PHYS' && sett === 'Physical Settlement';
-          });
+        if (unallocatedCargo === 'Open on Buy Leg' || (!hasBuy && hasSell)) {
+          buyCalcRows = [];
           sellCalcRows = underlyingRows.filter(r => {
             const isSell = String(r['Buy_Sell'] || r['Buy_Sell'] || r['BuySell'] || '').toLowerCase() === 'sell' || String(r['Buy_Sell'] || r['Buy_Sell'] || r['BuySell'] || '').toLowerCase() === 'sells';
             const cflowType = String(r['Cflow Type'] || '').trim().toLowerCase();
@@ -959,16 +990,16 @@ export const TrmsSummaryTable: React.FC<TrmsSummaryTableProps> = ({ trmsData, vi
             const insType = String(r['Ins Type'] || r['Instrument Type'] || '').trim().toUpperCase();
             return isSell && cflowType === 'commodity' && insType === 'COMM-PHYS' && sett !== 'Physical Settlement';
           });
-        } else if (hasBuy && !hasSell) {
-          // Open on Sell Leg (the sell leg does not have any deal yet): physical for sell, cash for buy
-          // Buy rows with Physical Settlement go to sellCalcRows, other Buy rows with Cash Settlement go to buyCalcRows
-          sellCalcRows = underlyingRows.filter(r => {
-            const isBuy = String(r['Buy_Sell'] || r['Buy_Sell'] || r['BuySell'] || '').toLowerCase() === 'buy' || String(r['Buy_Sell'] || r['Buy_Sell'] || r['BuySell'] || '').toLowerCase() === 'buys';
-            const cflowType = String(r['Cflow Type'] || '').trim().toLowerCase();
-            const sett = String(r['Settlement Type'] || '').trim();
-            const insType = String(r['Ins Type'] || r['Instrument Type'] || '').trim().toUpperCase();
-            return isBuy && cflowType === 'commodity' && insType === 'COMM-PHYS' && sett === 'Physical Settlement';
-          });
+          if (sellCalcRows.length === 0) {
+            sellCalcRows = underlyingRows.filter(r => {
+              const isSell = String(r['Buy_Sell'] || r['Buy_Sell'] || r['BuySell'] || '').toLowerCase() === 'sell' || String(r['Buy_Sell'] || r['Buy_Sell'] || r['BuySell'] || '').toLowerCase() === 'sells';
+              const cflowType = String(r['Cflow Type'] || '').trim().toLowerCase();
+              const insType = String(r['Ins Type'] || r['Instrument Type'] || '').trim().toUpperCase();
+              return isSell && cflowType === 'commodity' && insType === 'COMM-PHYS';
+            });
+          }
+        } else if (unallocatedCargo === 'Open on Sell Leg' || (hasBuy && !hasSell)) {
+          sellCalcRows = [];
           buyCalcRows = underlyingRows.filter(r => {
             const isBuy = String(r['Buy_Sell'] || r['Buy_Sell'] || r['BuySell'] || '').toLowerCase() === 'buy' || String(r['Buy_Sell'] || r['Buy_Sell'] || r['BuySell'] || '').toLowerCase() === 'buys';
             const cflowType = String(r['Cflow Type'] || '').trim().toLowerCase();
@@ -976,8 +1007,15 @@ export const TrmsSummaryTable: React.FC<TrmsSummaryTableProps> = ({ trmsData, vi
             const insType = String(r['Ins Type'] || r['Instrument Type'] || '').trim().toUpperCase();
             return isBuy && cflowType === 'commodity' && insType === 'COMM-PHYS' && sett !== 'Physical Settlement';
           });
+          if (buyCalcRows.length === 0) {
+            buyCalcRows = underlyingRows.filter(r => {
+              const isBuy = String(r['Buy_Sell'] || r['Buy_Sell'] || r['BuySell'] || '').toLowerCase() === 'buy' || String(r['Buy_Sell'] || r['Buy_Sell'] || r['BuySell'] || '').toLowerCase() === 'buys';
+              const cflowType = String(r['Cflow Type'] || '').trim().toLowerCase();
+              const insType = String(r['Ins Type'] || r['Instrument Type'] || '').trim().toUpperCase();
+              return isBuy && cflowType === 'commodity' && insType === 'COMM-PHYS';
+            });
+          }
         } else if (hasBuy && hasSell) {
-          // Matched (both exist): use Cash Settlement rows (exclude Physical Settlement rows)
           buyCalcRows = underlyingRows.filter(r => {
             const isBuy = String(r['Buy_Sell'] || r['Buy_Sell'] || r['BuySell'] || '').toLowerCase() === 'buy' || String(r['Buy_Sell'] || r['Buy_Sell'] || r['BuySell'] || '').toLowerCase() === 'buys';
             const cflowType = String(r['Cflow Type'] || '').trim().toLowerCase();
@@ -985,6 +1023,15 @@ export const TrmsSummaryTable: React.FC<TrmsSummaryTableProps> = ({ trmsData, vi
             const insType = String(r['Ins Type'] || r['Instrument Type'] || '').trim().toUpperCase();
             return isBuy && cflowType === 'commodity' && insType === 'COMM-PHYS' && sett !== 'Physical Settlement';
           });
+          if (buyCalcRows.length === 0) {
+            buyCalcRows = underlyingRows.filter(r => {
+              const isBuy = String(r['Buy_Sell'] || r['Buy_Sell'] || r['BuySell'] || '').toLowerCase() === 'buy' || String(r['Buy_Sell'] || r['Buy_Sell'] || r['BuySell'] || '').toLowerCase() === 'buys';
+              const cflowType = String(r['Cflow Type'] || '').trim().toLowerCase();
+              const insType = String(r['Ins Type'] || r['Instrument Type'] || '').trim().toUpperCase();
+              return isBuy && cflowType === 'commodity' && insType === 'COMM-PHYS';
+            });
+          }
+
           sellCalcRows = underlyingRows.filter(r => {
             const isSell = String(r['Buy_Sell'] || r['Buy_Sell'] || r['BuySell'] || '').toLowerCase() === 'sell' || String(r['Buy_Sell'] || r['Buy_Sell'] || r['BuySell'] || '').toLowerCase() === 'sells';
             const cflowType = String(r['Cflow Type'] || '').trim().toLowerCase();
@@ -992,6 +1039,14 @@ export const TrmsSummaryTable: React.FC<TrmsSummaryTableProps> = ({ trmsData, vi
             const insType = String(r['Ins Type'] || r['Instrument Type'] || '').trim().toUpperCase();
             return isSell && cflowType === 'commodity' && insType === 'COMM-PHYS' && sett !== 'Physical Settlement';
           });
+          if (sellCalcRows.length === 0) {
+            sellCalcRows = underlyingRows.filter(r => {
+              const isSell = String(r['Buy_Sell'] || r['Buy_Sell'] || r['BuySell'] || '').toLowerCase() === 'sell' || String(r['Buy_Sell'] || r['Buy_Sell'] || r['BuySell'] || '').toLowerCase() === 'sells';
+              const cflowType = String(r['Cflow Type'] || '').trim().toLowerCase();
+              const insType = String(r['Ins Type'] || r['Instrument Type'] || '').trim().toUpperCase();
+              return isSell && cflowType === 'commodity' && insType === 'COMM-PHYS';
+            });
+          }
         }
       }
 
@@ -1305,6 +1360,53 @@ export const TrmsSummaryTable: React.FC<TrmsSummaryTableProps> = ({ trmsData, vi
       const loadingMonth = loadingDateVal ? formatToMonthYear(loadingDateVal) : '—';
       const deliveryMonth = deliveryDateVal ? formatToMonthYear(deliveryDateVal) : '—';
 
+      const extractEntity = (calcRows: any[], fallbackRows: any[], targetBs: 'sell' | 'buy'): string => {
+        let sourceRows = (calcRows || []).filter((r: any) => {
+          const bs = String(r['Buy_Sell'] || r['BuySell'] || '').trim().toLowerCase();
+          return bs === targetBs || bs === targetBs + 's';
+        });
+
+        if (!sourceRows || sourceRows.length === 0) {
+          sourceRows = (fallbackRows || []).filter((r: any) => {
+            const bs = String(r['Buy_Sell'] || r['BuySell'] || '').trim().toLowerCase();
+            const ins = String(r['Ins Type'] || r['Instrument Type'] || '').trim().toUpperCase();
+            const cflow = String(r['Cflow Type'] || '').trim().toLowerCase();
+            const port = String(r['Internal Portfolio'] || r['Portfolio'] || '').trim().toLowerCase();
+
+            const bsMatch = bs === targetBs || bs === targetBs + 's';
+            const isCommodityPhys = ins === 'COMM-PHYS' && cflow === 'commodity';
+            const isPaperOrHedge = port === 'dh lng' || port === 'dft lng' || port === 'hedging lng' || port.includes('dh') || port.includes('dft') || port.includes('hedging');
+
+            return bsMatch && isCommodityPhys && !isPaperOrHedge;
+          });
+        }
+
+        const entities = new Set<string>();
+        sourceRows.forEach((r: any) => {
+          const ent = String(
+            r['External Legal Entity'] ||
+            r['External_Legal_Entity'] ||
+            r['External Legal Entity Name'] ||
+            r['Legal Entity'] ||
+            r['Counterparty'] ||
+            (targetBs === 'sell' ? (r['Buyer'] || r['Customer']) : (r['Seller'] || r['Supplier'])) ||
+            ''
+          ).trim();
+
+          if (ent && !isUnallocatedBuyer(ent)) {
+            entities.add(ent);
+          }
+        });
+
+        if (entities.size > 0) {
+          return Array.from(entities).join(', ');
+        }
+        return 'Spot';
+      };
+
+      const buyer = extractEntity(sellCalcRows, underlyingRows, 'sell');
+      const seller = extractEntity(buyCalcRows, underlyingRows, 'buy');
+
       let basePnL = 0;
       let baseValueUSD = 0;
       let basePurchaseCost = 0;
@@ -1537,6 +1639,8 @@ export const TrmsSummaryTable: React.FC<TrmsSummaryTableProps> = ({ trmsData, vi
         physicalPnLStatus,
         optimisationStatus,
         unallocatedCargo,
+        buyer,
+        seller,
         exposureMonths,
         loadingMonth,
         deliveryMonth,
@@ -1675,6 +1779,12 @@ export const TrmsSummaryTable: React.FC<TrmsSummaryTableProps> = ({ trmsData, vi
     const cols = [
       'Strategy Name', 'Physical P&L Bucket', 'Optimisation', 'Unallocated Cargo'
     ];
+    if (showBuyer) {
+      cols.push('Buyer');
+    }
+    if (showSeller) {
+      cols.push('Seller');
+    }
     if (showExposureMonths) {
       cols.push('Exposure Months');
     }
@@ -1693,7 +1803,7 @@ export const TrmsSummaryTable: React.FC<TrmsSummaryTableProps> = ({ trmsData, vi
       cols.push('Lines Count');
     }
     return cols;
-  }, [showExposureMonths, showLoadingMonth, showDeliveryMonth, showLinesCount]);
+  }, [showBuyer, showSeller, showExposureMonths, showLoadingMonth, showDeliveryMonth, showLinesCount]);
 
   const numCols = useMemo(() => [
     'Purchase Volume', 'Sales Volume', 'Purchase Price', 'Sales Price',
@@ -1716,6 +1826,8 @@ export const TrmsSummaryTable: React.FC<TrmsSummaryTableProps> = ({ trmsData, vi
         else if (col === 'Physical P&L Bucket') val = item.physicalPnLStatus;
         else if (col === 'Optimisation') val = item.optimisationStatus;
         else if (col === 'Unallocated Cargo') val = item.unallocatedCargo;
+        else if (col === 'Buyer') val = item.buyer || 'Spot';
+        else if (col === 'Seller') val = item.seller || 'Spot';
         else if (col === 'Exposure Months') val = item.exposureMonths;
         else if (col === 'Loading Month') val = item.loadingMonth;
         else if (col === 'Delivery Month') val = item.deliveryMonth;
@@ -2571,6 +2683,8 @@ export const TrmsSummaryTable: React.FC<TrmsSummaryTableProps> = ({ trmsData, vi
       'Physical P&L Bucket', 
       'Optimisation', 
       'Unallocated Cargo', 
+      'Buyer',
+      'Seller',
       'Exposure Months',
       'Loading Month',
       'Delivery Month',
@@ -2594,6 +2708,8 @@ export const TrmsSummaryTable: React.FC<TrmsSummaryTableProps> = ({ trmsData, vi
         `"${item.physicalPnLStatus}"`,
         `"${item.optimisationStatus}"`,
         `"${item.unallocatedCargo}"`,
+        `"${(item.buyer || 'Spot').replace(/"/g, '""')}"`,
+        `"${(item.seller || 'Spot').replace(/"/g, '""')}"`,
         `"${(item.exposureMonths || '').replace(/"/g, '""')}"`,
         `"${(item.loadingMonth || '').replace(/"/g, '""')}"`,
         `"${(item.deliveryMonth || '').replace(/"/g, '""')}"`,
@@ -2625,7 +2741,9 @@ export const TrmsSummaryTable: React.FC<TrmsSummaryTableProps> = ({ trmsData, vi
 
   const renderCellMetric = (col: string, item: any) => {
     let val: any = 0;
-    if (col === 'Purchase Volume') val = item.purchaseVolume;
+    if (col === 'Buyer') val = item.buyer || 'Spot';
+    else if (col === 'Seller') val = item.seller || 'Spot';
+    else if (col === 'Purchase Volume') val = item.purchaseVolume;
     else if (col === 'Sales Volume') val = item.salesVolume;
     else if (col === 'Purchase Price') val = item.purchasePrice;
     else if (col === 'Sales Price') val = item.salesPrice;
@@ -5751,6 +5869,28 @@ export const TrmsSummaryTable: React.FC<TrmsSummaryTableProps> = ({ trmsData, vi
             <span className="text-[10px] uppercase font-bold text-slate-400 font-mono tracking-widest mr-1">
               Toggle Columns:
             </span>
+            <button
+              onClick={() => setShowBuyer(prev => !prev)}
+              className={`px-2.5 py-1 rounded text-[10px] font-bold font-mono transition-all border flex items-center gap-1.5 cursor-pointer ${
+                showBuyer
+                  ? 'bg-blue-950/40 text-blue-300 border-blue-900/60 hover:bg-blue-900/40'
+                  : 'bg-slate-900 text-slate-400 border-slate-800 hover:text-slate-200 hover:bg-slate-850'
+              }`}
+            >
+              <span className={showBuyer ? "text-blue-400" : "text-slate-600"}>●</span>
+              <span>Buyer</span>
+            </button>
+            <button
+              onClick={() => setShowSeller(prev => !prev)}
+              className={`px-2.5 py-1 rounded text-[10px] font-bold font-mono transition-all border flex items-center gap-1.5 cursor-pointer ${
+                showSeller
+                  ? 'bg-blue-950/40 text-blue-300 border-blue-900/60 hover:bg-blue-900/40'
+                  : 'bg-slate-900 text-slate-400 border-slate-800 hover:text-slate-200 hover:bg-slate-850'
+              }`}
+            >
+              <span className={showSeller ? "text-blue-400" : "text-slate-600"}>●</span>
+              <span>Seller</span>
+            </button>
             <button
               onClick={() => setShowExposureMonths(prev => !prev)}
               className={`px-2.5 py-1 rounded text-[10px] font-bold font-mono transition-all border flex items-center gap-1.5 cursor-pointer ${

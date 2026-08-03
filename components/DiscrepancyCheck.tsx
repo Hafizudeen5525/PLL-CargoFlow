@@ -52,6 +52,8 @@ export interface ReconciliationRow {
     status: 'Matched' | 'App Only' | 'TRMS Only';
     profileId: string;
     app: {
+        buyer: string;
+        seller: string;
         pnlBucket: string;
         optimization: string;
         unallocatedCargo: string;
@@ -96,6 +98,8 @@ export interface ReconciliationRow {
         effectiveSellPrice?: number;
     };
     trms: {
+        buyer: string;
+        seller: string;
         pnlBucket: string;
         optimization: string;
         unallocatedCargo: string;
@@ -137,6 +141,7 @@ export interface ReconciliationRow {
     };
     discrepancies: Set<string>;
     diffs: {
+        buyer: boolean;
         pnlBucket: boolean;
         optimization: boolean;
         unallocatedCargo: boolean;
@@ -524,6 +529,7 @@ export const DiscrepancyCheck: React.FC<DiscrepancyCheckProps> = ({
 
   const [columnWidths, setColumnWidths] = useState<Record<string, number>>({
     'Strategy Name': 280,
+    'Buyer': 180,
     'Loading Month': 200,
     'Delivery Month': 200,
     'Volume Type': 200,
@@ -840,11 +846,15 @@ export const DiscrepancyCheck: React.FC<DiscrepancyCheckProps> = ({
       const appSrc = rawAppSrc > 0 ? -rawAppSrc : rawAppSrc;
       const appLoadingMonth = app?.loadingMonth || (app?.loadingDate ? getMonthStr(app.loadingDate) : '—');
       const appDeliveryMonth = app?.deliveryMonth || (app?.deliveryDate ? getMonthStr(app.deliveryDate) : '—');
+      const appBuyer = app?.buyer && app.buyer.trim() !== '' ? app.buyer.trim() : 'Spot';
+      const appSeller = app?.source && app.source.trim() !== '' ? app.source.trim() : 'Spot';
 
       // TRMS Values
       const trmsPnlBucket = trms?.physicalPnLStatus || '—';
       const trmsOptimization = trms?.optimisationStatus || '—';
       const trmsUnallocatedCargo = trms?.unallocatedCargo || '—';
+      const trmsBuyer = trms?.buyer && trms.buyer.trim() !== '' ? trms.buyer.trim() : 'Spot';
+      const trmsSeller = trms?.seller && trms.seller.trim() !== '' ? trms.seller.trim() : 'Spot';
 
       const trmsBuyT1Vol = trms?.buyTiers?.[0]?.vol ?? (trms?.purchaseVolume ?? 0);
       const trmsBuyT2Vol = trms?.buyTiers?.[1]?.vol ?? 0;
@@ -876,6 +886,9 @@ export const DiscrepancyCheck: React.FC<DiscrepancyCheckProps> = ({
       } else if (!foundInApp) {
         discrepancies.add('Missing in App');
       } else {
+        if (appBuyer !== '—' && trmsBuyer !== '—' && appBuyer !== trmsBuyer) {
+          discrepancies.add('Buyer');
+        }
         if (appPnlBucket !== '—' && trmsPnlBucket !== '—' && appPnlBucket !== trmsPnlBucket) {
           discrepancies.add('P&L Bucket');
         }
@@ -922,6 +935,8 @@ export const DiscrepancyCheck: React.FC<DiscrepancyCheckProps> = ({
         status,
         profileId: app?.id || '',
         app: {
+          buyer: appBuyer,
+          seller: appSeller,
           pnlBucket: appPnlBucket,
           optimization: appOptimization,
           unallocatedCargo: appUnallocatedCargo,
@@ -966,6 +981,8 @@ export const DiscrepancyCheck: React.FC<DiscrepancyCheckProps> = ({
           effectiveSellPrice: appSellPriceEffective
         },
         trms: {
+          buyer: trmsBuyer,
+          seller: trmsSeller,
           pnlBucket: trmsPnlBucket,
           optimization: trmsOptimization,
           unallocatedCargo: trmsUnallocatedCargo,
@@ -1027,6 +1044,7 @@ export const DiscrepancyCheck: React.FC<DiscrepancyCheckProps> = ({
         },
         discrepancies,
         diffs: {
+          buyer: appBuyer !== trmsBuyer,
           pnlBucket: appPnlBucket !== trmsPnlBucket,
           optimization: appOptimization !== trmsOptimization,
           unallocatedCargo: appUnallocatedCargo !== trmsUnallocatedCargo,
@@ -1133,6 +1151,7 @@ export const DiscrepancyCheck: React.FC<DiscrepancyCheckProps> = ({
     if (activeTab === 'reconcile') {
         return [
             'Strategy Name',
+            'Buyer',
             'P&L Bucket',
             'Optimization',
             'Unallocated Cargo',
@@ -1213,6 +1232,7 @@ export const DiscrepancyCheck: React.FC<DiscrepancyCheckProps> = ({
           const uniqueSet = new Set(currentRawData.map((r: any) => {
               if (activeTab === 'reconcile') {
                   const rec = r as ReconciliationRow;
+                  if (header === 'Buyer') return rec.app.buyer;
                   if (header === 'Purchase Price') return rec.app.buyPrice;
                   if (header === 'Purchase Volume') return rec.app.buyVol;
                   if (header === 'Sales Price') return rec.app.sellPrice;
@@ -1394,6 +1414,7 @@ export const DiscrepancyCheck: React.FC<DiscrepancyCheckProps> = ({
         if (activeTab === 'reconcile') {
             const r = row as ReconciliationRow;
 
+            const buyerMismatch = r.foundInApp && r.foundInTrms && r.diffs.buyer;
             const pnlMismatch = r.foundInApp && r.foundInTrms && r.diffs.pnlBucket;
             const optMismatch = r.foundInApp && r.foundInTrms && r.diffs.optimization;
             const unallocMismatch = r.foundInApp && r.foundInTrms && r.diffs.unallocatedCargo;
@@ -1433,6 +1454,10 @@ export const DiscrepancyCheck: React.FC<DiscrepancyCheckProps> = ({
                             ${getStatusBadge()}
                             ${r.discrepancies.size > 0 && r.status === 'Matched' ? `<span style="background: #ffe4e6; color: #be123c; font-size: 8px; font-weight: 900; padding: 2px 6px; border-radius: 4px;">${r.discrepancies.size} DIFF</span>` : ''}
                         </div>
+                    </td>
+                    <td style="border: 1px solid #e2e8f0; padding: 10px 12px; font-size: 10px; background: ${buyerMismatch ? '#fef2f2' : 'transparent'};">
+                        <div style="color: #64748b; font-size: 8px; font-weight: bold; text-transform: uppercase;">App: <span style="color: #1e293b; font-weight: 800;">${r.app.buyer}</span></div>
+                        <div style="color: #64748b; font-size: 8px; font-weight: bold; text-transform: uppercase; margin-top: 4px;">TRMS: <span style="color: ${buyerMismatch ? '#ef4444' : '#475569'}; font-weight: 800;">${r.trms.buyer}</span></div>
                     </td>
                     <td style="border: 1px solid #e2e8f0; padding: 10px 12px; font-size: 10px; background: ${pnlMismatch ? '#fef2f2' : 'transparent'};">
                         <div style="color: #64748b; font-size: 8px; font-weight: bold; text-transform: uppercase;">App: <span style="color: #1e293b; font-weight: 800;">${r.app.pnlBucket}</span></div>
@@ -1502,6 +1527,7 @@ export const DiscrepancyCheck: React.FC<DiscrepancyCheckProps> = ({
 
     const matchedRows = processedData.filter((r: any) => r.foundInApp && r.foundInTrms);
     const fieldDiffs = {
+      buyer: matchedRows.filter((r: any) => r.diffs?.buyer).length,
       pnlBucket: matchedRows.filter((r: any) => r.diffs?.pnlBucket).length,
       optimization: matchedRows.filter((r: any) => r.diffs?.optimization).length,
       unallocatedCargo: matchedRows.filter((r: any) => r.diffs?.unallocatedCargo).length,
@@ -1553,7 +1579,11 @@ export const DiscrepancyCheck: React.FC<DiscrepancyCheckProps> = ({
 
         <div style="background: white; border: 1px solid #e2e8f0; padding: 18px; border-radius: 16px; margin-bottom: 30px; box-shadow: 0 1px 3px rgba(0,0,0,0.05);">
             <div style="font-size: 10px; text-transform: uppercase; color: #64748b; font-weight: 900; letter-spacing: 1px; margin-bottom: 12px;">Field Mismatch Breakdown (${matchedRows.length} Matched Strategies)</div>
-            <div style="display: grid; grid-template-columns: repeat(5, 1fr); gap: 12px; font-family: sans-serif;">
+            <div style="display: grid; grid-template-columns: repeat(6, 1fr); gap: 12px; font-family: sans-serif;">
+                <div style="background: #f8fafc; padding: 10px; border-radius: 10px; border: 1px solid #f1f5f9;">
+                    <div style="font-size: 8px; color: #64748b; font-weight: 800; text-transform: uppercase;">Buyer</div>
+                    <div style="font-size: 16px; font-weight: 900; font-family: monospace; color: ${fieldDiffs.buyer > 0 ? '#e11d48' : '#059669'}">${fieldDiffs.buyer}</div>
+                </div>
                 <div style="background: #f8fafc; padding: 10px; border-radius: 10px; border: 1px solid #f1f5f9;">
                     <div style="font-size: 8px; color: #64748b; font-weight: 800; text-transform: uppercase;">P&L Bucket</div>
                     <div style="font-size: 16px; font-weight: 900; font-family: monospace; color: ${fieldDiffs.pnlBucket > 0 ? '#e11d48' : '#059669'}">${fieldDiffs.pnlBucket}</div>
@@ -1683,6 +1713,10 @@ export const DiscrepancyCheck: React.FC<DiscrepancyCheckProps> = ({
           'Status': r.status,
           'Discrepancies Count': r.discrepancies.size,
           'Discrepancies List': Array.from(r.discrepancies).join(', ') || 'None',
+
+          'App Buyer': r.app.buyer,
+          'TRMS Buyer': r.trms.buyer,
+          'Buyer Match': !r.diffs.buyer ? 'Match' : 'Mismatch',
 
           'App P&L Bucket': r.app.pnlBucket,
           'TRMS P&L Bucket': r.trms.pnlBucket,
@@ -2934,6 +2968,18 @@ const ReconciliationRowItem = memo(({ row, activeTab, columnWidths, handleRowEdi
             </svg>
           </button>
         )}
+      </div>
+
+      {/* 1b. Buyer */}
+      <div className="px-3 py-2 shrink-0 flex flex-col justify-center border-r border-slate-100 overflow-hidden" style={{ width: columnWidths['Buyer'] || 180 }}>
+        <div className="flex justify-between items-center mb-1 pb-1 border-b border-slate-100">
+          <span className="text-[8px] font-bold text-slate-400 uppercase">App Buyer</span>
+          <span className="text-[9px] font-bold font-mono text-slate-800 truncate ml-1" title={r.app.buyer}>{r.app.buyer}</span>
+        </div>
+        <div className="flex justify-between items-center">
+          <span className="text-[8px] font-bold text-slate-400 uppercase">TRMS Buyer</span>
+          <span className="text-[9px] font-bold font-mono text-slate-600 truncate ml-1" title={r.trms.buyer}>{r.trms.buyer}</span>
+        </div>
       </div>
 
       {/* 2. P&L Bucket */}

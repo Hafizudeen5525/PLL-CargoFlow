@@ -185,6 +185,8 @@ export interface TrmsStrategySummary {
   physicalPnLStatus: 'Realized' | 'Unrealized';
   optimisationStatus: 'Yes' | 'No' | 'Alert' | '';
   unallocatedCargo: 'Matched' | 'Open on Sell Leg' | 'Open on Buy Leg' | '';
+  buyer: string;
+  seller: string;
   exposureMonths: string;
   loadingMonth: string;
   deliveryMonth: string;
@@ -288,12 +290,24 @@ export function computeTrmsSummaryRows(
       optimisationStatus = '';
     }
 
-    // Unallocated Cargo status
-    const hasBuy = underlyingRows.some(r => {
+    // Physical cargo rows (Base LNG or Optimization LNG only, excluding DH LNG, DFT LNG, Hedging LNG)
+    const physicalCargoRows = underlyingRows.filter(r => {
+      const ins = String(r['Ins Type'] || r['Instrument Type'] || '').trim().toUpperCase();
+      const cflow = String(r['Cflow Type'] || '').trim().toLowerCase();
+      const port = String(r['Internal Portfolio'] || r['Portfolio'] || '').trim().toLowerCase();
+
+      const isCommodityPhys = ins === 'COMM-PHYS' && cflow === 'commodity';
+      const isPaperOrHedge = port === 'dh lng' || port === 'dft lng' || port === 'hedging lng' || port.includes('dh') || port.includes('dft') || port.includes('hedging');
+
+      return isCommodityPhys && !isPaperOrHedge;
+    });
+
+    const hasBuy = physicalCargoRows.some(r => {
       const buySell = String(r['Buy_Sell'] || r['BuySell'] || '').trim().toLowerCase();
       return buySell === 'buy' || buySell === 'buys';
     });
-    const hasSell = underlyingRows.some(r => {
+
+    const hasSell = physicalCargoRows.some(r => {
       const buySell = String(r['Buy_Sell'] || r['BuySell'] || '').trim().toLowerCase();
       if (buySell !== 'sell' && buySell !== 'sells') return false;
       const entity = String(r['External Legal Entity'] || r['Buyer'] || r['Legal Entity'] || '').trim();
@@ -349,6 +363,17 @@ export function computeTrmsSummaryRows(
           const isOpt = port === 'optimization lng' || port.includes('optimization');
           return isBuy && cflowType === 'commodity' && insType === 'COMM-PHYS' && isOpt && sett !== 'Physical Settlement';
         });
+        if (buyCalcRows.length === 0) {
+          buyCalcRows = underlyingRows.filter(r => {
+            const isBuy = String(r['Buy_Sell'] || r['BuySell'] || '').toLowerCase() === 'buy' || String(r['Buy_Sell'] || '').toLowerCase() === 'buys';
+            const cflowType = String(r['Cflow Type'] || '').trim().toLowerCase();
+            const port = String(r['Internal Portfolio'] || r['Portfolio'] || '').trim().toLowerCase();
+            const insType = String(r['Ins Type'] || r['Instrument Type'] || '').trim().toUpperCase();
+            const isOpt = port === 'optimization lng' || port.includes('optimization');
+            return isBuy && cflowType === 'commodity' && insType === 'COMM-PHYS' && isOpt;
+          });
+        }
+
         sellCalcRows = underlyingRows.filter(r => {
           const isSell = String(r['Buy_Sell'] || r['BuySell'] || '').toLowerCase() === 'sell' || String(r['Buy_Sell'] || '').toLowerCase() === 'sells';
           const cflowType = String(r['Cflow Type'] || '').trim().toLowerCase();
@@ -358,16 +383,18 @@ export function computeTrmsSummaryRows(
           const isOpt = port === 'optimization lng' || port.includes('optimization');
           return isSell && cflowType === 'commodity' && insType === 'COMM-PHYS' && isOpt && sett !== 'Physical Settlement';
         });
+        if (sellCalcRows.length === 0) {
+          sellCalcRows = underlyingRows.filter(r => {
+            const isSell = String(r['Buy_Sell'] || r['BuySell'] || '').toLowerCase() === 'sell' || String(r['Buy_Sell'] || '').toLowerCase() === 'sells';
+            const cflowType = String(r['Cflow Type'] || '').trim().toLowerCase();
+            const port = String(r['Internal Portfolio'] || r['Portfolio'] || '').trim().toLowerCase();
+            const insType = String(r['Ins Type'] || r['Instrument Type'] || '').trim().toUpperCase();
+            const isOpt = port === 'optimization lng' || port.includes('optimization');
+            return isSell && cflowType === 'commodity' && insType === 'COMM-PHYS' && isOpt;
+          });
+        }
       } else if (unallocatedCargo === 'Open on Buy Leg') {
-        buyCalcRows = underlyingRows.filter(r => {
-          const isSell = String(r['Buy_Sell'] || r['BuySell'] || '').toLowerCase() === 'sell' || String(r['Buy_Sell'] || '').toLowerCase() === 'sells';
-          const cflowType = String(r['Cflow Type'] || '').trim().toLowerCase();
-          const port = String(r['Internal Portfolio'] || r['Portfolio'] || '').trim().toLowerCase();
-          const sett = String(r['Settlement Type'] || '').trim();
-          const insType = String(r['Ins Type'] || r['Instrument Type'] || '').trim().toUpperCase();
-          const isOpt = port === 'optimization lng' || port.includes('optimization');
-          return isSell && cflowType === 'commodity' && insType === 'COMM-PHYS' && isOpt && sett === 'Physical Settlement';
-        });
+        buyCalcRows = [];
         sellCalcRows = underlyingRows.filter(r => {
           const isSell = String(r['Buy_Sell'] || r['BuySell'] || '').toLowerCase() === 'sell' || String(r['Buy_Sell'] || '').toLowerCase() === 'sells';
           const cflowType = String(r['Cflow Type'] || '').trim().toLowerCase();
@@ -377,16 +404,18 @@ export function computeTrmsSummaryRows(
           const isOpt = port === 'optimization lng' || port.includes('optimization');
           return isSell && cflowType === 'commodity' && insType === 'COMM-PHYS' && isOpt && sett !== 'Physical Settlement';
         });
+        if (sellCalcRows.length === 0) {
+          sellCalcRows = underlyingRows.filter(r => {
+            const isSell = String(r['Buy_Sell'] || r['BuySell'] || '').toLowerCase() === 'sell' || String(r['Buy_Sell'] || '').toLowerCase() === 'sells';
+            const cflowType = String(r['Cflow Type'] || '').trim().toLowerCase();
+            const port = String(r['Internal Portfolio'] || r['Portfolio'] || '').trim().toLowerCase();
+            const insType = String(r['Ins Type'] || r['Instrument Type'] || '').trim().toUpperCase();
+            const isOpt = port === 'optimization lng' || port.includes('optimization');
+            return isSell && cflowType === 'commodity' && insType === 'COMM-PHYS' && isOpt;
+          });
+        }
       } else if (unallocatedCargo === 'Open on Sell Leg') {
-        sellCalcRows = underlyingRows.filter(r => {
-          const isBuy = String(r['Buy_Sell'] || r['BuySell'] || '').toLowerCase() === 'buy' || String(r['Buy_Sell'] || '').toLowerCase() === 'buys';
-          const cflowType = String(r['Cflow Type'] || '').trim().toLowerCase();
-          const port = String(r['Internal Portfolio'] || r['Portfolio'] || '').trim().toLowerCase();
-          const sett = String(r['Settlement Type'] || '').trim();
-          const insType = String(r['Ins Type'] || r['Instrument Type'] || '').trim().toUpperCase();
-          const isOpt = port === 'optimization lng' || port.includes('optimization');
-          return isBuy && cflowType === 'commodity' && insType === 'COMM-PHYS' && isOpt && sett === 'Physical Settlement';
-        });
+        sellCalcRows = [];
         buyCalcRows = underlyingRows.filter(r => {
           const isBuy = String(r['Buy_Sell'] || r['BuySell'] || '').toLowerCase() === 'buy' || String(r['Buy_Sell'] || '').toLowerCase() === 'buys';
           const cflowType = String(r['Cflow Type'] || '').trim().toLowerCase();
@@ -396,6 +425,16 @@ export function computeTrmsSummaryRows(
           const isOpt = port === 'optimization lng' || port.includes('optimization');
           return isBuy && cflowType === 'commodity' && insType === 'COMM-PHYS' && isOpt && sett !== 'Physical Settlement';
         });
+        if (buyCalcRows.length === 0) {
+          buyCalcRows = underlyingRows.filter(r => {
+            const isBuy = String(r['Buy_Sell'] || r['BuySell'] || '').toLowerCase() === 'buy' || String(r['Buy_Sell'] || '').toLowerCase() === 'buys';
+            const cflowType = String(r['Cflow Type'] || '').trim().toLowerCase();
+            const port = String(r['Internal Portfolio'] || r['Portfolio'] || '').trim().toLowerCase();
+            const insType = String(r['Ins Type'] || r['Instrument Type'] || '').trim().toUpperCase();
+            const isOpt = port === 'optimization lng' || port.includes('optimization');
+            return isBuy && cflowType === 'commodity' && insType === 'COMM-PHYS' && isOpt;
+          });
+        }
       } else {
         buyCalcRows = underlyingRows.filter(r => {
           const isBuy = String(r['Buy_Sell'] || r['BuySell'] || '').toLowerCase() === 'buy' || String(r['Buy_Sell'] || '').toLowerCase() === 'buys';
@@ -413,14 +452,8 @@ export function computeTrmsSummaryRows(
         });
       }
     } else {
-      if (!hasBuy && hasSell) {
-        buyCalcRows = underlyingRows.filter(r => {
-          const isSell = String(r['Buy_Sell'] || r['BuySell'] || '').toLowerCase() === 'sell' || String(r['Buy_Sell'] || '').toLowerCase() === 'sells';
-          const cflowType = String(r['Cflow Type'] || '').trim().toLowerCase();
-          const sett = String(r['Settlement Type'] || '').trim();
-          const insType = String(r['Ins Type'] || r['Instrument Type'] || '').trim().toUpperCase();
-          return isSell && cflowType === 'commodity' && insType === 'COMM-PHYS' && sett === 'Physical Settlement';
-        });
+      if (unallocatedCargo === 'Open on Buy Leg' || (!hasBuy && hasSell)) {
+        buyCalcRows = [];
         sellCalcRows = underlyingRows.filter(r => {
           const isSell = String(r['Buy_Sell'] || r['BuySell'] || '').toLowerCase() === 'sell' || String(r['Buy_Sell'] || '').toLowerCase() === 'sells';
           const cflowType = String(r['Cflow Type'] || '').trim().toLowerCase();
@@ -428,14 +461,16 @@ export function computeTrmsSummaryRows(
           const insType = String(r['Ins Type'] || r['Instrument Type'] || '').trim().toUpperCase();
           return isSell && cflowType === 'commodity' && insType === 'COMM-PHYS' && sett !== 'Physical Settlement';
         });
-      } else if (hasBuy && !hasSell) {
-        sellCalcRows = underlyingRows.filter(r => {
-          const isBuy = String(r['Buy_Sell'] || r['BuySell'] || '').toLowerCase() === 'buy' || String(r['Buy_Sell'] || '').toLowerCase() === 'buys';
-          const cflowType = String(r['Cflow Type'] || '').trim().toLowerCase();
-          const sett = String(r['Settlement Type'] || '').trim();
-          const insType = String(r['Ins Type'] || r['Instrument Type'] || '').trim().toUpperCase();
-          return isBuy && cflowType === 'commodity' && insType === 'COMM-PHYS' && sett === 'Physical Settlement';
-        });
+        if (sellCalcRows.length === 0) {
+          sellCalcRows = underlyingRows.filter(r => {
+            const isSell = String(r['Buy_Sell'] || r['BuySell'] || '').toLowerCase() === 'sell' || String(r['Buy_Sell'] || '').toLowerCase() === 'sells';
+            const cflowType = String(r['Cflow Type'] || '').trim().toLowerCase();
+            const insType = String(r['Ins Type'] || r['Instrument Type'] || '').trim().toUpperCase();
+            return isSell && cflowType === 'commodity' && insType === 'COMM-PHYS';
+          });
+        }
+      } else if (unallocatedCargo === 'Open on Sell Leg' || (hasBuy && !hasSell)) {
+        sellCalcRows = [];
         buyCalcRows = underlyingRows.filter(r => {
           const isBuy = String(r['Buy_Sell'] || r['BuySell'] || '').toLowerCase() === 'buy' || String(r['Buy_Sell'] || '').toLowerCase() === 'buys';
           const cflowType = String(r['Cflow Type'] || '').trim().toLowerCase();
@@ -443,6 +478,14 @@ export function computeTrmsSummaryRows(
           const insType = String(r['Ins Type'] || r['Instrument Type'] || '').trim().toUpperCase();
           return isBuy && cflowType === 'commodity' && insType === 'COMM-PHYS' && sett !== 'Physical Settlement';
         });
+        if (buyCalcRows.length === 0) {
+          buyCalcRows = underlyingRows.filter(r => {
+            const isBuy = String(r['Buy_Sell'] || r['BuySell'] || '').toLowerCase() === 'buy' || String(r['Buy_Sell'] || '').toLowerCase() === 'buys';
+            const cflowType = String(r['Cflow Type'] || '').trim().toLowerCase();
+            const insType = String(r['Ins Type'] || r['Instrument Type'] || '').trim().toUpperCase();
+            return isBuy && cflowType === 'commodity' && insType === 'COMM-PHYS';
+          });
+        }
       } else if (hasBuy && hasSell) {
         buyCalcRows = underlyingRows.filter(r => {
           const isBuy = String(r['Buy_Sell'] || r['BuySell'] || '').toLowerCase() === 'buy' || String(r['Buy_Sell'] || '').toLowerCase() === 'buys';
@@ -451,6 +494,15 @@ export function computeTrmsSummaryRows(
           const insType = String(r['Ins Type'] || r['Instrument Type'] || '').trim().toUpperCase();
           return isBuy && cflowType === 'commodity' && insType === 'COMM-PHYS' && sett !== 'Physical Settlement';
         });
+        if (buyCalcRows.length === 0) {
+          buyCalcRows = underlyingRows.filter(r => {
+            const isBuy = String(r['Buy_Sell'] || r['BuySell'] || '').toLowerCase() === 'buy' || String(r['Buy_Sell'] || '').toLowerCase() === 'buys';
+            const cflowType = String(r['Cflow Type'] || '').trim().toLowerCase();
+            const insType = String(r['Ins Type'] || r['Instrument Type'] || '').trim().toUpperCase();
+            return isBuy && cflowType === 'commodity' && insType === 'COMM-PHYS';
+          });
+        }
+
         sellCalcRows = underlyingRows.filter(r => {
           const isSell = String(r['Buy_Sell'] || r['BuySell'] || '').toLowerCase() === 'sell' || String(r['Buy_Sell'] || '').toLowerCase() === 'sells';
           const cflowType = String(r['Cflow Type'] || '').trim().toLowerCase();
@@ -458,6 +510,14 @@ export function computeTrmsSummaryRows(
           const insType = String(r['Ins Type'] || r['Instrument Type'] || '').trim().toUpperCase();
           return isSell && cflowType === 'commodity' && insType === 'COMM-PHYS' && sett !== 'Physical Settlement';
         });
+        if (sellCalcRows.length === 0) {
+          sellCalcRows = underlyingRows.filter(r => {
+            const isSell = String(r['Buy_Sell'] || r['BuySell'] || '').toLowerCase() === 'sell' || String(r['Buy_Sell'] || '').toLowerCase() === 'sells';
+            const cflowType = String(r['Cflow Type'] || '').trim().toLowerCase();
+            const insType = String(r['Ins Type'] || r['Instrument Type'] || '').trim().toUpperCase();
+            return isSell && cflowType === 'commodity' && insType === 'COMM-PHYS';
+          });
+        }
       }
     }
 
@@ -775,11 +835,60 @@ export function computeTrmsSummaryRows(
     const loadingMonth = calcLoadingMonth();
     const deliveryMonth = calcDeliveryMonth();
 
+    const extractEntity = (calcRows: any[], fallbackRows: any[], targetBs: 'sell' | 'buy'): string => {
+      let sourceRows = (calcRows || []).filter((r: any) => {
+        const bs = String(r['Buy_Sell'] || r['BuySell'] || '').trim().toLowerCase();
+        return bs === targetBs || bs === targetBs + 's';
+      });
+
+      if (!sourceRows || sourceRows.length === 0) {
+        sourceRows = (fallbackRows || []).filter((r: any) => {
+          const bs = String(r['Buy_Sell'] || r['BuySell'] || '').trim().toLowerCase();
+          const ins = String(r['Ins Type'] || r['Instrument Type'] || '').trim().toUpperCase();
+          const cflow = String(r['Cflow Type'] || '').trim().toLowerCase();
+          const port = String(r['Internal Portfolio'] || r['Portfolio'] || '').trim().toLowerCase();
+
+          const bsMatch = bs === targetBs || bs === targetBs + 's';
+          const isCommodityPhys = ins === 'COMM-PHYS' && cflow === 'commodity';
+          const isPaperOrHedge = port === 'dh lng' || port === 'dft lng' || port === 'hedging lng' || port.includes('dh') || port.includes('dft') || port.includes('hedging');
+
+          return bsMatch && isCommodityPhys && !isPaperOrHedge;
+        });
+      }
+
+      const entities = new Set<string>();
+      sourceRows.forEach((r: any) => {
+        const ent = String(
+          r['External Legal Entity'] ||
+          r['External_Legal_Entity'] ||
+          r['External Legal Entity Name'] ||
+          r['Legal Entity'] ||
+          r['Counterparty'] ||
+          (targetBs === 'sell' ? (r['Buyer'] || r['Customer']) : (r['Seller'] || r['Supplier'])) ||
+          ''
+        ).trim();
+
+        if (ent && !isUnallocatedBuyer(ent)) {
+          entities.add(ent);
+        }
+      });
+
+      if (entities.size > 0) {
+        return Array.from(entities).join(', ');
+      }
+      return 'Spot';
+    };
+
+    const buyer = extractEntity(sellCalcRows, underlyingRows, 'sell');
+    const seller = extractEntity(buyCalcRows, underlyingRows, 'buy');
+
     return {
       strategyName,
       physicalPnLStatus,
       optimisationStatus,
       unallocatedCargo,
+      buyer,
+      seller,
       exposureMonths,
       loadingMonth,
       deliveryMonth,
