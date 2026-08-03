@@ -422,6 +422,10 @@ export const DiscrepancyCheck: React.FC<DiscrepancyCheckProps> = ({
   const [selectedYears, setSelectedYears] = useState<Set<string>>(new Set(['all']));
   const [showYearFilterMenu, setShowYearFilterMenu] = useState(false);
 
+  // Pagination State for App vs TRMS Reconciliation Table
+  const [reconPageSize, setReconPageSize] = useState<number>(50);
+  const [reconCurrentPage, setReconCurrentPage] = useState<number>(1);
+
   // Report Customization State
   const [reportSelectedSNs, setReportSelectedSNs] = useState<Set<string>>(new Set());
   const [reportSnSearch, setReportSnSearch] = useState('');
@@ -1299,6 +1303,22 @@ export const DiscrepancyCheck: React.FC<DiscrepancyCheckProps> = ({
     }
     return result;
   }, [currentRawData, debouncedSearch, activeFilters, sortConfig, activeTab]);
+
+  // Reset pagination page when filters or search or tab change
+  useEffect(() => {
+    setReconCurrentPage(1);
+  }, [searchTerm, debouncedSearch, reconStatusFilter, reconGroupFilter, reconPnlBucketFilter, reconOptimizationFilter, reconUnallocatedFilter, selectedYears, activeFilters, activeTab, reconPageSize]);
+
+  const totalReconPages = useMemo(() => {
+    if (reconPageSize === 0) return 1;
+    return Math.max(1, Math.ceil(processedData.length / reconPageSize));
+  }, [processedData.length, reconPageSize]);
+
+  const paginatedReconData = useMemo(() => {
+    if (reconPageSize === 0) return processedData;
+    const start = (reconCurrentPage - 1) * reconPageSize;
+    return processedData.slice(start, start + reconPageSize);
+  }, [processedData, reconCurrentPage, reconPageSize]);
 
   const toggleValueFilter = (header: string, value: any) => {
     setActiveFilters(prev => {
@@ -2332,42 +2352,27 @@ export const DiscrepancyCheck: React.FC<DiscrepancyCheckProps> = ({
                 )}
               </div>
               <div className="flex flex-col">
-                {(() => {
-                  const currentRowHeight = activeTab === 'reconcile' ? 140 : 48;
-                  const startIndex = Math.max(0, Math.floor(scrollTop / currentRowHeight) - BUFFER_ROWS);
-                  const endIndex = Math.min(processedData.length, Math.ceil((scrollTop + 2000) / currentRowHeight) + BUFFER_ROWS);
-                  
-                  const paddingTop = startIndex * currentRowHeight;
-                  const paddingBottom = (processedData.length - endIndex) * currentRowHeight;
-
-                  return (
-                    <>
-                      {paddingTop > 0 && <div style={{ height: paddingTop }} />}
-                      {processedData.slice(startIndex, endIndex).map((row: any, i) => (
-                        <ReconciliationRowItem 
-                          key={startIndex + i}
-                          row={row}
-                          activeTab={activeTab}
-                          columnWidths={columnWidths}
-                          handleRowEdit={handleRowEdit}
-                          onViewRawData={(sn, rows) => {
-                              setViewingSN(sn);
-                              setViewingRawData(rows);
-                          }}
-                          formatUSD={formatUSD}
-                          headers={headers}
-                          rowHeight={currentRowHeight}
-                        />
-                      ))}
-                      {paddingBottom > 0 && <div style={{ height: paddingBottom }} />}
-                    </>
-                  );
-                })()}
+                {paginatedReconData.map((row: any, i) => (
+                  <ReconciliationRowItem 
+                    key={((reconCurrentPage - 1) * (reconPageSize || 1)) + i}
+                    row={row}
+                    activeTab={activeTab}
+                    columnWidths={columnWidths}
+                    handleRowEdit={handleRowEdit}
+                    onViewRawData={(sn, rows) => {
+                        setViewingSN(sn);
+                        setViewingRawData(rows);
+                    }}
+                    formatUSD={formatUSD}
+                    headers={headers}
+                    rowHeight={activeTab === 'reconcile' ? 140 : 48}
+                  />
+                ))}
               </div>
             </div>
           ) : (
             <div className="h-full flex flex-col items-center justify-center p-20 text-slate-400">
-                <svg className="w-12 h-12 mb-4 opacity-20" fill="none" stroke="currentColor" viewBox="0 0 24 24"><path strokeLinecap="round" strokeLinejoin="round" strokeWidth={1.5} d="M9 17v-2m3 2v-4m3 2v-6m-9-9H5a2 2 0 00-2 2v12a2 2 0 002 2h10a2 2 0 002-2V7a2 2 0 00-2-2h-2M9 5a2 2 0 012 2h2a2 2 0 002-2M9 5a2 2 0 012 2h2a2 2 0 012 2" /></svg>
+                <svg className="w-12 h-12 mb-4 opacity-20" fill="none" stroke="currentColor" viewBox="0 0 24 24"><path strokeLinecap="round" strokeLinejoin="round" strokeWidth={1.5} d="M9 17v-2m3 2v-4m3 2v-6m-9-9H5a2 2 0 00-2 2v12a2 2 0 002 2h10a2 2 0 002-2V7a2 2 0 00-2-2h-2M9 5a2 2 0 012 2h2a2 2 0 002-2M9 5a2 2 0 012 2" /></svg>
                 <p className="font-bold text-slate-600">
                     {activeTab === 'reconcile' && profiles.length === 0 
                         ? 'No Profiles in App' 
@@ -2382,6 +2387,83 @@ export const DiscrepancyCheck: React.FC<DiscrepancyCheckProps> = ({
             </div>
           )}
         </div>
+
+        {/* Pagination Bar */}
+        {processedData.length > 0 && (
+          <div className="bg-slate-900 border-t border-slate-800 px-4 py-2.5 flex flex-wrap items-center justify-between gap-3 text-slate-300 text-xs shrink-0 z-20">
+            <div className="flex items-center gap-3">
+              <span className="font-medium text-slate-400">
+                Showing{' '}
+                <span className="font-bold text-white">
+                  {reconPageSize === 0 ? (processedData.length > 0 ? 1 : 0) : Math.min((reconCurrentPage - 1) * reconPageSize + 1, processedData.length)}
+                </span>
+                {' '}-{' '}
+                <span className="font-bold text-white">
+                  {reconPageSize === 0 ? processedData.length : Math.min(reconCurrentPage * reconPageSize, processedData.length)}
+                </span>
+                {' '}of <span className="font-bold text-indigo-400">{processedData.length}</span> strategies
+              </span>
+
+              <div className="flex items-center gap-1.5 ml-3">
+                <span className="text-[10px] uppercase font-bold text-slate-400">Page Size:</span>
+                <select
+                  value={reconPageSize}
+                  onChange={(e) => {
+                    setReconPageSize(Number(e.target.value));
+                    setReconCurrentPage(1);
+                  }}
+                  className="bg-slate-800 text-slate-200 border border-slate-700 text-xs font-bold rounded-lg px-2.5 py-1 focus:ring-1 focus:ring-indigo-500 outline-none cursor-pointer"
+                >
+                  <option value={25}>25 / page</option>
+                  <option value={50}>50 / page</option>
+                  <option value={100}>100 / page</option>
+                  <option value={200}>200 / page</option>
+                  <option value={0}>All ({processedData.length})</option>
+                </select>
+              </div>
+            </div>
+
+            {reconPageSize > 0 && totalReconPages > 1 && (
+              <div className="flex items-center gap-1.5">
+                <button
+                  onClick={() => setReconCurrentPage(1)}
+                  disabled={reconCurrentPage === 1}
+                  className="px-2.5 py-1 bg-slate-800 hover:bg-slate-700 disabled:opacity-40 disabled:cursor-not-allowed text-xs font-bold text-slate-200 rounded-lg border border-slate-700 transition-colors"
+                  title="First Page"
+                >
+                  « First
+                </button>
+                <button
+                  onClick={() => setReconCurrentPage(prev => Math.max(1, prev - 1))}
+                  disabled={reconCurrentPage === 1}
+                  className="px-3 py-1 bg-slate-800 hover:bg-slate-700 disabled:opacity-40 disabled:cursor-not-allowed text-xs font-bold text-slate-200 rounded-lg border border-slate-700 transition-colors"
+                >
+                  ‹ Prev
+                </button>
+
+                <span className="text-xs font-bold px-3 text-indigo-300 font-mono">
+                  Page {reconCurrentPage} of {totalReconPages}
+                </span>
+
+                <button
+                  onClick={() => setReconCurrentPage(prev => Math.min(totalReconPages, prev + 1))}
+                  disabled={reconCurrentPage === totalReconPages}
+                  className="px-3 py-1 bg-slate-800 hover:bg-slate-700 disabled:opacity-40 disabled:cursor-not-allowed text-xs font-bold text-slate-200 rounded-lg border border-slate-700 transition-colors"
+                >
+                  Next ›
+                </button>
+                <button
+                  onClick={() => setReconCurrentPage(totalReconPages)}
+                  disabled={reconCurrentPage === totalReconPages}
+                  className="px-2.5 py-1 bg-slate-800 hover:bg-slate-700 disabled:opacity-40 disabled:cursor-not-allowed text-xs font-bold text-slate-200 rounded-lg border border-slate-700 transition-colors"
+                  title="Last Page"
+                >
+                  Last »
+                </button>
+              </div>
+            )}
+          </div>
+        )}
       </>
     )}
   </div>
