@@ -1686,8 +1686,8 @@ export const TrmsSummaryTable: React.FC<TrmsSummaryTableProps> = ({ trmsData, vi
     }
     cols.push(
       'Purchase Volume', 'Sales Volume', 'Purchase Price', 'Sales Price',
-      'Purchase Cost', 'Sales Revenue', 'Shipping Related Costs', 'Hedging P&L',
-      'Physical P&L', 'Sum of Value', 'Change in P&L'
+      'Purchase Cost', 'Sales Revenue', 'Shipping Related Costs', 'Physical P&L',
+      'Hedging P&L', 'Sum of Value', 'Change in P&L'
     );
     if (showLinesCount) {
       cols.push('Lines Count');
@@ -1697,8 +1697,8 @@ export const TrmsSummaryTable: React.FC<TrmsSummaryTableProps> = ({ trmsData, vi
 
   const numCols = useMemo(() => [
     'Purchase Volume', 'Sales Volume', 'Purchase Price', 'Sales Price',
-    'Purchase Cost', 'Sales Revenue', 'Shipping Related Costs', 'Hedging P&L',
-    'Physical P&L', 'Sum of Value', 'Change in P&L', 'Lines Count'
+    'Purchase Cost', 'Sales Revenue', 'Shipping Related Costs', 'Physical P&L',
+    'Hedging P&L', 'Sum of Value', 'Change in P&L', 'Lines Count'
   ], []);
 
   const clickableFilteredCols = useMemo(() => [
@@ -5881,29 +5881,6 @@ export const TrmsSummaryTable: React.FC<TrmsSummaryTableProps> = ({ trmsData, vi
           </div>
         </div>
 
-        {/* Hedging operations */}
-        <div className="bg-slate-900 p-3 rounded-xl border border-slate-800 shadow-sm flex flex-col justify-between">
-          <div>
-            <div className="text-[10px] uppercase text-slate-300 font-mono font-extrabold tracking-wider">Hedging operations</div>
-            <div className="text-lg font-extrabold text-amber-400 mt-1 font-mono flex items-baseline gap-1" title={`Total hedging volume: ${formatUnitVolumes(kpis.aggregateHedgingVolumeByUnit, ' | ', 'neutral')}`}>
-              ${kpis.aggregateHedgingPnL.toLocaleString(undefined, { maximumFractionDigits: 0 })}
-              <span className="text-[9px] font-semibold text-slate-300 ml-1">({formatUnitVolumes(kpis.aggregateHedgingVolumeByUnit, ' | ', 'neutral')} | {kpis.aggregateHedgingVolumePct.toFixed(1)}%)</span>
-            </div>
-          </div>
-          <div className="mt-2 pt-1.5 border-t border-slate-800/80 flex items-center justify-end">
-            <span className={`inline-flex items-center gap-0.5 text-[10px] font-mono font-extrabold px-1.5 py-0.5 rounded ${
-              kpis.aggregateHedgingPnLChange > 0 
-                ? 'text-emerald-400 bg-emerald-950/60 border border-emerald-800/40' 
-                : kpis.aggregateHedgingPnLChange < 0 
-                  ? 'text-rose-400 bg-rose-950/60 border border-rose-800/40' 
-                  : 'text-slate-400 bg-slate-800/60'
-            }`}>
-              {kpis.aggregateHedgingPnLChange > 0 ? '▲ +' : kpis.aggregateHedgingPnLChange < 0 ? '▼ -' : ''}
-              ${Math.abs(kpis.aggregateHedgingPnLChange).toLocaleString(undefined, { maximumFractionDigits: 0 })}
-            </span>
-          </div>
-        </div>
-
         {/* Physical P&L (Excl. Hedging) */}
         <div className="bg-slate-900 p-3 rounded-xl border border-slate-800 shadow-sm flex flex-col justify-between">
           <div>
@@ -5924,6 +5901,29 @@ export const TrmsSummaryTable: React.FC<TrmsSummaryTableProps> = ({ trmsData, vi
             }`}>
               {kpis.aggregatePhysicalPnLChange > 0 ? '▲ +' : kpis.aggregatePhysicalPnLChange < 0 ? '▼ -' : ''}
               ${Math.abs(kpis.aggregatePhysicalPnLChange).toLocaleString(undefined, { maximumFractionDigits: 0 })}
+            </span>
+          </div>
+        </div>
+
+        {/* Hedging operations */}
+        <div className="bg-slate-900 p-3 rounded-xl border border-slate-800 shadow-sm flex flex-col justify-between">
+          <div>
+            <div className="text-[10px] uppercase text-slate-300 font-mono font-extrabold tracking-wider">Hedging operations</div>
+            <div className="text-lg font-extrabold text-amber-400 mt-1 font-mono flex items-baseline gap-1" title={`Total hedging volume: ${formatUnitVolumes(kpis.aggregateHedgingVolumeByUnit, ' | ', 'neutral')}`}>
+              ${kpis.aggregateHedgingPnL.toLocaleString(undefined, { maximumFractionDigits: 0 })}
+              <span className="text-[9px] font-semibold text-slate-300 ml-1">({formatUnitVolumes(kpis.aggregateHedgingVolumeByUnit, ' | ', 'neutral')} | {kpis.aggregateHedgingVolumePct.toFixed(1)}%)</span>
+            </div>
+          </div>
+          <div className="mt-2 pt-1.5 border-t border-slate-800/80 flex items-center justify-end">
+            <span className={`inline-flex items-center gap-0.5 text-[10px] font-mono font-extrabold px-1.5 py-0.5 rounded ${
+              kpis.aggregateHedgingPnLChange > 0 
+                ? 'text-emerald-400 bg-emerald-950/60 border border-emerald-800/40' 
+                : kpis.aggregateHedgingPnLChange < 0 
+                  ? 'text-rose-400 bg-rose-950/60 border border-rose-800/40' 
+                  : 'text-slate-400 bg-slate-800/60'
+            }`}>
+              {kpis.aggregateHedgingPnLChange > 0 ? '▲ +' : kpis.aggregateHedgingPnLChange < 0 ? '▼ -' : ''}
+              ${Math.abs(kpis.aggregateHedgingPnLChange).toLocaleString(undefined, { maximumFractionDigits: 0 })}
             </span>
           </div>
         </div>

@@ -212,7 +212,7 @@ export interface TrmsStrategySummary {
 export function computeTrmsSummaryRows(
   rows: any[],
   selectedEodDate: string = 'all',
-  selectedYear: string = 'all'
+  selectedYear: string | string[] | Set<string> = 'all'
 ): TrmsStrategySummary[] {
   if (!rows || rows.length === 0) return [];
 
@@ -226,11 +226,17 @@ export function computeTrmsSummaryRows(
     });
   }
 
-  if (selectedYear !== 'all') {
-    dateAndYearFilteredRows = dateAndYearFilteredRows.filter((row: any) => {
-      const yr = String(row['Plsb Year Bucket'] || row['Plsb_Year_Bucket'] || row['PLSB Year'] || row['Year'] || '').trim();
-      return yr.includes(selectedYear);
-    });
+  if (selectedYear && selectedYear !== 'all') {
+    const yearsArr = Array.isArray(selectedYear)
+      ? selectedYear
+      : (selectedYear instanceof Set ? Array.from(selectedYear) : [selectedYear]);
+
+    if (yearsArr.length > 0 && !yearsArr.includes('all')) {
+      dateAndYearFilteredRows = dateAndYearFilteredRows.filter((row: any) => {
+        const yr = String(row['Plsb Year Bucket'] || row['Plsb_Year_Bucket'] || row['PLSB Year'] || row['Year'] || '').trim();
+        return yearsArr.some(selectedYr => yr.includes(selectedYr));
+      });
+    }
   }
 
   const map: Record<string, { strategyName: string; underlyingRows: any[] }> = {};

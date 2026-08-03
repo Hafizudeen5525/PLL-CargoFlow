@@ -419,7 +419,13 @@ export const DiscrepancyCheck: React.FC<DiscrepancyCheckProps> = ({
   const [reconOptimizationFilter, setReconOptimizationFilter] = useState<string>('all');
   const [reconUnallocatedFilter, setReconUnallocatedFilter] = useState<string>('all');
   const [selectedEodDate, setSelectedEodDate] = useState<string>('all');
-  const [selectedYear, setSelectedYear] = useState<string>('all');
+  const [selectedYears, setSelectedYears] = useState<Set<string>>(new Set(['all']));
+  const [showYearFilterMenu, setShowYearFilterMenu] = useState(false);
+
+  // Report Customization State
+  const [reportSelectedSNs, setReportSelectedSNs] = useState<Set<string>>(new Set());
+  const [reportSnSearch, setReportSnSearch] = useState('');
+  const [reportShowCustomizer, setReportShowCustomizer] = useState(true);
   
   const [activeFilters, setActiveFilters] = useState<Record<string, Set<any>> >({});
   const [openFilterMenu, setOpenFilterMenu] = useState<string | null>(null);
@@ -698,8 +704,8 @@ export const DiscrepancyCheck: React.FC<DiscrepancyCheckProps> = ({
   };
 
   const trmsEngineResult = useMemo(() => {
-    return computeTrmsSummaryRows(trmsData.extractedRows || [], selectedEodDate, selectedYear);
-  }, [trmsData.extractedRows, selectedEodDate, selectedYear]);
+    return computeTrmsSummaryRows(trmsData.extractedRows || [], selectedEodDate, selectedYears);
+  }, [trmsData.extractedRows, selectedEodDate, selectedYears]);
 
   const trmsFilterOptions = useMemo(() => {
     const rawRows = trmsData.extractedRows || [];
@@ -1086,21 +1092,21 @@ export const DiscrepancyCheck: React.FC<DiscrepancyCheckProps> = ({
         if (row.app.unallocatedCargo !== reconUnallocatedFilter && row.trms.unallocatedCargo !== reconUnallocatedFilter) return false;
       }
 
-      if (selectedYear !== 'all') {
-        const yr = selectedYear.trim();
+      if (selectedYears.size > 0 && !selectedYears.has('all')) {
+        const yearsArr = Array.from(selectedYears);
         const trmsMatch = row.trms && (
-          row.strategyName.includes(yr) ||
+          yearsArr.some(yr => row.strategyName.includes(yr)) ||
           (row.trms.rawRows && row.trms.rawRows.some((r: any) => {
             const rowYr = String(r['Plsb Year Bucket'] || r['Plsb_Year_Bucket'] || r['PLSB Year'] || r['Year'] || '').trim();
-            return rowYr.includes(yr);
+            return yearsArr.some(yr => rowYr.includes(yr));
           }))
         );
         const appMatch = row.app && (
-          row.strategyName.includes(yr) ||
-          (row.app.deliveryDate && String(new Date(row.app.deliveryDate).getFullYear()) === yr) ||
-          (row.app.loadingDate && String(new Date(row.app.loadingDate).getFullYear()) === yr) ||
-          String(row.app.deliveryMonth || '').includes(yr) ||
-          String(row.app.loadingMonth || '').includes(yr)
+          yearsArr.some(yr => row.strategyName.includes(yr)) ||
+          (row.app.deliveryDate && yearsArr.includes(String(new Date(row.app.deliveryDate).getFullYear()))) ||
+          (row.app.loadingDate && yearsArr.includes(String(new Date(row.app.loadingDate).getFullYear()))) ||
+          yearsArr.some(yr => String(row.app.deliveryMonth || '').includes(yr)) ||
+          yearsArr.some(yr => String(row.app.loadingMonth || '').includes(yr))
         );
 
         if (!trmsMatch && !appMatch) return false;
@@ -1108,7 +1114,7 @@ export const DiscrepancyCheck: React.FC<DiscrepancyCheckProps> = ({
 
       return true;
     });
-  }, [reconciliationData, searchTerm, reconStatusFilter, reconGroupFilter, reconPnlBucketFilter, reconOptimizationFilter, reconUnallocatedFilter, selectedYear]);
+  }, [reconciliationData, searchTerm, reconStatusFilter, reconGroupFilter, reconPnlBucketFilter, reconOptimizationFilter, reconUnallocatedFilter, selectedYears]);
 
   const currentRawData = useMemo(() => {
     if (activeTab === 'reconcile') return filteredReconciliationData;
@@ -1314,6 +1320,23 @@ export const DiscrepancyCheck: React.FC<DiscrepancyCheckProps> = ({
     });
   };
 
+  const toggleYearFilter = (yr: string) => {
+    setSelectedYears(prev => {
+      const next = new Set(prev);
+      if (yr === 'all') {
+        return new Set(['all']);
+      }
+      next.delete('all');
+      if (next.has(yr)) {
+        next.delete(yr);
+        if (next.size === 0) next.add('all');
+      } else {
+        next.add(yr);
+      }
+      return next;
+    });
+  };
+
   const handleRowEdit = (profileId: string) => {
     const profile = profiles.find(p => p.id === profileId);
     if (profile && onEditProfile) {
@@ -1321,18 +1344,33 @@ export const DiscrepancyCheck: React.FC<DiscrepancyCheckProps> = ({
     }
   };
 
+  const customizedReportData = useMemo(() => {
+    if (reportSelectedSNs.size === 0) return processedData;
+    return processedData.filter((row: any) => {
+      const sn = activeTab === 'reconcile' ? row.strategyName : row['Strategy Name'];
+      return reportSelectedSNs.has(sn);
+    });
+  }, [processedData, reportSelectedSNs, activeTab]);
+
   const handleDownloadReport = () => {
     if (processedData.length === 0) {
       toast.error("No data available to download.");
       return;
     }
+    const allSNs = new Set<string>();
+    processedData.forEach((row: any) => {
+      const sn = activeTab === 'reconcile' ? row.strategyName : row['Strategy Name'];
+      if (sn) allSNs.add(sn);
+    });
+    setReportSelectedSNs(allSNs);
     setShowReportPreview(true);
   };
 
   const generateReportHTML = () => {
+    const dataToRender = customizedReportData;
     const tableHeaders = headers.map(h => `<th style="border: 1px solid #e2e8f0; padding: 12px 14px; background: #f8fafc; font-size: 10px; text-transform: uppercase; font-family: sans-serif; color: #475569; font-weight: 800; letter-spacing: 0.5px; text-align: left;">${h}</th>`).join('');
     
-    const tableRows = processedData.map((row: any) => {
+    const tableRows = dataToRender.map((row: any) => {
         if (activeTab === 'reconcile') {
             const r = row as ReconciliationRow;
 
@@ -1426,20 +1464,20 @@ export const DiscrepancyCheck: React.FC<DiscrepancyCheckProps> = ({
         return '';
     }).join('');
 
-    const totalStrategies = processedData.length;
-    const matchedStrategies = processedData.filter((r: any) => r.status === 'Matched').length;
-    const appOnlyStrategies = processedData.filter((r: any) => r.status === 'App Only').length;
-    const trmsOnlyStrategies = processedData.filter((r: any) => r.status === 'TRMS Only').length;
+    const totalStrategies = dataToRender.length;
+    const matchedStrategies = dataToRender.filter((r: any) => r.status === 'Matched').length;
+    const appOnlyStrategies = dataToRender.filter((r: any) => r.status === 'App Only').length;
+    const trmsOnlyStrategies = dataToRender.filter((r: any) => r.status === 'TRMS Only').length;
 
-    const discrepancyStrategies = processedData.filter((r: any) => r.discrepancies && r.discrepancies.size > 0).length;
-    const totalDiscrepancyPoints = processedData.reduce((acc: number, r: any) => acc + (r.discrepancies ? r.discrepancies.size : 0), 0);
+    const discrepancyStrategies = dataToRender.filter((r: any) => r.discrepancies && r.discrepancies.size > 0).length;
+    const totalDiscrepancyPoints = dataToRender.reduce((acc: number, r: any) => acc + (r.discrepancies ? r.discrepancies.size : 0), 0);
 
-    const appBuyVol = processedData.reduce((acc: number, r: any) => acc + (r.app?.buyVolTotal || 0), 0);
-    const trmsBuyVol = processedData.reduce((acc: number, r: any) => acc + (r.trms?.buyVolTotal || 0), 0);
+    const appBuyVol = dataToRender.reduce((acc: number, r: any) => acc + (r.app?.buyVolTotal || 0), 0);
+    const trmsBuyVol = dataToRender.reduce((acc: number, r: any) => acc + (r.trms?.buyVolTotal || 0), 0);
     const buyVolDiff = appBuyVol - trmsBuyVol;
 
-    const appSellVol = processedData.reduce((acc: number, r: any) => acc + (r.app?.sellVolTotal || 0), 0);
-    const trmsSellVol = processedData.reduce((acc: number, r: any) => acc + (r.trms?.sellVolTotal || 0), 0);
+    const appSellVol = dataToRender.reduce((acc: number, r: any) => acc + (r.app?.sellVolTotal || 0), 0);
+    const trmsSellVol = dataToRender.reduce((acc: number, r: any) => acc + (r.trms?.sellVolTotal || 0), 0);
     const sellVolDiff = appSellVol - trmsSellVol;
 
     const matchedRows = processedData.filter((r: any) => r.foundInApp && r.foundInTrms);
@@ -1610,7 +1648,7 @@ export const DiscrepancyCheck: React.FC<DiscrepancyCheckProps> = ({
   };
 
   const handleDownloadExcel = () => {
-    const reportData = processedData.map((row: any) => {
+    const reportData = customizedReportData.map((row: any) => {
       if (activeTab === 'reconcile') {
         const r = row as ReconciliationRow;
         const buyVolDiff = r.app.buyVolTotal - r.trms.buyVolTotal;
@@ -1969,11 +2007,59 @@ export const DiscrepancyCheck: React.FC<DiscrepancyCheckProps> = ({
                       </button>
                     </div>
 
-                    {/* Year Dropdown */}
-                    <select value={selectedYear} onChange={(e) => setSelectedYear(e.target.value)} className="bg-slate-800 text-slate-200 border border-slate-700 text-[10px] font-bold rounded-lg px-2.5 py-1 focus:ring-1 focus:ring-indigo-500 outline-none cursor-pointer">
-                      <option value="all">Year: All ({trmsFilterOptions.years.length})</option>
-                      {trmsFilterOptions.years.map(y => <option key={y} value={y}>{y}</option>)}
-                    </select>
+                    {/* Multi-Select Year Dropdown */}
+                    <div className="relative">
+                      <button 
+                        onClick={() => setShowYearFilterMenu(!showYearFilterMenu)}
+                        className={`border text-[10px] font-bold rounded-lg px-2.5 py-1 focus:ring-1 focus:ring-indigo-500 outline-none flex items-center gap-1.5 transition-colors ${!selectedYears.has('all') ? 'bg-indigo-900/60 border-indigo-500 text-indigo-200' : 'bg-slate-800 border-slate-700 text-slate-200 hover:bg-slate-750'}`}
+                      >
+                        <span>
+                          {selectedYears.has('all') 
+                            ? `Years: All (${trmsFilterOptions.years.length})` 
+                            : `Years: ${Array.from(selectedYears).sort().join(', ')}`}
+                        </span>
+                        <svg className="w-3 h-3 text-slate-400" fill="none" stroke="currentColor" viewBox="0 0 24 24"><path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M19 9l-7 7-7-7" /></svg>
+                      </button>
+
+                      {showYearFilterMenu && (
+                        <div className="absolute left-0 mt-1 w-52 bg-slate-800 border border-slate-700 rounded-xl shadow-2xl z-50 p-2 text-[11px] space-y-1">
+                          <div className="flex justify-between items-center px-2 py-1 border-b border-slate-700 text-slate-400 font-bold text-[10px] uppercase">
+                            <span>Select Years</span>
+                            <button onClick={() => setShowYearFilterMenu(false)} className="text-slate-400 hover:text-white text-xs">✕</button>
+                          </div>
+                          <label className="flex items-center gap-2 px-2 py-1 hover:bg-slate-700 rounded cursor-pointer text-slate-200 font-bold">
+                            <input 
+                              type="checkbox" 
+                              checked={selectedYears.has('all')} 
+                              onChange={() => toggleYearFilter('all')} 
+                              className="rounded border-slate-600 bg-slate-900 text-indigo-500 focus:ring-indigo-500" 
+                            />
+                            <span>All Years ({trmsFilterOptions.years.length})</span>
+                          </label>
+                          <div className="max-h-40 overflow-y-auto space-y-0.5 pt-1">
+                            {trmsFilterOptions.years.map(y => (
+                              <label key={y} className="flex items-center gap-2 px-2 py-1 hover:bg-slate-700 rounded cursor-pointer text-slate-300">
+                                <input 
+                                  type="checkbox" 
+                                  checked={!selectedYears.has('all') && selectedYears.has(y)} 
+                                  onChange={() => toggleYearFilter(y)} 
+                                  className="rounded border-slate-600 bg-slate-900 text-indigo-500 focus:ring-indigo-500" 
+                                />
+                                <span>{y}</span>
+                              </label>
+                            ))}
+                          </div>
+                          {!selectedYears.has('all') && (
+                            <button 
+                              onClick={() => setSelectedYears(new Set(['all']))} 
+                              className="w-full text-center text-[10px] font-bold text-indigo-400 hover:text-indigo-300 pt-1 border-t border-slate-700"
+                            >
+                              Reset to All
+                            </button>
+                          )}
+                        </div>
+                      )}
+                    </div>
 
                     {/* Group Dropdown */}
                     <select value={reconGroupFilter} onChange={(e) => setReconGroupFilter(e.target.value)} className="bg-slate-800 text-slate-200 border border-slate-700 text-[10px] font-bold rounded-lg px-2.5 py-1 focus:ring-1 focus:ring-indigo-500 outline-none">
@@ -2004,14 +2090,14 @@ export const DiscrepancyCheck: React.FC<DiscrepancyCheckProps> = ({
                     </select>
                   </div>
 
-                  {(reconStatusFilter !== 'all' || reconGroupFilter !== 'all' || reconPnlBucketFilter !== 'all' || reconOptimizationFilter !== 'all' || reconUnallocatedFilter !== 'all' || selectedYear !== 'all') && (
+                  {(reconStatusFilter !== 'all' || reconGroupFilter !== 'all' || reconPnlBucketFilter !== 'all' || reconOptimizationFilter !== 'all' || reconUnallocatedFilter !== 'all' || !selectedYears.has('all')) && (
                     <button onClick={() => {
                       setReconStatusFilter('all');
                       setReconGroupFilter('all');
                       setReconPnlBucketFilter('all');
                       setReconOptimizationFilter('all');
                       setReconUnallocatedFilter('all');
-                      setSelectedYear('all');
+                      setSelectedYears(new Set(['all']));
                     }} className="text-[10px] font-bold text-rose-400 hover:text-rose-300 underline">
                       Reset Quick Filters
                     </button>
@@ -2312,28 +2398,37 @@ export const DiscrepancyCheck: React.FC<DiscrepancyCheckProps> = ({
               exit={{ opacity: 0, scale: 0.95, y: 20 }}
               className="bg-white rounded-3xl shadow-2xl w-full max-w-6xl h-[90vh] overflow-hidden border border-slate-200 flex flex-col"
             >
-              <div className="p-6 border-b border-slate-100 bg-slate-50 flex justify-between items-center">
+              <div className="p-5 border-b border-slate-100 bg-slate-50 flex justify-between items-center shrink-0">
                 <div>
                     <h3 className="text-xl font-black text-slate-800 flex items-center gap-2">
                         <svg className="w-6 h-6 text-indigo-600" fill="none" stroke="currentColor" viewBox="0 0 24 24"><path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M9 17v-2m3 2v-4m3 2v-6m-9-9H5a2 2 0 00-2 2v12a2 2 0 002 2h10a2 2 0 002-2V7a2 2 0 00-2-2h-2M9 5a2 2 0 012 2h2a2 2 0 002-2M9 5a2 2 0 012 2h2a2 2 0 012 2" /></svg>
-                        Report Preview
+                        Report Customization & Export
                     </h3>
-                    <p className="text-xs text-slate-500 font-bold uppercase tracking-widest mt-1">Review your reconciliation data before export</p>
+                    <p className="text-xs text-slate-500 font-bold uppercase tracking-widest mt-0.5">
+                        Customize strategy selection ({customizedReportData.length} / {processedData.length} exported)
+                    </p>
                 </div>
                 <div className="flex items-center gap-3">
+                    <button 
+                        onClick={() => setReportShowCustomizer(!reportShowCustomizer)}
+                        className={`px-3 py-1.5 text-xs font-bold rounded-xl border transition-all flex items-center gap-1.5 ${reportShowCustomizer ? 'bg-indigo-50 border-indigo-200 text-indigo-700' : 'bg-white border-slate-200 text-slate-600 hover:bg-slate-50'}`}
+                    >
+                        <svg className="w-4 h-4" fill="none" stroke="currentColor" viewBox="0 0 24 24"><path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M12 6V4m0 2a2 2 0 100 4m0-4a2 2 0 110 4m-6 8a2 2 0 100-4m0 4a2 2 0 110-4m0 4v2m0-6V4m6 6v10m6-2a2 2 0 100-4m0 4a2 2 0 110-4m0 4v2m0-6V4" /></svg>
+                        {reportShowCustomizer ? 'Hide SN Selector' : 'Customize SNs'}
+                    </button>
                     <button 
                         onClick={handleDownloadHTML}
                         className="px-4 py-2 bg-indigo-600 text-white text-xs font-black rounded-xl hover:bg-indigo-700 transition-all flex items-center gap-2 shadow-lg shadow-indigo-200"
                     >
                         <svg className="w-4 h-4" fill="none" stroke="currentColor" viewBox="0 0 24 24"><path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M4 16v1a2 2 0 002 2h12a2 2 0 002-2v-1m-4-4l-4 4m0 0l-4-4m4 4V4" /></svg>
-                        Download HTML
+                        Download HTML ({customizedReportData.length})
                     </button>
                     <button 
                         onClick={handleDownloadExcel}
                         className="px-4 py-2 bg-emerald-600 text-white text-xs font-black rounded-xl hover:bg-emerald-700 transition-all flex items-center gap-2 shadow-lg shadow-emerald-200"
                     >
                         <svg className="w-4 h-4" fill="none" stroke="currentColor" viewBox="0 0 24 24"><path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M12 10v6m0 0l-3-3m3 3l3-3m2 8H7a2 2 0 01-2-2V5a2 2 0 012-2h5.586a1 1 0 01.707.293l5.414 5.414a1 1 0 01.293.707V19a2 2 0 01-2 2z" /></svg>
-                        Download Excel
+                        Download Excel ({customizedReportData.length})
                     </button>
                     <button 
                         onClick={() => setShowReportPreview(false)}
@@ -2344,11 +2439,90 @@ export const DiscrepancyCheck: React.FC<DiscrepancyCheckProps> = ({
                 </div>
               </div>
               
-              <div className="flex-1 overflow-auto p-8 bg-slate-100/50">
-                  <div 
-                    className="bg-white shadow-2xl rounded-2xl p-10 border border-slate-200 mx-auto max-w-5xl"
-                    dangerouslySetInnerHTML={{ __html: generateReportHTML() }}
-                  />
+              <div className="flex-1 overflow-hidden flex bg-slate-100/50">
+                  {/* Report Customization Sidebar */}
+                  {reportShowCustomizer && (
+                    <div className="w-80 border-r border-slate-200 bg-white flex flex-col shrink-0 h-full">
+                      <div className="p-4 border-b border-slate-100 space-y-3 bg-slate-50/50">
+                        <div className="flex justify-between items-center">
+                          <span className="text-xs font-black text-slate-700 uppercase tracking-wider">Select Strategies</span>
+                          <span className="text-[10px] font-bold text-indigo-600 bg-indigo-50 px-2 py-0.5 rounded-full">
+                            {reportSelectedSNs.size} Selected
+                          </span>
+                        </div>
+                        <input 
+                          type="text"
+                          placeholder="Search SN / Strategy Name..."
+                          value={reportSnSearch}
+                          onChange={(e) => setReportSnSearch(e.target.value)}
+                          className="w-full bg-white border border-slate-200 rounded-xl px-3 py-1.5 text-xs outline-none focus:ring-2 focus:ring-indigo-500 font-medium"
+                        />
+                        <div className="flex gap-2">
+                          <button 
+                            onClick={() => {
+                              const all = new Set(processedData.map((r: any) => activeTab === 'reconcile' ? r.strategyName : r['Strategy Name']).filter(Boolean));
+                              setReportSelectedSNs(all);
+                            }}
+                            className="flex-1 py-1 bg-slate-100 hover:bg-slate-200 text-slate-700 text-[10px] font-bold rounded-lg transition-colors"
+                          >
+                            Select All ({processedData.length})
+                          </button>
+                          <button 
+                            onClick={() => setReportSelectedSNs(new Set())}
+                            className="flex-1 py-1 bg-slate-100 hover:bg-rose-50 text-slate-700 hover:text-rose-600 text-[10px] font-bold rounded-lg transition-colors"
+                          >
+                            Deselect All
+                          </button>
+                        </div>
+                      </div>
+
+                      <div className="flex-1 overflow-y-auto p-2 space-y-1 divide-y divide-slate-50">
+                        {processedData
+                          .filter((r: any) => {
+                            const sn = activeTab === 'reconcile' ? r.strategyName : r['Strategy Name'];
+                            if (!reportSnSearch) return true;
+                            return String(sn || '').toLowerCase().includes(reportSnSearch.toLowerCase());
+                          })
+                          .map((r: any) => {
+                            const sn = activeTab === 'reconcile' ? r.strategyName : r['Strategy Name'];
+                            const isChecked = reportSelectedSNs.has(sn);
+                            return (
+                              <label key={sn} className={`flex items-center justify-between p-2 rounded-xl cursor-pointer transition-colors hover:bg-slate-50 ${isChecked ? 'bg-indigo-50/40' : ''}`}>
+                                <div className="flex items-center gap-2 min-w-0 pr-2">
+                                  <input 
+                                    type="checkbox"
+                                    checked={isChecked}
+                                    onChange={() => {
+                                      setReportSelectedSNs(prev => {
+                                        const next = new Set(prev);
+                                        if (next.has(sn)) next.delete(sn);
+                                        else next.add(sn);
+                                        return next;
+                                      });
+                                    }}
+                                    className="rounded border-slate-300 text-indigo-600 focus:ring-indigo-500 shrink-0"
+                                  />
+                                  <span className="text-xs font-bold text-slate-800 truncate" title={sn}>{sn}</span>
+                                </div>
+                                {r.status && (
+                                  <span className={`text-[8px] font-black uppercase px-1.5 py-0.5 rounded shrink-0 ${r.status === 'Matched' ? 'bg-emerald-100 text-emerald-700' : r.status === 'App Only' ? 'bg-amber-100 text-amber-700' : 'bg-purple-100 text-purple-700'}`}>
+                                    {r.status}
+                                  </span>
+                                )}
+                              </label>
+                            );
+                          })}
+                      </div>
+                    </div>
+                  )}
+
+                  {/* Main Report View */}
+                  <div className="flex-1 overflow-auto p-8">
+                      <div 
+                        className="bg-white shadow-2xl rounded-2xl p-10 border border-slate-200 mx-auto max-w-5xl"
+                        dangerouslySetInnerHTML={{ __html: generateReportHTML() }}
+                      />
+                  </div>
               </div>
             </motion.div>
           </div>

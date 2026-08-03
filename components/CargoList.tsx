@@ -101,8 +101,8 @@ export const CargoList: React.FC<CargoListProps> = ({
         let bVal = (b as any)[key!];
         
         if (key === 'purchaseCost') {
-            aVal = (a.absoluteBuyPrice * a.loadedVolume) + (a.isTieredPricing ? (a.absoluteTier2BuyPrice! * a.tier2LoadedVolume!) : 0);
-            bVal = (b.absoluteBuyPrice * b.loadedVolume) + (b.isTieredPricing ? (b.absoluteTier2BuyPrice! * b.tier2LoadedVolume!) : 0);
+            aVal = ((a.absoluteBuyPrice || 0) * (a.loadedVolume || 0)) + (a.isTieredPricing ? ((a.absoluteTier2BuyPrice || 0) * (a.tier2LoadedVolume || 0)) : 0);
+            bVal = ((b.absoluteBuyPrice || 0) * (b.loadedVolume || 0)) + (b.isTieredPricing ? ((b.absoluteTier2BuyPrice || 0) * (b.tier2LoadedVolume || 0)) : 0);
         }
 
         if (aVal === bVal) return 0;
@@ -913,14 +913,35 @@ export const CargoList: React.FC<CargoListProps> = ({
                               <div className="px-4 py-3 bg-slate-100 border-l border-slate-200 sticky right-0 z-[60] w-32 shrink-0 font-bold text-[10px] text-slate-600 uppercase text-center shadow-[-2px_0_5px_rgba(0,0,0,0.05)]">Actions</div>
                           </div>
                           <div className="bg-white">
-                              {processedProfiles.map((p: CargoProfile) => {
-                                  const purchaseT1 = p.absoluteBuyPrice * p.loadedVolume;
-                                  const purchaseT2 = p.isTieredPricing ? (p.absoluteTier2BuyPrice! * p.tier2LoadedVolume!) : 0;
-                                  const totalPurchase = purchaseT1 + purchaseT2;
+                              {processedProfiles.length === 0 ? (
+                                  <div className="p-12 text-center text-slate-500 bg-white border-b border-slate-100 flex flex-col items-center justify-center gap-3">
+                                      <div className="w-12 h-12 rounded-full bg-slate-100 flex items-center justify-center text-slate-400">
+                                          <svg className="w-6 h-6" fill="none" stroke="currentColor" viewBox="0 0 24 24"><path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M19 11H5m14 0a2 2 0 012 2v6a2 2 0 01-2 2H5a2 2 0 01-2-2v-6a2 2 0 012-2m14 0V9a2 2 0 00-2M5 11V9a2 2 0 012-2m0 0V5a2 2 0 012-2h6a2 2 0 012 2v2M7 7h10" /></svg>
+                                      </div>
+                                      <div className="font-bold text-slate-700 text-sm">No Cargo Profiles Displayed</div>
+                                      <p className="text-xs text-slate-400 max-w-md">
+                                          There are no cargoes matching the current portfolio year or active column filters ({profiles.length} total cargoes exist in the system).
+                                      </p>
+                                      {Object.keys(activeFilters).length > 0 && (
+                                          <button onClick={() => setActiveFilters({})} className="mt-2 text-xs font-bold text-indigo-600 bg-indigo-50 px-3 py-1.5 rounded-lg hover:bg-indigo-100 transition-colors">
+                                              Reset Column Filters
+                                          </button>
+                                      )}
+                                  </div>
+                              ) : (
+                                  processedProfiles.map((p: CargoProfile) => {
+                                      const buyPrice = p.absoluteBuyPrice || 0;
+                                      const loadVol = p.loadedVolume || 0;
+                                      const sellPrice = p.absoluteSellPrice || 0;
+                                      const delivVol = p.deliveredVolume || 0;
 
-                                  const salesT1 = p.absoluteSellPrice * p.deliveredVolume;
-                                  const salesT2 = p.isTieredPricing ? (p.absoluteTier2SellPrice! * p.tier2DeliveredVolume!) : 0;
-                                  const totalSales = salesT1 + salesT2;
+                                      const purchaseT1 = buyPrice * loadVol;
+                                      const purchaseT2 = p.isTieredPricing ? ((p.absoluteTier2BuyPrice || 0) * (p.tier2LoadedVolume || 0)) : 0;
+                                      const totalPurchase = purchaseT1 + purchaseT2;
+
+                                      const salesT1 = sellPrice * delivVol;
+                                      const salesT2 = p.isTieredPricing ? ((p.absoluteTier2SellPrice || 0) * (p.tier2DeliveredVolume || 0)) : 0;
+                                      const totalSales = salesT1 + salesT2;
 
                                   const srcVal = p.reconciledSrcCost || 0;
                                   
@@ -1006,7 +1027,7 @@ export const CargoList: React.FC<CargoListProps> = ({
                                           </div>
                                       </div>
                                   );
-                              })}
+                              }))}
                           </div>
                       </div>
                   </div>
