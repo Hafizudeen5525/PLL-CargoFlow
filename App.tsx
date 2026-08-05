@@ -12,7 +12,7 @@ import { SettingsView } from './components/SettingsView';
 import { UserManagement } from './components/UserManagement';
 import { DiscrepancyCheck, ReconciliationData } from './components/DiscrepancyCheck';
 import { CargoProfile, PnLBucket, ForwardCurveData, ForwardCurve, ForwardCurvePoint } from './types';
-import { getMarketData, getForwardCurve, recalculateProfile, getPortfolioYear, saveForwardCurve, normalizeMonthKey } from './services/calculationService';
+import { getMarketData, getForwardCurve, recalculateProfile, getPortfolioYear, saveForwardCurve, normalizeMonthKey, normalizeStrategyName } from './services/calculationService';
 import { getFromDB, saveToDB } from './services/db';
 import { auth, db, handleFirestoreError, FirestoreOperation, isFirebaseConfigured } from './firebase';
 import { onAuthStateChanged, User } from 'firebase/auth';
@@ -352,7 +352,8 @@ const App: React.FC = () => {
       
       updateProfiles((prev: CargoProfile[]) => {
         return prev.map(p => {
-          const trms = trmsData.trmsAgg[p.strategyName];
+          const trmsKey = Object.keys(trmsData.trmsAgg).find(k => normalizeStrategyName(k) === normalizeStrategyName(p.strategyName));
+          const trms = trmsKey ? trmsData.trmsAgg[trmsKey] : undefined;
           if (!trms) return p;
 
           const updated = { ...p };

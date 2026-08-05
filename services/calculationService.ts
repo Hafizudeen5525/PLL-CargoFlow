@@ -8,6 +8,18 @@ export interface ForwardCurveRow {
     prices: Record<string, number>;
 }
 
+export const normalizeStrategyName = (name?: string): string => {
+  if (!name) return '';
+  return name
+    .trim()
+    .toLowerCase()
+    .replace(/\s*\(?t[12]?\)?$/i, '')
+    .replace(/\s*tier\s*[12]?$/i, '')
+    .replace(/t\(/i, '(')
+    .replace(/\s+/g, ' ')
+    .trim();
+};
+
 /**
  * MARKET INTELLIGENCE (2024-2025 GROUNDED)
  */
@@ -722,16 +734,20 @@ export function recalculateProfile(p: Partial<CargoProfile>, useMarket: boolean 
     const up: CargoProfile = { ...EmptyCargoProfile, ...(p as any), id: (p as any).id || '' };
     
     // Tiered Splitting Logic
-    // Sync total volumes if they are missing but granular ones are present (robustness for imports)
+    // Sync total volumes if they are missing or if granular tier volumes are provided
     if (up.isTieredPricing) {
-        if (!up.totalLoadedVolume) {
-            up.totalLoadedVolume = (up.loadedVolume || 0) + (up.tier2LoadedVolume || 0);
+        const sumLoaded = (up.loadedVolume || 0) + (up.tier2LoadedVolume || 0);
+        const sumDelivered = (up.deliveredVolume || 0) + (up.tier2DeliveredVolume || 0);
+
+        if (!up.totalLoadedVolume || ((up.loadedVolume || 0) > 0 && (up.tier2LoadedVolume || 0) > 0 && up.totalLoadedVolume !== sumLoaded)) {
+            up.totalLoadedVolume = sumLoaded;
         }
-        if (!up.totalDeliveredVolume) {
-            up.totalDeliveredVolume = (up.deliveredVolume || 0) + (up.tier2DeliveredVolume || 0);
+        if (!up.totalDeliveredVolume || ((up.deliveredVolume || 0) > 0 && (up.tier2DeliveredVolume || 0) > 0 && up.totalDeliveredVolume !== sumDelivered)) {
+            up.totalDeliveredVolume = sumDelivered;
         }
+
         // If tiered but no limit set (e.g. Jarvis import), initialize limit to T1 volume to avoid re-splitting everything into T1
-        if (!up.tierLimit && up.loadedVolume && up.loadedVolume > 0 && up.tier2LoadedVolume && up.tier2LoadedVolume > 0) {
+        if (!up.tierLimit && up.loadedVolume && up.loadedVolume > 0) {
             up.tierLimit = up.loadedVolume;
         }
     } else {

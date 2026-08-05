@@ -2,7 +2,7 @@
 import React, { useState, useMemo, useRef, useEffect, useCallback } from 'react';
 import { CargoProfile, PnLBucket, EmptyCargoProfile } from '../types';
 import { motion, AnimatePresence } from 'framer-motion';
-import { detectUnit, recalculateProfile, getGroupName, GROUPS, getPortfolioYear, saveForwardCurve, ForwardCurveRow, formatCurrency, formatPrice } from '../services/calculationService';
+import { detectUnit, recalculateProfile, getGroupName, GROUPS, getPortfolioYear, saveForwardCurve, ForwardCurveRow, formatCurrency, formatPrice, normalizeStrategyName } from '../services/calculationService';
 import { WorldMap } from './WorldMap';
 import { CalendarView } from './CalendarView';
 import { JarvisPreviewModal } from './JarvisPreviewModal';
@@ -257,11 +257,22 @@ export const CargoList: React.FC<CargoListProps> = ({
                             if (!stratName || String(stratName).trim() === '') return;
                             
                             const cleanStratName = String(stratName).trim();
-                            const count = (seenInSheetCount.get(cleanStratName) || 0) + 1;
-                            seenInSheetCount.set(cleanStratName, count);
+                            const lookupName = cleanStratName
+                                .replace(/\s*\(?t[12]?\)?$/i, '')
+                                .replace(/\s*tier\s*[12]?$/i, '')
+                                .replace(/t\(/i, '(')
+                                .replace(/\s+/g, ' ')
+                                .trim();
 
-                            const isTier2Leg = count > 1 || cleanStratName.toLowerCase().includes('t(') || cleanStratName.toLowerCase().endsWith('t');
-                            const lookupName = cleanStratName.replace(/t\(/i, '(').replace(/t$/i, '');
+                            const count = (seenInSheetCount.get(lookupName) || 0) + 1;
+                            seenInSheetCount.set(lookupName, count);
+
+                            const lowerStrat = cleanStratName.toLowerCase();
+                            const isTier2Leg = count > 1 || 
+                                               lowerStrat.includes('t(') || 
+                                               lowerStrat.endsWith('t') || 
+                                               lowerStrat.endsWith('t2') || 
+                                               lowerStrat.includes('tier 2');
 
                             if (!mergedData[lookupName]) mergedData[lookupName] = { strategyName: lookupName };
                             
@@ -476,40 +487,31 @@ export const CargoList: React.FC<CargoListProps> = ({
         }
 
         const processedJarvisRows = Object.values(mergedData).map((parsedFields: any) => {
-            const existingMatch = profiles.find((p: CargoProfile) => p.strategyName?.toLowerCase() === parsedFields.strategyName?.toLowerCase());
+            const existingMatch = profiles.find((p: CargoProfile) => 
+                normalizeStrategyName(p.strategyName) === normalizeStrategyName(parsedFields.strategyName)
+            );
             let finalProfile: CargoProfile;
             let status: 'New' | 'Update' | 'No Change';
             const changes: Record<string, { old: any, new: any }> = {};
 
             if (existingMatch) {
-                const merged = { ...existingMatch, ...parsedFields };
+                const isTiered = Boolean(existingMatch.isTieredPricing || parsedFields.isTieredPricing || (parsedFields.tier2LoadedVolume && parsedFields.tier2LoadedVolume > 0));
+                const merged = { ...existingMatch, ...parsedFields, isTieredPricing: isTiered };
                 
-                // --- Robust Tiered Volume Splitting Logic (Sync with BulkImportModal) ---
-                if (existingMatch.isTieredPricing) {
-                    // Purchase Volume Split - only if not already explicitly provided in the import (Jarvis often has separate lines)
-                    if (parsedFields.loadedVolume !== undefined && parsedFields.tier2LoadedVolume === undefined) {
-                        const incomingTotal = parsedFields.loadedVolume;
-                        const t1Threshold = existingMatch.loadedVolume || 0;
-                        if (t1Threshold > 0 && incomingTotal > t1Threshold) {
-                            merged.loadedVolume = t1Threshold;
-                            merged.tier2LoadedVolume = incomingTotal - t1Threshold;
-                        } else {
-                            merged.loadedVolume = incomingTotal;
-                            merged.tier2LoadedVolume = 0;
-                        }
-                    }
-                    // Sales Volume Split - only if not already explicitly provided in the import
-                    if (parsedFields.deliveredVolume !== undefined && parsedFields.tier2DeliveredVolume === undefined) {
-                        const incomingTotal = parsedFields.deliveredVolume;
-                        const t1Threshold = existingMatch.deliveredVolume || 0;
-                        if (t1Threshold > 0 && incomingTotal > t1Threshold) {
-                            merged.deliveredVolume = t1Threshold;
-                            merged.tier2DeliveredVolume = incomingTotal - t1Threshold;
-                        } else {
-                            merged.deliveredVolume = incomingTotal;
-                            merged.tier2DeliveredVolume = 0;
-                        }
-                    }
+                // --- Robust Tiered Volume Splitting Logic ---
+                if (isTiered) {
+                    const t1Load = parsedFields.loadedVolume !== undefined ? parsedFields.loadedVolume : (existingMatch.loadedVolume || 0);
+                    const t2Load = parsedFields.tier2LoadedVolume !== undefined ? parsedFields.tier2LoadedVolume : (existingMatch.tier2LoadedVolume || 0);
+                    merged.loadedVolume = t1Load;
+                    merged.tier2LoadedVolume = t2Load;
+                    merged.totalLoadedVolume = t1Load + t2Load;
+                    merged.tierLimit = t1Load > 0 ? t1Load : (existingMatch.tierLimit || t1Load);
+
+                    const t1Del = parsedFields.deliveredVolume !== undefined ? parsedFields.deliveredVolume : (existingMatch.deliveredVolume || 0);
+                    const t2Del = parsedFields.tier2DeliveredVolume !== undefined ? parsedFields.tier2DeliveredVolume : (existingMatch.tier2DeliveredVolume || 0);
+                    merged.deliveredVolume = t1Del;
+                    merged.tier2DeliveredVolume = t2Del;
+                    merged.totalDeliveredVolume = t1Del + t2Del;
                 }
 
                 finalProfile = recalculateProfile(merged, true) as CargoProfile;
@@ -736,6 +738,27 @@ export const CargoList: React.FC<CargoListProps> = ({
             </div>
         </div>
         <div className="flex items-center gap-2 overflow-x-auto pb-1 sm:pb-0 w-full lg:w-auto custom-scrollbar">
+            {selectedIds.size > 0 && userRole !== 'viewer' && (
+              <button
+                onClick={() => {
+                  if (window.confirm(`Are you sure you want to delete ${selectedIds.size} selected cargo(es)?`)) {
+                    if (onBulkDelete) {
+                      onBulkDelete(selectedIds);
+                    } else if (onDelete) {
+                      selectedIds.forEach(id => onDelete(id));
+                    }
+                    setSelectedIds(new Set());
+                    toast.success(`Deleted ${selectedIds.size} cargo(es)`);
+                  }
+                }}
+                className="whitespace-nowrap text-[10px] sm:text-xs font-bold text-red-600 bg-red-50 px-3 py-1.5 rounded-lg border border-red-200 hover:bg-red-100 transition-colors flex items-center gap-1.5 shadow-sm"
+              >
+                <svg className="w-4 h-4" fill="none" stroke="currentColor" viewBox="0 0 24 24">
+                  <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M19 7l-.867 12.142A2 2 0 0116.138 21H7.862a2 2 0 01-1.995-1.858L5 7m5 4v6m4-6v6m1-10V4a1 1 0 00-1-1h-4a1 1 0 00-1 1v3M4 7h16" />
+                </svg>
+                Delete Selected ({selectedIds.size})
+              </button>
+            )}
             {userRole !== 'viewer' && (
               <>
                 <input type="file" accept=".xlsm, .xlsx" multiple onChange={handleJarvisImport} className="hidden" ref={fileInputRef} />

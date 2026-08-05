@@ -1,6 +1,6 @@
 import React, { useState } from 'react';
 import { CargoProfile, PnLBucket, EmptyCargoProfile } from '../types';
-import { recalculateProfile, generateStrategyName } from '../services/calculationService';
+import { recalculateProfile, generateStrategyName, normalizeStrategyName } from '../services/calculationService';
 import { toast } from 'react-hot-toast';
 import { motion } from 'framer-motion';
 
@@ -169,28 +169,11 @@ export const BulkImportModal: React.FC<BulkImportModalProps> = ({ existingProfil
 
             const strategyName = parsedFields.strategyName;
             
-            // Smart Match Logic
-            const normalizeSN = (name: string) => {
-                if (!name) return "";
-                // Remove 't' suffix that indicates tiered pricing but keep a,b,c which indicate splits
-                // Example: 2026-LNGC_33t(PLL) -> 2026-LNGC_33(PLL)
-                return name.toLowerCase().replace(/(\d+)t(\W|$)/, '$1$2').trim();
-            };
+            // Smart Match Logic by Normalized Strategy Name
+            let existingMatch = strategyName ? existingProfiles.find(p => normalizeStrategyName(p.strategyName) === normalizeStrategyName(strategyName)) : undefined;
 
-            let existingMatch = strategyName ? existingProfiles.find(p => p.strategyName?.toLowerCase() === strategyName.toLowerCase()) : undefined;
-
-            if (!existingMatch && strategyName) {
-                const incomingNormalized = normalizeSN(strategyName);
-                existingMatch = existingProfiles.find(p => {
-                    const existingNormalized = normalizeSN(p.strategyName || '');
-                    const sameYear = p.deliveryDate?.startsWith(strategyName.slice(0, 4)) || 
-                                   p.loadingDate?.startsWith(strategyName.slice(0, 4));
-                    return existingNormalized === incomingNormalized && sameYear;
-                });
-            }
-
-            // Fallback: Date + Source + Buyer match
-            if (!existingMatch && parsedFields.deliveryDate && parsedFields.source && parsedFields.buyer) {
+            // Fallback: ONLY if strategy name is missing from incoming record
+            if (!existingMatch && !strategyName && parsedFields.deliveryDate && parsedFields.source && parsedFields.buyer) {
                 existingMatch = existingProfiles.find(p => 
                     p.deliveryDate === parsedFields.deliveryDate && 
                     p.source?.toLowerCase().includes(parsedFields.source!.toLowerCase().slice(0,3)) &&
