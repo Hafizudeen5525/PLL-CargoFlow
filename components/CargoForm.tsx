@@ -1,7 +1,7 @@
 
 import React, { useState, useEffect, useCallback, useMemo } from 'react';
 import { CargoProfile, EmptyCargoProfile, PnLBucket } from '../types';
-import { recalculateProfile, evaluateFormula, getIndexPrice, formatCurrency, formatPrice } from '../services/calculationService';
+import { recalculateProfile, evaluateFormula, getIndexPrice, formatCurrency, formatPrice, normalizeMonthDef } from '../services/calculationService';
 import { apiClient } from '../services/apiClient';
 import { toast } from 'react-hot-toast';
 import { motion, AnimatePresence } from 'framer-motion';
@@ -242,7 +242,9 @@ const ComponentRow: React.FC<{
     const [price, setPrice] = useState(0);
     const s = formData[`${type}Price${idx}Slope`];
     const index = formData[`${type}PriceIndex${idx}`];
-    const mDef = formData[`${type}Price${idx}MonthDef`] || 'n';
+    const rawMDef = formData[`${type}Price${idx}MonthDef`];
+    const mDef = normalizeMonthDef(rawMDef);
+    const mDefOptions = MONTH_OPTIONS.includes(mDef) ? MONTH_OPTIONS : [...MONTH_OPTIONS, mDef];
     const c = formData[`${type}Price${idx}Constant`];
     
     const refDate = (type === 'buy' || type === 'tier2Buy') ? formData.loadingDate : formData.deliveryDate;
@@ -290,7 +292,7 @@ const ComponentRow: React.FC<{
             <div className="col-span-6 sm:col-span-2">
                 <label className="text-[9px] font-bold text-slate-400 uppercase">Month Def</label>
                 <select name={`${type}Price${idx}MonthDef`} value={mDef} onChange={onChange} disabled={readOnly} className="w-full text-xs p-1.5 border rounded bg-white disabled:bg-slate-50 disabled:text-slate-500">
-                    {MONTH_OPTIONS.map(o => <option key={o} value={o}>{o}</option>)}
+                    {mDefOptions.map(o => <option key={o} value={o}>{o}</option>)}
                 </select>
             </div>
             <div className="col-span-6 sm:col-span-2">

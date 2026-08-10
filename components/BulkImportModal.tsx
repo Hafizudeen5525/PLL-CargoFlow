@@ -27,8 +27,11 @@ const COLUMN_MAPPING: Record<string, string[]> = {
   salesRevenue: ['sales revenue', 'revenue', 'invoice value'],
   reconciledSalesRevenue: ['reconciled sales revenue', 'reconciled revenue', 'finance revenue', 'actual revenue'],
   reconciledPurchaseCost: ['reconciled purchase cost', 'reconciled cost', 'finance cost', 'actual cost', 'purchase cost', 'cost', 'total cost'],
+  reconciledSrcCost: ['reconciled src cost', 'reconciled src', 'src cost', 'reconciled freight', 'shipping cost', 'freight cost', 'shipping related cost', 'src'],
+  srcUnitFee: ['src unit fee', 'src fee', 'src rate', 'src/u', 'src unit'],
+  src: ['src name', 'src ref', 'src indicator', 'vessel src'],
   finalTotalPnL: ['total pnl', 'final pnl', 'profit', 'p&l', 'net pnl'],
-  incoterms: ['incoterms', 'terms'],
+  incoterms: ['incoterms', 'terms', 'incoterm'],
   pnlBucket: ['status', 'bucket', 'state']
 };
 
@@ -151,7 +154,7 @@ export const BulkImportModal: React.FC<BulkImportModalProps> = ({ existingProfil
                         if (!isNaN(volNum)) (parsedFields as any)[key] = volNum;
                     } else if (key.includes('Date')) {
                         (parsedFields as any)[key] = parseDate(rawVal);
-                    } else if (['absoluteSellPrice', 'absoluteBuyPrice', 'salesRevenue', 'reconciledSalesRevenue', 'reconciledPurchaseCost', 'finalTotalPnL'].includes(key)) {
+                    } else if (['absoluteSellPrice', 'absoluteBuyPrice', 'salesRevenue', 'reconciledSalesRevenue', 'reconciledPurchaseCost', 'reconciledSrcCost', 'srcUnitFee', 'finalTotalPnL'].includes(key)) {
                         const cleanNum = parseFloat(rawVal.replace(/[^0-9.-]/g, ''));
                         if (!isNaN(cleanNum)) (parsedFields as any)[key] = cleanNum;
                     } else if (key === 'pnlBucket') {
@@ -356,7 +359,8 @@ export const BulkImportModal: React.FC<BulkImportModalProps> = ({ existingProfil
                                 <th className="px-4 py-4 text-right">Price</th>
                                 <th className="px-4 py-4">P&L Bucket</th>
                                 <th className="px-4 py-4 text-right">Reconciled Cost/Rev</th>
-                                <th className="px-4 py-4">Incoterms</th>
+                                <th className="px-4 py-4 text-right">SRC Cost ($)</th>
+                                <th className="px-4 py-4">Incoterms / SRC</th>
                                 <th className="px-4 py-4 text-right">P&L</th>
                             </tr>
                         </thead>
@@ -447,8 +451,42 @@ export const BulkImportModal: React.FC<BulkImportModalProps> = ({ existingProfil
                                             <DiffCell row={row} rowIndex={i} field="reconciledSalesRevenue" format={(v) => v > 0 ? v.toLocaleString() : '-'} isIgnored={ignoredChanges[i]?.has("reconciledSalesRevenue")} onToggle={toggleFieldChange} className="font-mono" />
                                         </div>
                                     </td>
+                                    <td className="px-4 py-3 text-right">
+                                        <div className="flex flex-col gap-1 items-end">
+                                            <DiffCell 
+                                                row={row} 
+                                                rowIndex={i} 
+                                                field="reconciledSrcCost" 
+                                                format={(v) => (v !== undefined && v !== null && v !== '' && v !== 0) ? Number(v).toLocaleString() : '-'} 
+                                                isIgnored={ignoredChanges[i]?.has("reconciledSrcCost")} 
+                                                onToggle={toggleFieldChange} 
+                                                className="font-mono font-bold text-amber-700" 
+                                            />
+                                            {(row.srcUnitFee !== undefined && row.srcUnitFee !== null && row.srcUnitFee !== 0) && (
+                                                <div className="text-[9px] text-slate-400 font-mono flex items-center justify-end gap-1">
+                                                    <span>Fee:</span>
+                                                    <DiffCell 
+                                                        row={row} 
+                                                        rowIndex={i} 
+                                                        field="srcUnitFee" 
+                                                        format={(v) => v ? `$${v}` : '-'} 
+                                                        isIgnored={ignoredChanges[i]?.has("srcUnitFee")} 
+                                                        onToggle={toggleFieldChange} 
+                                                        className="inline font-mono" 
+                                                    />
+                                                </div>
+                                            )}
+                                        </div>
+                                    </td>
                                     <td className="px-4 py-3">
-                                        <DiffCell row={row} rowIndex={i} field="incoterms" isIgnored={ignoredChanges[i]?.has("incoterms")} onToggle={toggleFieldChange} />
+                                        <div className="flex flex-col gap-1">
+                                            <DiffCell row={row} rowIndex={i} field="incoterms" isIgnored={ignoredChanges[i]?.has("incoterms")} onToggle={toggleFieldChange} />
+                                            {row.src && (
+                                                <div className="text-[9px] text-slate-500 font-mono truncate max-w-[100px]" title={row.src}>
+                                                    <DiffCell row={row} rowIndex={i} field="src" isIgnored={ignoredChanges[i]?.has("src")} onToggle={toggleFieldChange} />
+                                                </div>
+                                            )}
+                                        </div>
                                     </td>
                                     <td className="px-4 py-3 text-right">
                                         <DiffCell row={row} rowIndex={i} field="finalTotalPnL" format={(v) => Number(v).toLocaleString()} isIgnored={ignoredChanges[i]?.has("finalTotalPnL")} onToggle={toggleFieldChange} className={`font-mono font-bold ${row.finalTotalPnL >= 0 ? 'text-emerald-600' : 'text-rose-600'}`} />

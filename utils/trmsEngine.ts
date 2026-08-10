@@ -15,6 +15,74 @@ export function isUnallocatedBuyer(buyerName?: string): boolean {
   return false;
 }
 
+export function getEstimatedSellRows(underlyingRows: any[]): any[] {
+  if (!underlyingRows || underlyingRows.length === 0) return [];
+
+  // Filter criteria:
+  // Buy/Sell = Buy
+  // Instrument Type = COMM-PHYS
+  // Cashflow Type = Commodity
+  // Settlement Type = Physical Settlement
+  const buyPhysRows = underlyingRows.filter(r => {
+    const bs = String(r['Buy_Sell'] || r['BuySell'] || '').trim().toLowerCase();
+    const ins = String(r['Ins Type'] || r['Instrument Type'] || '').trim().toUpperCase();
+    const cflow = String(r['Cflow Type'] || '').trim().toLowerCase();
+    const sett = String(r['Settlement Type'] || '').trim().toLowerCase();
+
+    return (bs === 'buy' || bs === 'buys') &&
+           ins === 'COMM-PHYS' &&
+           cflow === 'commodity' &&
+           sett === 'physical settlement';
+  });
+
+  if (buyPhysRows.length > 0) {
+    // Prefer using Optimization LNG over Base LNG. If there's no Optimization then use Base
+    const optRows = buyPhysRows.filter(r => {
+      const port = String(r['Internal Portfolio'] || r['Portfolio'] || '').trim().toLowerCase();
+      return port === 'optimization lng' || port.includes('optimization');
+    });
+
+    if (optRows.length > 0) {
+      return optRows;
+    }
+
+    const baseRows = buyPhysRows.filter(r => {
+      const port = String(r['Internal Portfolio'] || r['Portfolio'] || '').trim().toLowerCase();
+      return port === 'base lng' || port.includes('base');
+    });
+
+    if (baseRows.length > 0) {
+      return baseRows;
+    }
+
+    return buyPhysRows;
+  }
+
+  // Fallback if no explicit "Physical Settlement" match: try Buy + COMM-PHYS + Commodity
+  const fallbackBuyRows = underlyingRows.filter(r => {
+    const bs = String(r['Buy_Sell'] || r['BuySell'] || '').trim().toLowerCase();
+    const ins = String(r['Ins Type'] || r['Instrument Type'] || '').trim().toUpperCase();
+    const cflow = String(r['Cflow Type'] || '').trim().toLowerCase();
+    return (bs === 'buy' || bs === 'buys') && ins === 'COMM-PHYS' && cflow === 'commodity';
+  });
+
+  if (fallbackBuyRows.length > 0) {
+    const optRows = fallbackBuyRows.filter(r => {
+      const port = String(r['Internal Portfolio'] || r['Portfolio'] || '').trim().toLowerCase();
+      return port === 'optimization lng' || port.includes('optimization');
+    });
+    if (optRows.length > 0) return optRows;
+
+    const baseRows = fallbackBuyRows.filter(r => {
+      const port = String(r['Internal Portfolio'] || r['Portfolio'] || '').trim().toLowerCase();
+      return port === 'base lng' || port.includes('base');
+    });
+    return baseRows.length > 0 ? baseRows : fallbackBuyRows;
+  }
+
+  return [];
+}
+
 export function normalizeStrategyKey(name: string): string {
   if (!name) return '';
   return name
@@ -521,6 +589,10 @@ export function computeTrmsSummaryRows(
       }
     }
 
+    if (sellCalcRows.length === 0) {
+      sellCalcRows = getEstimatedSellRows(underlyingRows);
+    }
+
     const getVolType = (r: any) => String(r['Volume Type'] || r['Vol Type'] || r['VolType'] || r['Volume_Type'] || '').trim();
 
     if (buyCalcRows.some(r => getVolType(r) === 'Actual')) {
@@ -653,8 +725,10 @@ export function computeTrmsSummaryRows(
         salesVolume += absVol;
         addUnitVolume(salesVolumeByUnit, absVol, unit);
       }
-      if (!isNaN(val)) {
+      if (!isNaN(val) && Math.abs(val) > 0) {
         salesRevenue += Math.abs(val);
+      } else if (absVol > 0 && !isNaN(price) && Math.abs(price) > 0) {
+        salesRevenue += absVol * Math.abs(price);
       }
       if (!isNaN(price) && Math.abs(price) > 0) {
         if (absVol > 0) {

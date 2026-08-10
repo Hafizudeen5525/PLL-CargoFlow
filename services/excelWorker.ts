@@ -1,5 +1,41 @@
 import * as XLSX from 'xlsx';
 
+function shiftEodDatePlusOne(val: any): string {
+  if (val === undefined || val === null || val === '') return '';
+  if (val instanceof Date) {
+    const d = new Date(val.getTime());
+    d.setUTCDate(d.getUTCDate() + 1);
+    return `${d.getUTCFullYear()}-${String(d.getUTCMonth() + 1).padStart(2, '0')}-${String(d.getUTCDate()).padStart(2, '0')}`;
+  }
+
+  if (typeof val === 'number') {
+    const jsDate = new Date(Math.round((val - 25569) * 86400 * 1000));
+    jsDate.setUTCDate(jsDate.getUTCDate() + 1);
+    return `${jsDate.getUTCFullYear()}-${String(jsDate.getUTCMonth() + 1).padStart(2, '0')}-${String(jsDate.getUTCDate()).padStart(2, '0')}`;
+  }
+
+  const strVal = String(val).trim();
+  if (!strVal) return '';
+
+  const isoMatch = strVal.match(/^(\d{4})[-/](\d{1,2})[-/](\d{1,2})(?:[\sT].*)?$/);
+  if (isoMatch) {
+    const y = parseInt(isoMatch[1], 10);
+    const m = parseInt(isoMatch[2], 10) - 1;
+    const day = parseInt(isoMatch[3], 10);
+    const d = new Date(Date.UTC(y, m, day + 1));
+    return `${d.getUTCFullYear()}-${String(d.getUTCMonth() + 1).padStart(2, '0')}-${String(d.getUTCDate()).padStart(2, '0')}`;
+  }
+
+  const parsed = Date.parse(strVal);
+  if (!isNaN(parsed)) {
+    const d = new Date(parsed);
+    d.setUTCDate(d.getUTCDate() + 1);
+    return `${d.getUTCFullYear()}-${String(d.getUTCMonth() + 1).padStart(2, '0')}-${String(d.getUTCDate()).padStart(2, '0')}`;
+  }
+
+  return strVal;
+}
+
 self.onmessage = (e: MessageEvent) => {
   const { data, whitelistColumns, priorityColumns } = e.data;
   
@@ -124,7 +160,11 @@ self.onmessage = (e: MessageEvent) => {
         }
 
         if (val !== undefined) {
-          if (val instanceof Date) { 
+          if (col === 'EOD Date') {
+            const shifted = intern(shiftEodDatePlusOne(val));
+            cleanRow[col] = shifted;
+            cleanRow['EOD_Date'] = shifted;
+          } else if (val instanceof Date) { 
               cleanRow[col] = intern(`${val.getUTCFullYear()}-${String(val.getUTCMonth()+1).padStart(2,'0')}-${String(val.getUTCDate()).padStart(2,'0')}`); 
           } else {
               cleanRow[col] = intern(val);

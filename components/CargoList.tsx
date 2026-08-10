@@ -2,7 +2,7 @@
 import React, { useState, useMemo, useRef, useEffect, useCallback } from 'react';
 import { CargoProfile, PnLBucket, EmptyCargoProfile } from '../types';
 import { motion, AnimatePresence } from 'framer-motion';
-import { detectUnit, recalculateProfile, getGroupName, GROUPS, getPortfolioYear, saveForwardCurve, ForwardCurveRow, formatCurrency, formatPrice, normalizeStrategyName } from '../services/calculationService';
+import { detectUnit, recalculateProfile, getGroupName, GROUPS, getPortfolioYear, saveForwardCurve, ForwardCurveRow, formatCurrency, formatPrice, normalizeStrategyName, normalizeMonthDef, normalizeMonthKey, saveHistoricalCurve, getHistoricalCurveSync } from '../services/calculationService';
 import { WorldMap } from './WorldMap';
 import { CalendarView } from './CalendarView';
 import { JarvisPreviewModal } from './JarvisPreviewModal';
@@ -187,6 +187,7 @@ export const CargoList: React.FC<CargoListProps> = ({
     
     const mergedData: Record<string, Partial<CargoProfile>> = {};
     const foundForwardCurves: Array<{ date: string, curve: ForwardCurveRow[], fileName: string }> = [];
+    const foundHistoricalCurves: Array<{ curve: ForwardCurveRow[], fileName: string }> = [];
 
     const cleanNumeric = (val: any): number => {
         if (val === undefined || val === null || val === '' || val === '-' || String(val).trim() === '-') return 0;
@@ -293,6 +294,10 @@ export const CargoList: React.FC<CargoListProps> = ({
 
                                     let val = isStringData ? String(rawVal).trim() : cleanNumeric(rawVal);
                                     
+                                    if (profileKey.toLowerCase().includes('monthdef')) {
+                                        val = normalizeMonthDef(val as string);
+                                    }
+
                                     if (profileKey === 'loadingDate' || profileKey === 'deliveryDate') {
                                         val = normalizeDate(rawVal);
                                     }
@@ -451,6 +456,55 @@ export const CargoList: React.FC<CargoListProps> = ({
                             });
                         }
                     }
+
+                    // Extract Historical Prices if sheet exists
+                    const histSheetName = workbook.SheetNames.find(n => {
+                        const lower = n.trim().toLowerCase();
+                        return lower === "historical prices" || (lower.includes("historical") && lower.includes("price"));
+                    });
+                    const histSheet = histSheetName ? workbook.Sheets[histSheetName] : null;
+                    if (histSheet) {
+                        const histRows = XLSX.utils.sheet_to_json(histSheet, { header: 1 }) as any[][];
+                        const histIndices = [
+                            'BRIPE', 'JCC Detailed', 'Dated Brent', 'HH', 'HH Last Day',
+                            'NBP', 'JKM', 'TTF', 'AECO', 'Station 2'
+                        ];
+
+                        const monthToHistPrices: Record<string, Record<string, number>> = {};
+
+                        // B4:L29 is row 4 (index 3) to row 29 (index 28)
+                        for (let r = 3; r < histRows.length; r++) {
+                            const row = histRows[r];
+                            if (!row || row.length === 0) continue;
+                            const monthVal = row[1]; // Column B
+                            if (monthVal === undefined || monthVal === null || monthVal === '') continue;
+
+                            const monthStr = normalizeMonthKey(monthVal);
+                            if (!monthStr) continue;
+
+                            if (!monthToHistPrices[monthStr]) monthToHistPrices[monthStr] = {};
+
+                            for (let i = 0; i < histIndices.length; i++) {
+                                const val = row[i + 2]; // Columns C to L (index 2 to 11)
+                                const numVal = typeof val === 'number' ? val : parseFloat(String(val || '').replace(/[$,]/g, ''));
+                                if (!isNaN(numVal) && numVal > 0) {
+                                    monthToHistPrices[monthStr][histIndices[i]] = numVal;
+                                }
+                            }
+                        }
+
+                        const histRowsToSave: ForwardCurveRow[] = Object.entries(monthToHistPrices).map(([month, prices]) => ({
+                            month,
+                            prices
+                        })).sort((a, b) => a.month.localeCompare(b.month));
+
+                        if (histRowsToSave.length > 0) {
+                            foundHistoricalCurves.push({
+                                curve: histRowsToSave,
+                                fileName: file.name
+                            });
+                        }
+                    }
                     
                     resolve();
                 } catch (err) {
@@ -484,6 +538,32 @@ export const CargoList: React.FC<CargoListProps> = ({
                 toast.success(`Imported Forward Curves from ${foundForwardCurves.length} file(s)`);
                 if (onForwardCurveUpdate) onForwardCurveUpdate();
             }
+        }
+
+        // Handle Historical Curves found
+        if (foundHistoricalCurves.length > 0) {
+            const existingHist = getHistoricalCurveSync();
+            const histMap: Record<string, Record<string, number>> = {};
+
+            existingHist.forEach(row => {
+                if (row.month) {
+                    histMap[row.month] = { ...row.prices };
+                }
+            });
+
+            foundHistoricalCurves.forEach(item => {
+                item.curve.forEach(row => {
+                    if (!histMap[row.month]) histMap[row.month] = {};
+                    Object.assign(histMap[row.month], row.prices);
+                });
+            });
+
+            const updatedHistCurve: ForwardCurveRow[] = Object.entries(histMap)
+                .map(([month, prices]) => ({ month, prices }))
+                .sort((a, b) => a.month.localeCompare(b.month));
+
+            await saveHistoricalCurve(updatedHistCurve);
+            toast.success(`Imported Historical Prices (${updatedHistCurve.length} months) into Historical Curve.`);
         }
 
         const processedJarvisRows = Object.values(mergedData).map((parsedFields: any) => {
@@ -610,7 +690,7 @@ export const CargoList: React.FC<CargoListProps> = ({
         row1[`Buy Price ${i} Weightage`] = (p as any)[`buyPrice${i}Weightage`] || 0;
         row1[`Buy Price ${i} slope`] = (p as any)[`buyPrice${i}Slope`] || 0;
         row1[`Buy Price Index ${i}`] = (p as any)[`buyPriceIndex${i}`] || '';
-        row1[`Buy Price ${i} Month Definition`] = (p as any)[`buyPrice${i}MonthDef`] || '';
+        row1[`Buy Price ${i} Month Definition`] = normalizeMonthDef((p as any)[`buyPrice${i}MonthDef`]);
         row1[`Buy Price ${i} constant`] = (p as any)[`buyPrice${i}Constant`] || 0;
       }
       rows.push(row1);
@@ -632,7 +712,7 @@ export const CargoList: React.FC<CargoListProps> = ({
             row2[`Buy Price ${i} Weightage`] = (p as any)[`tier2BuyPrice${i}Weightage`] || 0;
             row2[`Buy Price ${i} slope`] = (p as any)[`tier2BuyPrice${i}Slope`] || 0;
             row2[`Buy Price Index ${i}`] = (p as any)[`tier2BuyPriceIndex${i}`] || '';
-            row2[`Buy Price ${i} Month Definition`] = (p as any)[`tier2BuyPrice${i}MonthDef`] || '';
+            row2[`Buy Price ${i} Month Definition`] = normalizeMonthDef((p as any)[`tier2BuyPrice${i}MonthDef`]);
             row2[`Buy Price ${i} constant`] = (p as any)[`tier2BuyPrice${i}Constant`] || 0;
         }
         rows.push(row2);
@@ -655,7 +735,7 @@ export const CargoList: React.FC<CargoListProps> = ({
         row1[`Sell Price ${i} Weightage`] = (p as any)[`sellPrice${i}Weightage`] || 0;
         row1[`Sell Price ${i} slope`] = (p as any)[`sellPrice${i}Slope`] || 0;
         row1[`Sell Price Index ${i}`] = (p as any)[`sellPriceIndex${i}`] || '';
-        row1[`Sell Price ${i} Month Definition`] = (p as any)[`sellPrice${i}MonthDef`] || '';
+        row1[`Sell Price ${i} Month Definition`] = normalizeMonthDef((p as any)[`sellPrice${i}MonthDef`]);
         row1[`Sell Price ${i} constant`] = (p as any)[`sellPrice${i}Constant`] || 0;
       }
       rows.push(row1);
@@ -674,7 +754,7 @@ export const CargoList: React.FC<CargoListProps> = ({
             row2[`Sell Price ${i} Weightage`] = (p as any)[`tier2SellPrice${i}Weightage`] || 0;
             row2[`Sell Price ${i} slope`] = (p as any)[`tier2SellPrice${i}Slope`] || 0;
             row2[`Sell Price Index ${i}`] = (p as any)[`tier2SellPriceIndex${i}`] || '';
-            row2[`Sell Price ${i} Month Definition`] = (p as any)[`tier2SellPrice${i}MonthDef`] || '';
+            row2[`Sell Price ${i} Month Definition`] = normalizeMonthDef((p as any)[`tier2SellPrice${i}MonthDef`]);
             row2[`Sell Price ${i} constant`] = (p as any)[`tier2SellPrice${i}Constant`] || 0;
         }
         rows.push(row2);

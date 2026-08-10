@@ -62,7 +62,7 @@ import {
   Line
 } from 'recharts';
 import { ReconciliationData, ColumnFilterPopover } from './DiscrepancyCheck';
-import { isUnallocatedBuyer } from '../utils/trmsEngine';
+import { isUnallocatedBuyer, getEstimatedSellRows } from '../utils/trmsEngine';
 import { toast } from 'react-hot-toast';
 import * as XLSX from 'xlsx';
 
@@ -1050,6 +1050,10 @@ export const TrmsSummaryTable: React.FC<TrmsSummaryTableProps> = ({ trmsData, vi
         }
       }
 
+      if (sellCalcRows.length === 0) {
+        sellCalcRows = getEstimatedSellRows(underlyingRows);
+      }
+
       // Filter buyCalcRows / sellCalcRows to prefer "Actual" line items over "Nominated" if "Actual" items exist to prevent duplication
       const getVolType = (r: any) => String(r['Volume Type'] || r['Vol Type'] || r['VolType'] || r['Volume_Type'] || '').trim();
 
@@ -1267,8 +1271,10 @@ export const TrmsSummaryTable: React.FC<TrmsSummaryTableProps> = ({ trmsData, vi
           salesVolume += absVol;
           addUnitVolume(salesVolumeByUnit, absVol, unit);
         }
-        if (!isNaN(val)) {
+        if (!isNaN(val) && Math.abs(val) > 0) {
           salesRevenue += Math.abs(val);
+        } else if (absVol > 0 && !isNaN(price) && Math.abs(price) > 0) {
+          salesRevenue += absVol * Math.abs(price);
         }
         if (!isNaN(price) && Math.abs(price) > 0) {
           if (absVol > 0) {
@@ -2457,7 +2463,7 @@ export const TrmsSummaryTable: React.FC<TrmsSummaryTableProps> = ({ trmsData, vi
 
     // Physical P&L (Excl. Hedging): (Revenue - Cost) + SRC
     const aggregatePhysicalPnL = (aggregateSalesRevenue - aggregatePurchaseCost) + aggregateShippingCosts;
-    const aggregatePhysicalPnLChange = (aggregateSalesRevenuePnLChange - aggregatePurchaseCostPnLChange) + aggregateShippingCostPnLChange;
+    const aggregatePhysicalPnLChange = aggregateSalesRevenuePnLChange + aggregatePurchaseCostPnLChange + aggregateShippingCostPnLChange;
 
     // Aggregate P&L tracks (Sales - Purchase) + Hedging + SRC
     const aggregatePnL = aggregateSalesRevenue - aggregatePurchaseCost + aggregateShippingCosts + aggregateHedgingPnL;

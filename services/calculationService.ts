@@ -403,6 +403,25 @@ export const getFixationDate = (index: string, pricingMonthStr: string, holidayM
     return new Date(Date.UTC(y, pricingMonthIndex, 1));
 };
 
+export function normalizeMonthDef(def?: string | number): string {
+    if (def === undefined || def === null || def === '') return 'n';
+    const str = String(def).trim();
+    if (!str) return 'n';
+    
+    // Match 3-tuple like 6,0,1 or (6,0,1) or 6, 0, 1 or (6, 0, 1)
+    const avgMatch = str.match(/\(?\s*(\d+)\s*,\s*(\d+)\s*,\s*(\d+)\s*\)?/);
+    if (avgMatch) {
+        return `(${avgMatch[1]},${avgMatch[2]},${avgMatch[3]})`;
+    }
+
+    const lower = str.toLowerCase();
+    if (lower === 'none') return 'None';
+    if (lower === 'n') return 'n';
+    if (lower.startsWith('n-') || lower.startsWith('n+')) return lower;
+
+    return str;
+}
+
 export const getPricingMonths = (refDateStr: string | undefined, monthDef: string = 'n'): string[] => {
     if (!refDateStr) return [];
     const base = new Date(refDateStr);
@@ -417,10 +436,11 @@ export const getPricingMonths = (refDateStr: string | undefined, monthDef: strin
     
     const avgMatch = cleanDef.match(/\(?(\d+),(\d+),(\d+)\)?/);
     if (avgMatch) {
-        const count = parseInt(avgMatch[1]);
-        const lag = parseInt(avgMatch[2]);
+        const count = parseInt(avgMatch[1], 10);
+        const lag = parseInt(avgMatch[2], 10);
+        const step = parseInt(avgMatch[3], 10) || 1;
         for (let i = 0; i < count; i++) {
-            const t = new Date(d.getFullYear(), d.getMonth() - lag - i, 15);
+            const t = new Date(d.getFullYear(), d.getMonth() - lag - (i * step), 15);
             results.push(`${t.getFullYear()}-${String(t.getMonth() + 1).padStart(2, '0')}`);
         }
     } else {
@@ -541,8 +561,9 @@ function getIndexPriceInternal(index: string, refDateStr: string, monthDef: stri
         if (avgMatch) {
             const count = parseInt(avgMatch[1], 10);
             const lag = parseInt(avgMatch[2], 10);
-            for (let i = 1; i <= count; i++) {
-                const date = new Date(Date.UTC(baseYear, baseMonth0 - lag - i + 1, 15));
+            const step = parseInt(avgMatch[3], 10) || 1;
+            for (let i = 0; i < count; i++) {
+                const date = new Date(Date.UTC(baseYear, baseMonth0 - lag - (i * step), 15));
                 const y = date.getUTCFullYear();
                 const m = String(date.getUTCMonth() + 1).padStart(2, '0');
                 targetMonths.push(`${y}-${m}`);
