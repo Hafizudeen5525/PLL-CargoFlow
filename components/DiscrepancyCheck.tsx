@@ -297,6 +297,56 @@ const getMonthStr = (dateStr: string) => {
     return `${d.getUTCFullYear()}-${String(d.getUTCMonth() + 1).padStart(2, '0')}`;
 };
 
+function parseMonthOrDate(val: any): { year: string; monthName: string; rawVal: string } | null {
+  if (val === null || val === undefined || val === '' || val === '—' || val === '-') return null;
+  const str = String(val).trim();
+
+  const monthAbbrs: Record<string, string> = {
+    jan: 'January', feb: 'February', mar: 'March', apr: 'April', may: 'May', jun: 'June',
+    jul: 'July', aug: 'August', sep: 'September', oct: 'October', nov: 'November', dec: 'December'
+  };
+
+  const m1 = str.match(/^([a-zA-Z]{3,9})[-_\s]?(\d{2,4})$/);
+  if (m1) {
+    const mStr = m1[1].substring(0, 3).toLowerCase();
+    let yStr = m1[2];
+    if (yStr.length === 2) yStr = '20' + yStr;
+    if (monthAbbrs[mStr]) {
+      return {
+        year: yStr,
+        monthName: monthAbbrs[mStr],
+        rawVal: str
+      };
+    }
+  }
+
+  const m2 = str.match(/^(\d{4})[-_](\d{1,2})$/);
+  if (m2) {
+    const yStr = m2[1];
+    const monthIdx = parseInt(m2[2], 10) - 1;
+    const monthNames = ['January', 'February', 'March', 'April', 'May', 'June', 'July', 'August', 'September', 'October', 'November', 'December'];
+    if (monthIdx >= 0 && monthIdx < 12) {
+      return {
+        year: yStr,
+        monthName: monthNames[monthIdx],
+        rawVal: str
+      };
+    }
+  }
+
+  const d = new Date(str);
+  if (!isNaN(d.getTime())) {
+    const monthNames = ['January', 'February', 'March', 'April', 'May', 'June', 'July', 'August', 'September', 'October', 'November', 'December'];
+    return {
+      year: d.getUTCFullYear().toString(),
+      monthName: monthNames[d.getUTCMonth()],
+      rawVal: str
+    };
+  }
+
+  return null;
+}
+
 export const DiscrepancyCheck: React.FC<DiscrepancyCheckProps> = ({ 
   profiles, 
   trmsData, 
@@ -423,6 +473,7 @@ export const DiscrepancyCheck: React.FC<DiscrepancyCheckProps> = ({
   const [reconPnlBucketFilter, setReconPnlBucketFilter] = useState<string>('all');
   const [reconOptimizationFilter, setReconOptimizationFilter] = useState<string>('all');
   const [reconUnallocatedFilter, setReconUnallocatedFilter] = useState<string>('all');
+  const [reconFilterSource, setReconFilterSource] = useState<'both' | 'app' | 'trms'>('both');
   const [selectedEodDate, setSelectedEodDate] = useState<string>('all');
   const [selectedYears, setSelectedYears] = useState<Set<string>>(new Set(['all']));
   const [showYearFilterMenu, setShowYearFilterMenu] = useState(false);
@@ -1100,15 +1151,33 @@ export const DiscrepancyCheck: React.FC<DiscrepancyCheckProps> = ({
       }
 
       if (reconPnlBucketFilter !== 'all') {
-        if (row.app.pnlBucket !== reconPnlBucketFilter && row.trms.pnlBucket !== reconPnlBucketFilter) return false;
+        if (reconFilterSource === 'app') {
+          if (row.app.pnlBucket !== reconPnlBucketFilter) return false;
+        } else if (reconFilterSource === 'trms') {
+          if (row.trms.pnlBucket !== reconPnlBucketFilter) return false;
+        } else {
+          if (row.app.pnlBucket !== reconPnlBucketFilter && row.trms.pnlBucket !== reconPnlBucketFilter) return false;
+        }
       }
 
       if (reconOptimizationFilter !== 'all') {
-        if (row.app.optimization !== reconOptimizationFilter && row.trms.optimization !== reconOptimizationFilter) return false;
+        if (reconFilterSource === 'app') {
+          if (row.app.optimization !== reconOptimizationFilter) return false;
+        } else if (reconFilterSource === 'trms') {
+          if (row.trms.optimization !== reconOptimizationFilter) return false;
+        } else {
+          if (row.app.optimization !== reconOptimizationFilter && row.trms.optimization !== reconOptimizationFilter) return false;
+        }
       }
 
       if (reconUnallocatedFilter !== 'all') {
-        if (row.app.unallocatedCargo !== reconUnallocatedFilter && row.trms.unallocatedCargo !== reconUnallocatedFilter) return false;
+        if (reconFilterSource === 'app') {
+          if (row.app.unallocatedCargo !== reconUnallocatedFilter) return false;
+        } else if (reconFilterSource === 'trms') {
+          if (row.trms.unallocatedCargo !== reconUnallocatedFilter) return false;
+        } else {
+          if (row.app.unallocatedCargo !== reconUnallocatedFilter && row.trms.unallocatedCargo !== reconUnallocatedFilter) return false;
+        }
       }
 
       if (selectedYears.size > 0 && !selectedYears.has('all')) {
@@ -1133,7 +1202,7 @@ export const DiscrepancyCheck: React.FC<DiscrepancyCheckProps> = ({
 
       return true;
     });
-  }, [reconciliationData, searchTerm, reconStatusFilter, reconGroupFilter, reconPnlBucketFilter, reconOptimizationFilter, reconUnallocatedFilter, selectedYears]);
+  }, [reconciliationData, searchTerm, reconStatusFilter, reconGroupFilter, reconPnlBucketFilter, reconOptimizationFilter, reconUnallocatedFilter, reconFilterSource, selectedYears]);
 
   const currentRawData = useMemo(() => {
     if (activeTab === 'reconcile') return filteredReconciliationData;
@@ -1170,6 +1239,62 @@ export const DiscrepancyCheck: React.FC<DiscrepancyCheckProps> = ({
     });
   }, [currentRawData, activeTab]);
 
+  const getReconcileRowValues = (row: ReconciliationRow, header: string, source: 'both' | 'app' | 'trms'): any[] => {
+    const vals: any[] = [];
+    const addVal = (v: any) => {
+      if (v !== undefined && v !== null && v !== '' && v !== '—' && v !== '-') {
+        vals.push(v);
+      }
+    };
+
+    if (header === 'Strategy Name') {
+      addVal(row.strategyName);
+      return vals;
+    }
+
+    if (source === 'app' || source === 'both') {
+      if (header === 'Buyer') addVal(row.app.buyer);
+      else if (header === 'P&L Bucket') addVal(row.app.pnlBucket);
+      else if (header === 'Optimization') addVal(row.app.optimization);
+      else if (header === 'Unallocated Cargo') addVal(row.app.unallocatedCargo);
+      else if (header === 'Purchase Volume') addVal(row.app.buyVolTotal);
+      else if (header === 'Sales Volume') addVal(row.app.sellVolTotal);
+      else if (header === 'Purchase Price') addVal(row.app.buyPriceEffective);
+      else if (header === 'Sales Price') addVal(row.app.sellPriceEffective);
+      else if (header === 'SRC Costs') addVal(row.app.src);
+      else if (header === 'Loading Month') {
+        if (row.app.loadingMonth && row.app.loadingMonth !== '—') addVal(row.app.loadingMonth);
+        else if (row.app.loadingDate) addVal(row.app.loadingDate);
+      }
+      else if (header === 'Delivery Month') {
+        if (row.app.deliveryMonth && row.app.deliveryMonth !== '—') addVal(row.app.deliveryMonth);
+        else if (row.app.deliveryDate) addVal(row.app.deliveryDate);
+      }
+    }
+
+    if (source === 'trms' || source === 'both') {
+      if (header === 'Buyer') addVal(row.trms.buyer);
+      else if (header === 'P&L Bucket') addVal(row.trms.pnlBucket);
+      else if (header === 'Optimization') addVal(row.trms.optimization);
+      else if (header === 'Unallocated Cargo') addVal(row.trms.unallocatedCargo);
+      else if (header === 'Purchase Volume') addVal(row.trms.buyVolTotal);
+      else if (header === 'Sales Volume') addVal(row.trms.sellVolTotal);
+      else if (header === 'Purchase Price') addVal(row.trms.buyPriceEffective);
+      else if (header === 'Sales Price') addVal(row.trms.sellPriceEffective);
+      else if (header === 'SRC Costs') addVal(row.trms.src);
+      else if (header === 'Loading Month') {
+        if (row.trms.loadingMonth && row.trms.loadingMonth !== '—') addVal(row.trms.loadingMonth);
+        else if (row.trms.loadingDate) addVal(row.trms.loadingDate);
+      }
+      else if (header === 'Delivery Month') {
+        if (row.trms.deliveryMonth && row.trms.deliveryMonth !== '—') addVal(row.trms.deliveryMonth);
+        else if (row.trms.deliveryDate) addVal(row.trms.deliveryDate);
+      }
+    }
+
+    return Array.from(new Set(vals));
+  };
+
   const filterData = useMemo(() => {
     const values: Record<string, any[]> = {};
     const strategyHierarchies: Record<string, StrategyHierarchy> = {};
@@ -1177,7 +1302,7 @@ export const DiscrepancyCheck: React.FC<DiscrepancyCheckProps> = ({
 
     headers.forEach(header => {
       const isStrategy = header === 'Strategy Name';
-      const isDate = header.toLowerCase().includes('date');
+      const isDateOrMonth = header.toLowerCase().includes('date') || header.toLowerCase().includes('month');
 
       if (isStrategy) {
           const hierarchy: StrategyHierarchy = {};
@@ -1190,31 +1315,29 @@ export const DiscrepancyCheck: React.FC<DiscrepancyCheckProps> = ({
           });
           Object.keys(hierarchy).forEach(g => hierarchy[g].sort());
           strategyHierarchies[header] = hierarchy;
-      } else if (isDate) {
+      } else if (isDateOrMonth) {
           const hierarchy: DateHierarchy = {};
           currentRawData.forEach((r: any) => {
-              let val: any;
+              let rawVals: any[] = [];
               if (activeTab === 'reconcile') {
-                  const rec = r as ReconciliationRow;
-                  if (header === 'Loading Month') val = rec.app.loadingDate;
-                  else if (header === 'Delivery Month') val = rec.app.deliveryDate;
-              } else val = r[header];
+                  rawVals = getReconcileRowValues(r as ReconciliationRow, header, reconFilterSource);
+              } else {
+                  if (r[header]) rawVals = [r[header]];
+              }
 
-              if (!val) return;
-              const d = new Date(val);
-              if (isNaN(d.getTime())) return;
-
-              const year = d.getUTCFullYear().toString();
-              const monthNames = ['January', 'February', 'March', 'April', 'May', 'June', 'July', 'August', 'September', 'October', 'November', 'December'];
-              const month = monthNames[d.getUTCMonth()];
-              const day = val; // Keep original string as the leaf value
-
-              if (!hierarchy[year]) hierarchy[year] = {};
-              if (!hierarchy[year][month]) hierarchy[year][month] = [];
-              if (!hierarchy[year][month].includes(day)) hierarchy[year][month].push(day);
+              rawVals.forEach(val => {
+                  const parsed = parseMonthOrDate(val);
+                  if (!parsed) return;
+                  const { year, monthName, rawVal } = parsed;
+                  if (!hierarchy[year]) hierarchy[year] = {};
+                  if (!hierarchy[year][monthName]) hierarchy[year][monthName] = [];
+                  if (!hierarchy[year][monthName].includes(rawVal)) {
+                      hierarchy[year][monthName].push(rawVal);
+                  }
+              });
           });
           
-          // Sort years descending, months by calendar order, days ascending
+          // Sort years descending, months by calendar order, values ascending
           const sortedHierarchy: DateHierarchy = {};
           const monthOrder = ['January', 'February', 'March', 'April', 'May', 'June', 'July', 'August', 'September', 'October', 'November', 'December'];
           
@@ -1226,29 +1349,22 @@ export const DiscrepancyCheck: React.FC<DiscrepancyCheckProps> = ({
           });
           dateHierarchies[header] = sortedHierarchy;
       } else {
-          const uniqueSet = new Set(currentRawData.map((r: any) => {
+          const uniqueSet = new Set<any>();
+          currentRawData.forEach((r: any) => {
               if (activeTab === 'reconcile') {
-                  const rec = r as ReconciliationRow;
-                  if (header === 'Buyer') return rec.app.buyer;
-                  if (header === 'Purchase Price') return rec.app.buyPrice;
-                  if (header === 'Purchase Volume') return rec.app.buyVol;
-                  if (header === 'Sales Price') return rec.app.sellPrice;
-                  if (header === 'Sales Volume') return rec.app.sellVol;
-                  if (header === 'Purchase Cost') return rec.trms.trmsPurchaseValue;
-                  if (header === 'Sales Revenue') return rec.trms.trmsSalesValue;
-                  if (header === 'Loading Month') return rec.app.loadingDate;
-                  if (header === 'Delivery Month') return rec.app.deliveryDate;
-                  if (header === 'Volume Type') return rec.trms.volumeType;
-                  if (header === 'SRC Components') return rec.trms.src;
-                  if (header === 'PnL Sync') return rec.discrepancies.size > 0 ? `${rec.discrepancies.size} Differences` : 'Perfect Sync';
+                  const vals = getReconcileRowValues(r as ReconciliationRow, header, reconFilterSource);
+                  vals.forEach(v => uniqueSet.add(v));
+              } else {
+                  if (r[header] !== undefined && r[header] !== null && r[header] !== '') {
+                      uniqueSet.add(r[header]);
+                  }
               }
-              return r[header];
-          }));
+          });
           values[header] = Array.from(uniqueSet).sort();
       }
     });
     return { values, strategyHierarchies, dateHierarchies };
-  }, [headers, activeTab, currentRawData]);
+  }, [headers, activeTab, currentRawData, reconFilterSource]);
 
   const processedData = useMemo(() => {
     let result = [...currentRawData];
@@ -1258,9 +1374,10 @@ export const DiscrepancyCheck: React.FC<DiscrepancyCheckProps> = ({
         if (activeTab === 'reconcile') {
           const r = row as ReconciliationRow;
           return r.strategyName.toLowerCase().includes(lower) || 
-                 r.app.loadingDate.toLowerCase().includes(lower) ||
-                 r.app.deliveryDate.toLowerCase().includes(lower) ||
-                 r.trms.volumeType.toLowerCase().includes(lower);
+                 (r.app.buyer && r.app.buyer.toLowerCase().includes(lower)) ||
+                 (r.trms.buyer && r.trms.buyer.toLowerCase().includes(lower)) ||
+                 (r.app.loadingMonth && r.app.loadingMonth.toLowerCase().includes(lower)) ||
+                 (r.trms.loadingMonth && r.trms.loadingMonth.toLowerCase().includes(lower));
         }
         return Object.values(row).some(v => String(v).toLowerCase().includes(lower));
       });
@@ -1269,24 +1386,12 @@ export const DiscrepancyCheck: React.FC<DiscrepancyCheckProps> = ({
       const vals = selectedValues as Set<any>;
       if (vals.size > 0) {
         result = result.filter(row => {
-          let val: any;
           if (activeTab === 'reconcile') {
-            const r = row as ReconciliationRow;
-            if (header === 'Strategy Name') val = r.strategyName;
-            else if (header === 'Purchase Price') val = r.app.buyPrice;
-            else if (header === 'Purchase Volume') val = r.app.buyVol;
-            else if (header === 'Sales Price') val = r.app.sellPrice;
-            else if (header === 'Sales Volume') val = r.app.sellVol;
-            else if (header === 'Purchase Cost') val = r.trms.trmsPurchaseValue;
-            else if (header === 'Sales Revenue') val = r.trms.trmsSalesValue;
-            else if (header === 'Loading Month') val = r.app.loadingDate;
-            else if (header === 'Delivery Month') val = r.app.deliveryDate;
-            else if (header === 'Volume Type') val = r.trms.volumeType;
-            else if (header === 'Price Status') val = r.trms.sellLegs.map(l => l.priceStatus).join(', ');
-            else if (header === 'SRC Components') val = r.trms.src;
-            else if (header === 'PnL Sync') val = r.discrepancies.size > 0 ? `${r.discrepancies.size} Differences` : 'Perfect Sync';
-          } else val = row[header];
-          return vals.has(val);
+            const rowVals = getReconcileRowValues(row as ReconciliationRow, header, reconFilterSource);
+            return rowVals.some(v => vals.has(v));
+          } else {
+            return vals.has((row as any)[header]);
+          }
         });
       }
     });
@@ -1296,35 +1401,22 @@ export const DiscrepancyCheck: React.FC<DiscrepancyCheckProps> = ({
         let aVal: any, bVal: any;
         if (activeTab === 'reconcile') {
           const ar = a as ReconciliationRow, br = b as ReconciliationRow;
-          const getM = (r: ReconciliationRow) => {
-            if (key === 'Strategy Name') return r.strategyName;
-            if (key === 'Purchase Price') return r.app.buyPrice;
-            if (key === 'Purchase Volume') return r.app.buyVol;
-            if (key === 'Sales Price') return r.app.sellPrice;
-            if (key === 'Sales Volume') return r.app.sellVol;
-            if (key === 'Purchase Cost') return r.trms.trmsPurchaseValue;
-            if (key === 'Sales Revenue') return r.trms.trmsSalesValue;
-            if (key === 'Loading Month') return r.app.loadingDate;
-            if (key === 'Delivery Month') return r.app.deliveryDate;
-            if (key === 'Volume Type') return r.trms.volumeType;
-            if (key === 'Price Status') return r.trms.sellLegs.map(l => l.priceStatus).join(', ');
-            if (key === 'SRC Components') return r.trms.src;
-            if (key === 'PnL Sync') return r.discrepancies.size;
-            return null;
-          };
-          aVal = getM(ar); bVal = getM(br);
-        } else { aVal = a[key!]; bVal = b[key!]; }
+          const aVals = getReconcileRowValues(ar, key, reconFilterSource);
+          const bVals = getReconcileRowValues(br, key, reconFilterSource);
+          aVal = aVals.length > 0 ? aVals[0] : null;
+          bVal = bVals.length > 0 ? bVals[0] : null;
+        } else { aVal = (a as any)[key!]; bVal = (b as any)[key!]; }
         if (aVal === bVal) return 0; if (aVal == null) return 1; if (bVal == null) return -1;
         return direction === 'asc' ? (aVal > bVal ? 1 : -1) : (aVal > bVal ? -1 : 1);
       });
     }
     return result;
-  }, [currentRawData, debouncedSearch, activeFilters, sortConfig, activeTab]);
+  }, [currentRawData, debouncedSearch, activeFilters, sortConfig, activeTab, reconFilterSource]);
 
   // Reset pagination page when filters or search or tab change
   useEffect(() => {
     setReconCurrentPage(1);
-  }, [searchTerm, debouncedSearch, reconStatusFilter, reconGroupFilter, reconPnlBucketFilter, reconOptimizationFilter, reconUnallocatedFilter, selectedYears, activeFilters, activeTab, reconPageSize]);
+  }, [searchTerm, debouncedSearch, reconStatusFilter, reconGroupFilter, reconPnlBucketFilter, reconOptimizationFilter, reconUnallocatedFilter, reconFilterSource, selectedYears, activeFilters, activeTab, reconPageSize]);
 
   const totalReconPages = useMemo(() => {
     if (reconPageSize === 0) return 1;
@@ -2105,6 +2197,35 @@ export const DiscrepancyCheck: React.FC<DiscrepancyCheckProps> = ({
                       )}
                     </div>
 
+                    {/* Filter Target Segmented Control */}
+                    <div className="flex items-center bg-slate-800 p-0.5 rounded-lg border border-slate-700">
+                      <span className="px-2 text-[9px] font-black uppercase text-slate-400 tracking-wider">Target:</span>
+                      <button
+                        type="button"
+                        onClick={() => setReconFilterSource('both')}
+                        className={`px-2 py-0.5 rounded-md text-[10px] font-bold transition-all ${reconFilterSource === 'both' ? 'bg-indigo-600 text-white shadow-sm' : 'text-slate-400 hover:text-white'}`}
+                        title="Filter matching App or TRMS data"
+                      >
+                        Both
+                      </button>
+                      <button
+                        type="button"
+                        onClick={() => setReconFilterSource('app')}
+                        className={`px-2 py-0.5 rounded-md text-[10px] font-bold transition-all ${reconFilterSource === 'app' ? 'bg-indigo-600 text-white shadow-sm' : 'text-slate-400 hover:text-white'}`}
+                        title="Filter strictly by App cargo data"
+                      >
+                        App
+                      </button>
+                      <button
+                        type="button"
+                        onClick={() => setReconFilterSource('trms')}
+                        className={`px-2 py-0.5 rounded-md text-[10px] font-bold transition-all ${reconFilterSource === 'trms' ? 'bg-indigo-600 text-white shadow-sm' : 'text-slate-400 hover:text-white'}`}
+                        title="Filter strictly by TRMS data"
+                      >
+                        TRMS
+                      </button>
+                    </div>
+
                     {/* Group Dropdown */}
                     <select value={reconGroupFilter} onChange={(e) => setReconGroupFilter(e.target.value)} className="bg-slate-800 text-slate-200 border border-slate-700 text-[10px] font-bold rounded-lg px-2.5 py-1 focus:ring-1 focus:ring-indigo-500 outline-none">
                       <option value="all">Group: All ({allGroups.length})</option>
@@ -2134,16 +2255,18 @@ export const DiscrepancyCheck: React.FC<DiscrepancyCheckProps> = ({
                     </select>
                   </div>
 
-                  {(reconStatusFilter !== 'all' || reconGroupFilter !== 'all' || reconPnlBucketFilter !== 'all' || reconOptimizationFilter !== 'all' || reconUnallocatedFilter !== 'all' || !selectedYears.has('all')) && (
+                  {(reconStatusFilter !== 'all' || reconGroupFilter !== 'all' || reconPnlBucketFilter !== 'all' || reconOptimizationFilter !== 'all' || reconUnallocatedFilter !== 'all' || reconFilterSource !== 'both' || !selectedYears.has('all') || Object.keys(activeFilters).some(k => (activeFilters[k]?.size ?? 0) > 0)) && (
                     <button onClick={() => {
                       setReconStatusFilter('all');
                       setReconGroupFilter('all');
                       setReconPnlBucketFilter('all');
                       setReconOptimizationFilter('all');
                       setReconUnallocatedFilter('all');
+                      setReconFilterSource('both');
                       setSelectedYears(new Set(['all']));
+                      setActiveFilters({});
                     }} className="text-[10px] font-bold text-rose-400 hover:text-rose-300 underline">
-                      Reset Quick Filters
+                      Reset Filters
                     </button>
                   )}
                 </div>
