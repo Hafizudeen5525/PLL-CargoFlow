@@ -74,6 +74,7 @@ export interface ReconciliationRow {
         src: number;
         loadingMonth: string;
         deliveryMonth: string;
+        hedgingPnL?: number;
         isTiered?: boolean;
         // Backwards compatibility aliases
         buyPrice: number;
@@ -120,6 +121,7 @@ export interface ReconciliationRow {
         src: number;
         loadingMonth: string;
         deliveryMonth: string;
+        hedgingPnL?: number;
         buyTiers: Array<{ vol: number; unit: string; val: number; price: number }>;
         sellTiers: Array<{ vol: number; unit: string; val: number; price: number }>;
         rawRows?: any[];
@@ -946,10 +948,17 @@ export const DiscrepancyCheck: React.FC<DiscrepancyCheckProps> = ({
         if (appUnallocatedCargo !== '—' && trmsUnallocatedCargo !== '—' && appUnallocatedCargo !== trmsUnallocatedCargo) {
           discrepancies.add('Unallocated Cargo');
         }
-        if (Math.abs(appBuyVolTotal - trmsBuyVolTotal) > 1.0) {
+        const calcVolPctDiff = (v1: number, v2: number) => {
+          const diff = Math.abs(v1 - v2);
+          if (diff <= 0.1) return 0;
+          const maxVal = Math.max(Math.abs(v1), Math.abs(v2));
+          return maxVal > 0 ? (diff / maxVal) * 100 : 0;
+        };
+
+        if (calcVolPctDiff(appBuyVolTotal, trmsBuyVolTotal) >= 5) {
           discrepancies.add('Buy Vol');
         }
-        if (Math.abs(appSellVolTotal - trmsSellVolTotal) > 1.0) {
+        if (calcVolPctDiff(appSellVolTotal, trmsSellVolTotal) >= 5) {
           discrepancies.add('Sell Vol');
         }
         if (Math.abs(appBuyPriceEffective - trmsBuyPriceEffective) > 0.01) {
@@ -1005,6 +1014,7 @@ export const DiscrepancyCheck: React.FC<DiscrepancyCheckProps> = ({
           src: appSrc,
           loadingMonth: appLoadingMonth,
           deliveryMonth: appDeliveryMonth,
+          hedgingPnL: 0,
           isTiered: isAppTiered,
           // Backwards compatibility
           buyPrice: appBuyPriceEffective,
@@ -1051,6 +1061,7 @@ export const DiscrepancyCheck: React.FC<DiscrepancyCheckProps> = ({
           src: trmsSrc,
           loadingMonth: trmsLoadingMonth,
           deliveryMonth: trmsDeliveryMonth,
+          hedgingPnL: trmsData.trmsAgg[strategyName]?.hedgingPnL || 0,
           buyTiers: trms?.buyTiers || [],
           sellTiers: trms?.sellTiers || [],
           rawRows: trms?.underlyingRows || [],
@@ -1121,7 +1132,7 @@ export const DiscrepancyCheck: React.FC<DiscrepancyCheckProps> = ({
     });
 
     return rows;
-  }, [profiles, trmsEngineResult]);
+  }, [profiles, trmsEngineResult, trmsData.trmsAgg]);
 
   const allGroups = useMemo(() => {
     return Array.from(new Set(reconciliationData.map(r => r.group))).filter(Boolean).sort();
@@ -1613,13 +1624,20 @@ export const DiscrepancyCheck: React.FC<DiscrepancyCheckProps> = ({
     const trmsSellVol = dataToRender.reduce((acc: number, r: any) => acc + (r.trms?.sellVolTotal || 0), 0);
     const sellVolDiff = appSellVol - trmsSellVol;
 
+    const calcVolPctDiff = (v1: number, v2: number) => {
+      const diff = Math.abs(v1 - v2);
+      if (diff <= 0.1) return 0;
+      const maxVal = Math.max(Math.abs(v1), Math.abs(v2));
+      return maxVal > 0 ? (diff / maxVal) * 100 : 0;
+    };
+
     const matchedRows = processedData.filter((r: any) => r.foundInApp && r.foundInTrms);
     const fieldDiffs = {
       pnlBucket: matchedRows.filter((r: any) => r.diffs?.pnlBucket).length,
       optimization: matchedRows.filter((r: any) => r.diffs?.optimization).length,
       unallocatedCargo: matchedRows.filter((r: any) => r.diffs?.unallocatedCargo).length,
-      buyVol: matchedRows.filter((r: any) => Math.abs(r.app.buyVolTotal - r.trms.buyVolTotal) > 0.1).length,
-      sellVol: matchedRows.filter((r: any) => Math.abs(r.app.sellVolTotal - r.trms.sellVolTotal) > 0.1).length,
+      buyVol: matchedRows.filter((r: any) => calcVolPctDiff(r.app?.buyVolTotal || 0, r.trms?.buyVolTotal || 0) >= 5).length,
+      sellVol: matchedRows.filter((r: any) => calcVolPctDiff(r.app?.sellVolTotal || 0, r.trms?.sellVolTotal || 0) >= 5).length,
       buyPrice: matchedRows.filter((r: any) => Math.abs(r.diffs?.buyPrice || 0) > 0.01).length,
       sellPrice: matchedRows.filter((r: any) => Math.abs(r.diffs?.sellPrice || 0) > 0.01).length,
       src: matchedRows.filter((r: any) => Math.abs(r.diffs?.src || 0) > 1.0).length,
@@ -1627,8 +1645,33 @@ export const DiscrepancyCheck: React.FC<DiscrepancyCheckProps> = ({
       deliveryMonth: matchedRows.filter((r: any) => r.diffs?.deliveryMonth).length,
     };
 
+    // 6 Main Financial Cards totals comparing App vs TRMS
+    const appPurchaseCostTotal = dataToRender.reduce((acc: number, r: any) => acc + (r.app?.purchaseCost || 0), 0);
+    const trmsPurchaseCostTotal = dataToRender.reduce((acc: number, r: any) => acc + (r.trms?.purchaseCost || 0), 0);
+    const purchaseCostDiff = appPurchaseCostTotal - trmsPurchaseCostTotal;
+
+    const appSalesRevenueTotal = dataToRender.reduce((acc: number, r: any) => acc + (r.app?.salesRevenue || 0), 0);
+    const trmsSalesRevenueTotal = dataToRender.reduce((acc: number, r: any) => acc + (r.trms?.salesRevenue || 0), 0);
+    const salesRevenueDiff = appSalesRevenueTotal - trmsSalesRevenueTotal;
+
+    const appSrcTotal = dataToRender.reduce((acc: number, r: any) => acc + (r.app?.src || 0), 0);
+    const trmsSrcTotal = dataToRender.reduce((acc: number, r: any) => acc + (r.trms?.src || 0), 0);
+    const srcDiff = appSrcTotal - trmsSrcTotal;
+
+    const appPhysPnLTotal = appSalesRevenueTotal - appPurchaseCostTotal - Math.abs(appSrcTotal);
+    const trmsPhysPnLTotal = trmsSalesRevenueTotal - trmsPurchaseCostTotal - Math.abs(trmsSrcTotal);
+    const physPnLDiff = appPhysPnLTotal - trmsPhysPnLTotal;
+
+    const appHedgingPnLTotal = dataToRender.reduce((acc: number, r: any) => acc + (r.app?.hedgingPnL || 0), 0);
+    const trmsHedgingPnLTotal = dataToRender.reduce((acc: number, r: any) => acc + (r.trms?.hedgingPnL || 0), 0);
+    const hedgingPnLDiff = appHedgingPnLTotal - trmsHedgingPnLTotal;
+
+    const appTotalPnLTotal = appPhysPnLTotal + appHedgingPnLTotal;
+    const trmsTotalPnLTotal = trmsPhysPnLTotal + trmsHedgingPnLTotal;
+    const totalPnLDiff = appTotalPnLTotal - trmsTotalPnLTotal;
+
     const summaryCards = `
-        <div style="display: grid; grid-template-columns: repeat(4, 1fr); gap: 15px; margin-bottom: 25px; font-family: sans-serif;">
+        <div style="display: grid; grid-template-columns: repeat(4, 1fr); gap: 15px; margin-bottom: 20px; font-family: sans-serif;">
             <div style="background: #0f172a; color: white; padding: 18px; border-radius: 16px; border: 1px solid #1e293b;">
                 <div style="font-size: 10px; text-transform: uppercase; color: #94a3b8; font-weight: 800; letter-spacing: 0.5px; margin-bottom: 6px;">Total Strategies</div>
                 <div style="font-size: 28px; font-weight: 900; font-family: monospace;">${totalStrategies}</div>
@@ -1638,7 +1681,7 @@ export const DiscrepancyCheck: React.FC<DiscrepancyCheckProps> = ({
             </div>
 
             <div style="background: #0f172a; color: white; padding: 18px; border-radius: 16px; border: 1px solid #1e293b;">
-                <div style="font-size: 10px; text-transform: uppercase; color: #fb7185; font-weight: 800; letter-spacing: 0.5px; margin-bottom: 6px;">Strategies with Discrepancies</div>
+                <div style="font-size: 10px; text-transform: uppercase; color: #fb7185; font-weight: 800; letter-spacing: 0.5px; margin-bottom: 6px;">Strategies with Discrepancies (≥5%)</div>
                 <div style="font-size: 28px; font-weight: 900; font-family: monospace; color: ${discrepancyStrategies > 0 ? '#f43f5e' : '#34d399'};">${discrepancyStrategies}</div>
                 <div style="font-size: 10px; color: #94a3b8; margin-top: 6px; font-weight: bold;">
                     ${totalDiscrepancyPoints} Total Discrepancy Points
@@ -1660,6 +1703,61 @@ export const DiscrepancyCheck: React.FC<DiscrepancyCheckProps> = ({
                 <div style="font-size: 12px; color: #64748b; font-family: monospace;">TRMS: ${trmsSellVol.toLocaleString()}</div>
                 <div style="font-size: 10px; font-weight: 800; margin-top: 4px; color: ${Math.abs(sellVolDiff) > 100 ? '#e11d48' : '#059669'}; font-family: monospace;">
                     Diff: ${sellVolDiff > 0 ? '+' : ''}${sellVolDiff.toLocaleString()}
+                </div>
+            </div>
+        </div>
+
+        <!-- 6 Main Financial Performance Cards Comparing App vs TRMS -->
+        <div style="background: white; border: 1px solid #e2e8f0; padding: 18px; border-radius: 16px; margin-bottom: 25px; box-shadow: 0 1px 3px rgba(0,0,0,0.05);">
+            <div style="font-size: 10px; text-transform: uppercase; color: #475569; font-weight: 900; letter-spacing: 1px; margin-bottom: 12px;">Financial Performance Comparison — 6 Main Summary Cards (App vs TRMS)</div>
+            <div style="display: grid; grid-template-columns: repeat(6, 1fr); gap: 12px; font-family: sans-serif;">
+                <div style="background: #f8fafc; padding: 12px; border-radius: 12px; border: 1px solid #e2e8f0;">
+                    <div style="font-size: 9px; text-transform: uppercase; color: #64748b; font-weight: 800; margin-bottom: 4px;">Purchase Cost</div>
+                    <div style="font-size: 13px; font-weight: 900; font-family: monospace; color: #0f172a;">App: ${Math.abs(appPurchaseCostTotal).toLocaleString()}</div>
+                    <div style="font-size: 11px; color: #64748b; font-family: monospace;">TRMS: ${Math.abs(trmsPurchaseCostTotal).toLocaleString()}</div>
+                    <div style="font-size: 10px; font-weight: 800; margin-top: 4px; color: ${Math.abs(purchaseCostDiff) > 1000 ? '#e11d48' : '#059669'}; font-family: monospace;">
+                        Diff: ${purchaseCostDiff >= 0 ? '+' : ''}${purchaseCostDiff.toLocaleString()}
+                    </div>
+                </div>
+                <div style="background: #f8fafc; padding: 12px; border-radius: 12px; border: 1px solid #e2e8f0;">
+                    <div style="font-size: 9px; text-transform: uppercase; color: #64748b; font-weight: 800; margin-bottom: 4px;">Sales Revenue</div>
+                    <div style="font-size: 13px; font-weight: 900; font-family: monospace; color: #0f172a;">App: ${Math.abs(appSalesRevenueTotal).toLocaleString()}</div>
+                    <div style="font-size: 11px; color: #64748b; font-family: monospace;">TRMS: ${Math.abs(trmsSalesRevenueTotal).toLocaleString()}</div>
+                    <div style="font-size: 10px; font-weight: 800; margin-top: 4px; color: ${Math.abs(salesRevenueDiff) > 1000 ? '#e11d48' : '#059669'}; font-family: monospace;">
+                        Diff: ${salesRevenueDiff >= 0 ? '+' : ''}${salesRevenueDiff.toLocaleString()}
+                    </div>
+                </div>
+                <div style="background: #f8fafc; padding: 12px; border-radius: 12px; border: 1px solid #e2e8f0;">
+                    <div style="font-size: 9px; text-transform: uppercase; color: #64748b; font-weight: 800; margin-bottom: 4px;">Shipping Cost (SRC)</div>
+                    <div style="font-size: 13px; font-weight: 900; font-family: monospace; color: #0f172a;">App: ${Math.abs(appSrcTotal).toLocaleString()}</div>
+                    <div style="font-size: 11px; color: #64748b; font-family: monospace;">TRMS: ${Math.abs(trmsSrcTotal).toLocaleString()}</div>
+                    <div style="font-size: 10px; font-weight: 800; margin-top: 4px; color: ${Math.abs(srcDiff) > 100 ? '#e11d48' : '#059669'}; font-family: monospace;">
+                        Diff: ${srcDiff >= 0 ? '+' : ''}${srcDiff.toLocaleString()}
+                    </div>
+                </div>
+                <div style="background: #f8fafc; padding: 12px; border-radius: 12px; border: 1px solid #e2e8f0;">
+                    <div style="font-size: 9px; text-transform: uppercase; color: #64748b; font-weight: 800; margin-bottom: 4px;">Physical P&amp;L</div>
+                    <div style="font-size: 13px; font-weight: 900; font-family: monospace; color: ${appPhysPnLTotal >= 0 ? '#059669' : '#e11d48'};">App: ${appPhysPnLTotal >= 0 ? '+' : ''}${Math.abs(appPhysPnLTotal).toLocaleString()}</div>
+                    <div style="font-size: 11px; color: #64748b; font-family: monospace;">TRMS: ${trmsPhysPnLTotal >= 0 ? '+' : ''}${Math.abs(trmsPhysPnLTotal).toLocaleString()}</div>
+                    <div style="font-size: 10px; font-weight: 800; margin-top: 4px; color: ${Math.abs(physPnLDiff) > 1000 ? '#e11d48' : '#059669'}; font-family: monospace;">
+                        Diff: ${physPnLDiff >= 0 ? '+' : ''}${physPnLDiff.toLocaleString()}
+                    </div>
+                </div>
+                <div style="background: #f8fafc; padding: 12px; border-radius: 12px; border: 1px solid #e2e8f0;">
+                    <div style="font-size: 9px; text-transform: uppercase; color: #64748b; font-weight: 800; margin-bottom: 4px;">Hedging P&amp;L</div>
+                    <div style="font-size: 13px; font-weight: 900; font-family: monospace; color: ${appHedgingPnLTotal >= 0 ? '#059669' : '#e11d48'};">App: ${appHedgingPnLTotal >= 0 ? '+' : ''}${Math.abs(appHedgingPnLTotal).toLocaleString()}</div>
+                    <div style="font-size: 11px; color: #64748b; font-family: monospace;">TRMS: ${trmsHedgingPnLTotal >= 0 ? '+' : ''}${Math.abs(trmsHedgingPnLTotal).toLocaleString()}</div>
+                    <div style="font-size: 10px; font-weight: 800; margin-top: 4px; color: ${Math.abs(hedgingPnLDiff) > 1000 ? '#e11d48' : '#059669'}; font-family: monospace;">
+                        Diff: ${hedgingPnLDiff >= 0 ? '+' : ''}${hedgingPnLDiff.toLocaleString()}
+                    </div>
+                </div>
+                <div style="background: #f8fafc; padding: 12px; border-radius: 12px; border: 1px solid #e2e8f0;">
+                    <div style="font-size: 9px; text-transform: uppercase; color: #64748b; font-weight: 800; margin-bottom: 4px;">Total Aggregate P&amp;L</div>
+                    <div style="font-size: 13px; font-weight: 900; font-family: monospace; color: ${appTotalPnLTotal >= 0 ? '#059669' : '#e11d48'};">App: ${appTotalPnLTotal >= 0 ? '+' : ''}${Math.abs(appTotalPnLTotal).toLocaleString()}</div>
+                    <div style="font-size: 11px; color: #64748b; font-family: monospace;">TRMS: ${trmsTotalPnLTotal >= 0 ? '+' : ''}${Math.abs(trmsTotalPnLTotal).toLocaleString()}</div>
+                    <div style="font-size: 10px; font-weight: 800; margin-top: 4px; color: ${Math.abs(totalPnLDiff) > 1000 ? '#e11d48' : '#059669'}; font-family: monospace;">
+                        Diff: ${totalPnLDiff >= 0 ? '+' : ''}${totalPnLDiff.toLocaleString()}
+                    </div>
                 </div>
             </div>
         </div>
@@ -2273,22 +2371,22 @@ export const DiscrepancyCheck: React.FC<DiscrepancyCheckProps> = ({
 
                 {/* Reconciliation Metrics Summary Cards */}
                 <div className="grid grid-cols-2 md:grid-cols-4 gap-3 pt-1 border-t border-slate-800">
-                  <div className="bg-slate-800/80 p-2 rounded-lg border border-slate-700 flex flex-col">
+                  <div className="bg-slate-800/80 p-2.5 rounded-lg border border-slate-700 flex flex-col">
                     <span className="text-[9px] font-bold text-slate-400 uppercase tracking-wider">Filtered Strategies</span>
                     <span className="text-sm font-black text-indigo-400 font-mono mt-0.5">{filteredReconciliationData.length} <span className="text-[10px] text-slate-400 font-normal">/ {reconciliationData.length} Total</span></span>
                   </div>
-                  <div className="bg-slate-800/80 p-2 rounded-lg border border-slate-700 flex flex-col">
-                    <span className="text-[9px] font-bold text-slate-400 uppercase tracking-wider">Discrepancy Count</span>
+                  <div className="bg-slate-800/80 p-2.5 rounded-lg border border-slate-700 flex flex-col">
+                    <span className="text-[9px] font-bold text-slate-400 uppercase tracking-wider">Discrepancies (≥5% Vol)</span>
                     <span className="text-sm font-black text-rose-400 font-mono mt-0.5">{filteredReconciliationData.filter(r => r.discrepancies.size > 0).length} <span className="text-[10px] text-slate-400 font-normal">Strategies</span></span>
                   </div>
-                  <div className="bg-slate-800/80 p-2 rounded-lg border border-slate-700 flex flex-col">
+                  <div className="bg-slate-800/80 p-2.5 rounded-lg border border-slate-700 flex flex-col">
                     <span className="text-[9px] font-bold text-slate-400 uppercase tracking-wider">Purchase Volume (MT)</span>
                     <div className="flex items-center justify-between font-mono text-[11px] mt-0.5">
                       <span className="text-slate-300">App: <strong className="text-white">{filteredReconciliationData.reduce((acc, r) => acc + r.app.buyVolTotal, 0).toLocaleString()}</strong></span>
                       <span className="text-slate-400">TRMS: <strong className="text-white">{filteredReconciliationData.reduce((acc, r) => acc + r.trms.buyVolTotal, 0).toLocaleString()}</strong></span>
                     </div>
                   </div>
-                  <div className="bg-slate-800/80 p-2 rounded-lg border border-slate-700 flex flex-col">
+                  <div className="bg-slate-800/80 p-2.5 rounded-lg border border-slate-700 flex flex-col">
                     <span className="text-[9px] font-bold text-slate-400 uppercase tracking-wider">Sales Volume (MT)</span>
                     <div className="flex items-center justify-between font-mono text-[11px] mt-0.5">
                       <span className="text-slate-300">App: <strong className="text-white">{filteredReconciliationData.reduce((acc, r) => acc + r.app.sellVolTotal, 0).toLocaleString()}</strong></span>
@@ -2296,6 +2394,114 @@ export const DiscrepancyCheck: React.FC<DiscrepancyCheckProps> = ({
                     </div>
                   </div>
                 </div>
+
+                {/* The 6 Main TRMS Financial Performance Cards (App vs TRMS Comparison) */}
+                {(() => {
+                  const appPurchaseCostSum = filteredReconciliationData.reduce((acc, r) => acc + (r.app.purchaseCost || 0), 0);
+                  const trmsPurchaseCostSum = filteredReconciliationData.reduce((acc, r) => acc + (r.trms.purchaseCost || 0), 0);
+                  const purchaseCostDiff = appPurchaseCostSum - trmsPurchaseCostSum;
+
+                  const appSalesRevSum = filteredReconciliationData.reduce((acc, r) => acc + (r.app.salesRevenue || 0), 0);
+                  const trmsSalesRevSum = filteredReconciliationData.reduce((acc, r) => acc + (r.trms.salesRevenue || 0), 0);
+                  const salesRevDiff = appSalesRevSum - trmsSalesRevSum;
+
+                  const appSrcSum = filteredReconciliationData.reduce((acc, r) => acc + (r.app.src || 0), 0);
+                  const trmsSrcSum = filteredReconciliationData.reduce((acc, r) => acc + (r.trms.src || 0), 0);
+                  const srcDiff = appSrcSum - trmsSrcSum;
+
+                  const appPhysPnL = appSalesRevSum - appPurchaseCostSum - Math.abs(appSrcSum);
+                  const trmsPhysPnL = trmsSalesRevSum - trmsPurchaseCostSum - Math.abs(trmsSrcSum);
+                  const physPnLDiff = appPhysPnL - trmsPhysPnL;
+
+                  const appHedgingPnL = filteredReconciliationData.reduce((acc, r) => acc + (r.app.hedgingPnL || 0), 0);
+                  const trmsHedgingPnL = filteredReconciliationData.reduce((acc, r) => acc + (r.trms.hedgingPnL || 0), 0);
+                  const hedgingPnLDiff = appHedgingPnL - trmsHedgingPnL;
+
+                  const appTotalPnL = appPhysPnL + appHedgingPnL;
+                  const trmsTotalPnL = trmsPhysPnL + trmsHedgingPnL;
+                  const totalPnLDiff = appTotalPnL - trmsTotalPnL;
+
+                  return (
+                    <div className="pt-2.5 border-t border-slate-800 space-y-1.5">
+                      <div className="text-[9px] font-black uppercase tracking-wider text-slate-400 font-mono">
+                        6 Main TRMS Financial Cards (App vs TRMS Comparison)
+                      </div>
+                      <div className="grid grid-cols-2 md:grid-cols-3 xl:grid-cols-6 gap-2.5">
+                        {/* 1. Purchase Cost */}
+                        <div className="bg-slate-900/90 p-2.5 rounded-lg border border-slate-700/80 flex flex-col justify-between">
+                          <span className="text-[9px] font-bold text-slate-400 uppercase tracking-wider">Purchase Cost</span>
+                          <div className="font-mono text-[10.5px] mt-1 space-y-0.5">
+                            <div className="text-slate-300 flex justify-between"><span>App:</span> <strong className="text-white">${Math.abs(appPurchaseCostSum).toLocaleString(undefined, { maximumFractionDigits: 0 })}</strong></div>
+                            <div className="text-slate-400 flex justify-between"><span>TRMS:</span> <strong className="text-slate-200">${Math.abs(trmsPurchaseCostSum).toLocaleString(undefined, { maximumFractionDigits: 0 })}</strong></div>
+                            <div className={`text-[10px] font-extrabold flex justify-between pt-0.5 border-t border-slate-800 ${Math.abs(purchaseCostDiff) > 1000 ? 'text-rose-400' : 'text-emerald-400'}`}>
+                              <span>Diff:</span> <span>{purchaseCostDiff >= 0 ? '+' : ''}${purchaseCostDiff.toLocaleString(undefined, { maximumFractionDigits: 0 })}</span>
+                            </div>
+                          </div>
+                        </div>
+
+                        {/* 2. Sales Revenue */}
+                        <div className="bg-slate-900/90 p-2.5 rounded-lg border border-slate-700/80 flex flex-col justify-between">
+                          <span className="text-[9px] font-bold text-slate-400 uppercase tracking-wider">Sales Revenue</span>
+                          <div className="font-mono text-[10.5px] mt-1 space-y-0.5">
+                            <div className="text-slate-300 flex justify-between"><span>App:</span> <strong className="text-white">${Math.abs(appSalesRevSum).toLocaleString(undefined, { maximumFractionDigits: 0 })}</strong></div>
+                            <div className="text-slate-400 flex justify-between"><span>TRMS:</span> <strong className="text-slate-200">${Math.abs(trmsSalesRevSum).toLocaleString(undefined, { maximumFractionDigits: 0 })}</strong></div>
+                            <div className={`text-[10px] font-extrabold flex justify-between pt-0.5 border-t border-slate-800 ${Math.abs(salesRevDiff) > 1000 ? 'text-rose-400' : 'text-emerald-400'}`}>
+                              <span>Diff:</span> <span>{salesRevDiff >= 0 ? '+' : ''}${salesRevDiff.toLocaleString(undefined, { maximumFractionDigits: 0 })}</span>
+                            </div>
+                          </div>
+                        </div>
+
+                        {/* 3. Shipping Cost (SRC) */}
+                        <div className="bg-slate-900/90 p-2.5 rounded-lg border border-slate-700/80 flex flex-col justify-between">
+                          <span className="text-[9px] font-bold text-slate-400 uppercase tracking-wider">Shipping Cost (SRC)</span>
+                          <div className="font-mono text-[10.5px] mt-1 space-y-0.5">
+                            <div className="text-slate-300 flex justify-between"><span>App:</span> <strong className="text-white">${Math.abs(appSrcSum).toLocaleString(undefined, { maximumFractionDigits: 0 })}</strong></div>
+                            <div className="text-slate-400 flex justify-between"><span>TRMS:</span> <strong className="text-slate-200">${Math.abs(trmsSrcSum).toLocaleString(undefined, { maximumFractionDigits: 0 })}</strong></div>
+                            <div className={`text-[10px] font-extrabold flex justify-between pt-0.5 border-t border-slate-800 ${Math.abs(srcDiff) > 100 ? 'text-rose-400' : 'text-emerald-400'}`}>
+                              <span>Diff:</span> <span>{srcDiff >= 0 ? '+' : ''}${srcDiff.toLocaleString(undefined, { maximumFractionDigits: 0 })}</span>
+                            </div>
+                          </div>
+                        </div>
+
+                        {/* 4. Physical P&L */}
+                        <div className="bg-slate-900/90 p-2.5 rounded-lg border border-slate-700/80 flex flex-col justify-between">
+                          <span className="text-[9px] font-bold text-slate-400 uppercase tracking-wider">Physical P&amp;L</span>
+                          <div className="font-mono text-[10.5px] mt-1 space-y-0.5">
+                            <div className="text-slate-300 flex justify-between"><span>App:</span> <strong className={appPhysPnL >= 0 ? 'text-emerald-400' : 'text-rose-400'}>{appPhysPnL >= 0 ? '+' : '-'}${Math.abs(appPhysPnL).toLocaleString(undefined, { maximumFractionDigits: 0 })}</strong></div>
+                            <div className="text-slate-400 flex justify-between"><span>TRMS:</span> <strong className={trmsPhysPnL >= 0 ? 'text-emerald-300' : 'text-rose-300'}>{trmsPhysPnL >= 0 ? '+' : '-'}${Math.abs(trmsPhysPnL).toLocaleString(undefined, { maximumFractionDigits: 0 })}</strong></div>
+                            <div className={`text-[10px] font-extrabold flex justify-between pt-0.5 border-t border-slate-800 ${Math.abs(physPnLDiff) > 1000 ? 'text-rose-400' : 'text-emerald-400'}`}>
+                              <span>Diff:</span> <span>{physPnLDiff >= 0 ? '+' : ''}${physPnLDiff.toLocaleString(undefined, { maximumFractionDigits: 0 })}</span>
+                            </div>
+                          </div>
+                        </div>
+
+                        {/* 5. Hedging P&L */}
+                        <div className="bg-slate-900/90 p-2.5 rounded-lg border border-slate-700/80 flex flex-col justify-between">
+                          <span className="text-[9px] font-bold text-slate-400 uppercase tracking-wider">Hedging P&amp;L</span>
+                          <div className="font-mono text-[10.5px] mt-1 space-y-0.5">
+                            <div className="text-slate-300 flex justify-between"><span>App:</span> <strong className={appHedgingPnL >= 0 ? 'text-emerald-400' : 'text-rose-400'}>{appHedgingPnL >= 0 ? '+' : '-'}${Math.abs(appHedgingPnL).toLocaleString(undefined, { maximumFractionDigits: 0 })}</strong></div>
+                            <div className="text-slate-400 flex justify-between"><span>TRMS:</span> <strong className={trmsHedgingPnL >= 0 ? 'text-emerald-300' : 'text-rose-300'}>{trmsHedgingPnL >= 0 ? '+' : '-'}${Math.abs(trmsHedgingPnL).toLocaleString(undefined, { maximumFractionDigits: 0 })}</strong></div>
+                            <div className={`text-[10px] font-extrabold flex justify-between pt-0.5 border-t border-slate-800 ${Math.abs(hedgingPnLDiff) > 1000 ? 'text-rose-400' : 'text-emerald-400'}`}>
+                              <span>Diff:</span> <span>{hedgingPnLDiff >= 0 ? '+' : ''}${hedgingPnLDiff.toLocaleString(undefined, { maximumFractionDigits: 0 })}</span>
+                            </div>
+                          </div>
+                        </div>
+
+                        {/* 6. Total Aggregate P&L */}
+                        <div className="bg-slate-900/90 p-2.5 rounded-lg border border-slate-700/80 flex flex-col justify-between">
+                          <span className="text-[9px] font-bold text-slate-400 uppercase tracking-wider">Total Aggregate P&amp;L</span>
+                          <div className="font-mono text-[10.5px] mt-1 space-y-0.5">
+                            <div className="text-slate-300 flex justify-between"><span>App:</span> <strong className={appTotalPnL >= 0 ? 'text-emerald-400' : 'text-rose-400'}>{appTotalPnL >= 0 ? '+' : '-'}${Math.abs(appTotalPnL).toLocaleString(undefined, { maximumFractionDigits: 0 })}</strong></div>
+                            <div className="text-slate-400 flex justify-between"><span>TRMS:</span> <strong className={trmsTotalPnL >= 0 ? 'text-emerald-300' : 'text-rose-300'}>{trmsTotalPnL >= 0 ? '+' : '-'}${Math.abs(trmsTotalPnL).toLocaleString(undefined, { maximumFractionDigits: 0 })}</strong></div>
+                            <div className={`text-[10px] font-extrabold flex justify-between pt-0.5 border-t border-slate-800 ${Math.abs(totalPnLDiff) > 1000 ? 'text-rose-400' : 'text-emerald-400'}`}>
+                              <span>Diff:</span> <span>{totalPnLDiff >= 0 ? '+' : ''}${totalPnLDiff.toLocaleString(undefined, { maximumFractionDigits: 0 })}</span>
+                            </div>
+                          </div>
+                        </div>
+                      </div>
+                    </div>
+                  );
+                })()}
               </div>
             )}
 
