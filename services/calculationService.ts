@@ -439,7 +439,7 @@ export const getPricingMonths = (refDateStr: string | undefined, monthDef: strin
         const lag = parseInt(avgMatch[2], 10);
         const step = parseInt(avgMatch[3], 10) || 1;
         for (let i = 0; i < count; i++) {
-            const t = new Date(d.getFullYear(), d.getMonth() - lag - (i * step), 15);
+            const t = new Date(d.getFullYear(), d.getMonth() - 1 - lag - (i * step), 15);
             results.push(`${t.getFullYear()}-${String(t.getMonth() + 1).padStart(2, '0')}`);
         }
     } else {
@@ -562,7 +562,7 @@ function getIndexPriceInternal(index: string, refDateStr: string, monthDef: stri
             const lag = parseInt(avgMatch[2], 10);
             const step = parseInt(avgMatch[3], 10) || 1;
             for (let i = 0; i < count; i++) {
-                const date = new Date(Date.UTC(baseYear, baseMonth0 - lag - (i * step), 15));
+                const date = new Date(Date.UTC(baseYear, baseMonth0 - 1 - lag - (i * step), 15));
                 const y = date.getUTCFullYear();
                 const m = String(date.getUTCMonth() + 1).padStart(2, '0');
                 targetMonths.push(`${y}-${m}`);
