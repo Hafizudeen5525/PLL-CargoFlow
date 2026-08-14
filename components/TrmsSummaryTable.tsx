@@ -62,6 +62,7 @@ import {
   Line
 } from 'recharts';
 import { ReconciliationData, ColumnFilterPopover } from './DiscrepancyCheck';
+import { ExecutiveDashboard } from './ExecutiveDashboard';
 import { isUnallocatedBuyer, getEstimatedSellRows } from '../utils/trmsEngine';
 import { toast } from 'react-hot-toast';
 import * as XLSX from 'xlsx';
@@ -6100,7 +6101,7 @@ export const TrmsSummaryTable: React.FC<TrmsSummaryTableProps> = ({ trmsData, vi
       </div>
 
       {viewMode === 'dashboard' ? (
-        renderDashboard()
+        <ExecutiveDashboard trmsData={trmsData} />
       ) : (
         <>
           {/* 3. Sub-Filters tabs and Search */}

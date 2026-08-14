@@ -250,7 +250,6 @@ export function getPriceForIndex(prices: Record<string, number> | undefined, req
 }
 
 const STORAGE_KEY_CURVES = 'forward_curves_data';
-const STORAGE_KEY_GRM_CURVES = 'grm_forward_curves_data';
 const STORAGE_KEY_HISTORICAL = 'historical_market_data';
 
 export const STORAGE_KEY_SN_GROUP_OVERRIDES = 'sn_group_overrides';
@@ -1053,87 +1052,6 @@ export async function deleteForwardCurve(date: string) {
         await deleteDoc(docRef);
     } catch (err) {
         handleFirestoreError(err, FirestoreOperation.DELETE, `forward_curves/${date}`);
-    }
-}
-
-const grmCurveCache: Record<string, ForwardCurveRow[]> = {};
-
-export async function getGRMForwardCurve(dateStr?: string): Promise<ForwardCurveRow[]> {
-    if (!auth.currentUser || !isFirebaseConfigured) {
-        if (dateStr && grmCurveCache[dateStr]) return grmCurveCache[dateStr];
-        const keys = Object.keys(grmCurveCache);
-        return keys.length > 0 ? grmCurveCache[keys[0]] : [];
-    }
-    try {
-        const userId = auth.currentUser.uid;
-        if (dateStr) {
-            if (grmCurveCache[dateStr]) return grmCurveCache[dateStr];
-            const docRef = doc(db, 'users', userId, 'grm_forward_curves', dateStr);
-            const snap = await getDoc(docRef);
-            if (snap.exists()) {
-                const data = (snap.data().rows || []) as ForwardCurveRow[];
-                grmCurveCache[dateStr] = data;
-                return data;
-            }
-            return [];
-        } else {
-            const q = query(collection(db, 'users', userId, 'grm_forward_curves'), orderBy('asOfDate', 'desc'), limit(1));
-            const snap = await getDocs(q);
-            if (!snap.empty) {
-                const data = (snap.docs[0].data().rows || []) as ForwardCurveRow[];
-                const date = snap.docs[0].id;
-                grmCurveCache[date] = data;
-                return data;
-            }
-            return [];
-        }
-    } catch (err) {
-        handleFirestoreError(err, FirestoreOperation.GET, 'grm_forward_curves');
-        return [];
-    }
-}
-
-export function getGRMForwardCurveSync(dateStr?: string): ForwardCurveRow[] {
-    if (dateStr) return grmCurveCache[dateStr] || [];
-    const keys = Object.keys(grmCurveCache).sort().reverse();
-    return keys.length > 0 ? grmCurveCache[keys[0]] : [];
-}
-
-export function getAvailableGRMCurveDatesSync(): string[] {
-    return Object.keys(grmCurveCache).sort().reverse();
-}
-
-export async function getAvailableGRMCurveDates(): Promise<string[]> {
-    if (!auth.currentUser || !isFirebaseConfigured) return Object.keys(grmCurveCache);
-    try {
-        const q = query(collection(db, 'users', auth.currentUser.uid, 'grm_forward_curves'), orderBy('asOfDate', 'desc'));
-        const snap = await getDocs(q);
-        return snap.docs.map(d => d.id);
-    } catch (err) {
-        handleFirestoreError(err, FirestoreOperation.LIST, 'grm_forward_curves');
-        return [];
-    }
-}
-
-export async function saveGRMForwardCurve(date: string, curve: ForwardCurveRow[]) {
-    grmCurveCache[date] = curve;
-    if (!auth.currentUser || !isFirebaseConfigured) return;
-    try {
-        const docRef = doc(db, 'users', auth.currentUser.uid, 'grm_forward_curves', date);
-        await setDoc(docRef, { asOfDate: date, rows: curve, userId: auth.currentUser.uid });
-    } catch (err) {
-        handleFirestoreError(err, FirestoreOperation.WRITE, `grm_forward_curves/${date}`);
-    }
-}
-
-export async function deleteGRMForwardCurve(date: string) {
-    delete grmCurveCache[date];
-    if (!auth.currentUser || !isFirebaseConfigured) return;
-    try {
-        const docRef = doc(db, 'users', auth.currentUser.uid, 'grm_forward_curves', date);
-        await deleteDoc(docRef);
-    } catch (err) {
-        handleFirestoreError(err, FirestoreOperation.DELETE, `grm_forward_curves/${date}`);
     }
 }
 

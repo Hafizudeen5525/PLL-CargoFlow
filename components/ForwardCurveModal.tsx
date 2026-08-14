@@ -1,6 +1,6 @@
 
 import React, { useState, useEffect, useMemo, useCallback, useRef } from 'react';
-import { saveForwardCurve, getForwardCurve, getForwardCurveSync, getAvailableCurveDates, getAvailableCurveDatesSync, deleteForwardCurve, ForwardCurveRow, getHistoricalCurve, getHistoricalCurveSync, saveHistoricalCurve, getGRMForwardCurve, getGRMForwardCurveSync, getAvailableGRMCurveDates, getAvailableGRMCurveDatesSync, saveGRMForwardCurve, deleteGRMForwardCurve } from '../services/calculationService';
+import { saveForwardCurve, getForwardCurve, getForwardCurveSync, getAvailableCurveDates, getAvailableCurveDatesSync, deleteForwardCurve, ForwardCurveRow, getHistoricalCurve, getHistoricalCurveSync, saveHistoricalCurve } from '../services/calculationService';
 import { toast } from 'react-hot-toast';
 import { LineChart, Line, XAxis, YAxis, CartesianGrid, Tooltip, Legend, ResponsiveContainer } from 'recharts';
 
@@ -22,11 +22,9 @@ interface Selection {
 
 export const ForwardCurveModal: React.FC<ForwardCurveModalProps> = ({ onClose, onSave }) => {
   const [activeTab, setActiveTab] = useState<'manage' | 'analyze' | 'evolution' | 'historical'>('manage');
-  const [curveType, setCurveType] = useState<'normal' | 'grm'>('normal');
   const availableDates = useMemo(() => {
-      const dates = curveType === 'normal' ? getAvailableCurveDatesSync() : getAvailableGRMCurveDatesSync();
-      return dates;
-  }, [curveType]);
+      return getAvailableCurveDatesSync();
+  }, []);
   const [curveDate, setCurveDate] = useState<string>(() => {
       const dates = getAvailableCurveDatesSync();
       return dates.length > 0 ? dates[0] : new Date().toISOString().split('T')[0];
@@ -76,7 +74,7 @@ export const ForwardCurveModal: React.FC<ForwardCurveModalProps> = ({ onClose, o
   const containerRef = useRef<HTMLDivElement>(null);
 
   const loadCurveData = useCallback(async (date: string) => {
-      const data = curveType === 'normal' ? await getForwardCurve(date) : await getGRMForwardCurve(date);
+      const data = await getForwardCurve(date);
       let targetGrid: ForwardCurveRow[];
       if (data.length === 0) {
           const skeleton: ForwardCurveRow[] = [];
@@ -96,25 +94,25 @@ export const ForwardCurveModal: React.FC<ForwardCurveModalProps> = ({ onClose, o
       setEditingCell(null);
       setHistoryPast([]);
       setHistoryFuture([]);
-  }, [curveType]);
-
-  const refreshDates = useCallback(() => {
-      // availableDates is now memoized based on curveType
   }, []);
 
-  const lastLoadedRef = useRef<{ type: string; date: string } | null>(null);
+  const refreshDates = useCallback(() => {
+      // availableDates is synced
+  }, []);
+
+  const lastLoadedRef = useRef<{ date: string } | null>(null);
 
   useEffect(() => {
       const initialDate = availableDates.length > 0 ? availableDates[0] : new Date().toISOString().split('T')[0];
-      if (lastLoadedRef.current?.type !== curveType || lastLoadedRef.current?.date !== initialDate) {
+      if (lastLoadedRef.current?.date !== initialDate) {
           // Defer state update to next tick to avoid cascading render warning
           const timer = setTimeout(() => {
               loadCurveData(initialDate);
-              lastLoadedRef.current = { type: curveType, date: initialDate };
+              lastLoadedRef.current = { date: initialDate };
           }, 0);
           return () => clearTimeout(timer);
       }
-  }, [availableDates, loadCurveData, curveType]);
+  }, [availableDates, loadCurveData]);
 
   // Current active columns based on tab
   const activeColumns = useMemo(() => {
@@ -184,13 +182,8 @@ export const ForwardCurveModal: React.FC<ForwardCurveModalProps> = ({ onClose, o
             }
             return { ...row, prices: nextPrices };
         });
-        if (curveType === 'normal') {
-            saveForwardCurve(curveDate, syncedGrid.filter(r => r.month));
-            toast.success(`Normal Curve saved for ${curveDate}`);
-        } else {
-            saveGRMForwardCurve(curveDate, syncedGrid.filter(r => r.month));
-            toast.success(`GRM Curve saved for ${curveDate}`);
-        }
+        saveForwardCurve(curveDate, syncedGrid.filter(r => r.month));
+        toast.success(`Forward Curve saved for ${curveDate}`);
     } else {
         saveHistoricalCurve(historicalGrid.filter(r => r.month));
         toast.success(`Historical prices updated`);
@@ -201,9 +194,8 @@ export const ForwardCurveModal: React.FC<ForwardCurveModalProps> = ({ onClose, o
 
   const handleDeleteSnapshot = (e: React.MouseEvent, date: string) => {
       e.stopPropagation();
-      if (confirm(`Delete ${curveType === 'normal' ? 'Normal' : 'GRM'} curve snapshot for ${date}?`)) {
-          if (curveType === 'normal') deleteForwardCurve(date);
-          else deleteGRMForwardCurve(date);
+      if (confirm(`Delete curve snapshot for ${date}?`)) {
+          deleteForwardCurve(date);
           refreshDates();
           if (curveDate === date) loadCurveData(new Date().toISOString().split('T')[0]);
           toast.success(`Snapshot deleted`);
@@ -494,7 +486,7 @@ export const ForwardCurveModal: React.FC<ForwardCurveModalProps> = ({ onClose, o
                         onClick={() => setActiveTab(tab as any)}
                         className={`pb-3 px-1 text-xs font-bold uppercase tracking-widest border-b-2 transition-all ${activeTab === tab ? 'border-blue-600 text-blue-600' : 'border-transparent text-slate-400 hover:text-slate-600'}`}
                     >
-                        {tab === 'manage' ? (curveType === 'normal' ? 'Forward Curves' : 'GRM Curves') : tab === 'historical' ? 'Historical Data' : tab === 'analyze' ? 'Curve Comparison' : 'Contract Evolution'}
+                        {tab === 'manage' ? 'Forward Curves' : tab === 'historical' ? 'Historical Data' : tab === 'analyze' ? 'Curve Comparison' : 'Contract Evolution'}
                     </button>
                 ))}
             </div>
@@ -503,25 +495,8 @@ export const ForwardCurveModal: React.FC<ForwardCurveModalProps> = ({ onClose, o
         <div className="flex-1 overflow-hidden bg-slate-50 flex">
             {activeTab === 'manage' && (
                 <div className="w-64 border-r border-slate-200 bg-white flex flex-col shrink-0">
-                    <div className="p-4 border-b border-slate-100 bg-slate-50/50 flex flex-col gap-3">
-                        <div className="flex items-center justify-between">
-                            <h3 className="text-[10px] font-black text-slate-400 uppercase tracking-widest">Curve Type</h3>
-                        </div>
-                        <div className="flex p-1 bg-slate-100 rounded-lg">
-                            <button 
-                                onClick={() => setCurveType('normal')}
-                                className={`flex-1 py-1.5 text-[10px] font-black uppercase rounded-md transition-all ${curveType === 'normal' ? 'bg-white text-blue-600 shadow-sm' : 'text-slate-400 hover:text-slate-600'}`}
-                            >
-                                Normal
-                            </button>
-                            <button 
-                                onClick={() => setCurveType('grm')}
-                                className={`flex-1 py-1.5 text-[10px] font-black uppercase rounded-md transition-all ${curveType === 'grm' ? 'bg-white text-blue-600 shadow-sm' : 'text-slate-400 hover:text-slate-600'}`}
-                            >
-                                GRM (Endur)
-                            </button>
-                        </div>
-                        <h3 className="text-[10px] font-black text-slate-400 uppercase tracking-widest mt-2">Saved Snapshots</h3>
+                    <div className="p-4 border-b border-slate-100 bg-slate-50/50 flex flex-col gap-1">
+                        <h3 className="text-[10px] font-black text-slate-400 uppercase tracking-widest">Saved Snapshots</h3>
                     </div>
                     <div className="flex-1 overflow-y-auto custom-scrollbar p-2 space-y-1">
                         {availableDates.map((date: string) => (

@@ -166,10 +166,6 @@ export interface ForwardCurveData {
   fileName?: string;
 }
 
-export interface GRMForwardCurveData extends ForwardCurveData {
-  isGRM: boolean;
-}
-
 export const EmptyCargoProfile: Omit<CargoProfile, 'id'> = {
   source: '',
   strategyName: '',
