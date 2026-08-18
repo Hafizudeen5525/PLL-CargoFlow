@@ -35,7 +35,11 @@ import {
   BookOpen,
   Ship,
   Zap,
-  FolderKanban
+  FolderKanban,
+  Check,
+  RotateCcw,
+  CheckSquare,
+  Square
 } from 'lucide-react';
 import { 
   getGroupName, 
@@ -63,7 +67,7 @@ import {
 } from 'recharts';
 import { ReconciliationData, ColumnFilterPopover } from './DiscrepancyCheck';
 import { ExecutiveDashboard } from './ExecutiveDashboard';
-import { isUnallocatedBuyer, getEstimatedSellRows } from '../utils/trmsEngine';
+import { isUnallocatedBuyer, getEstimatedSellRows, extractRowIndexName } from '../utils/trmsEngine';
 import { toast } from 'react-hot-toast';
 import * as XLSX from 'xlsx';
 
@@ -428,7 +432,25 @@ export const TrmsSummaryTable: React.FC<TrmsSummaryTableProps> = ({ trmsData, vi
   const [showExposureMonths, setShowExposureMonths] = useState(false);
   const [showLoadingMonth, setShowLoadingMonth] = useState(false);
   const [showDeliveryMonth, setShowDeliveryMonth] = useState(false);
+  const [showBuyIndex, setShowBuyIndex] = useState(false);
+  const [showSellIndex, setShowSellIndex] = useState(false);
   const [showLinesCount, setShowLinesCount] = useState(false);
+  const [isColumnsDropdownOpen, setIsColumnsDropdownOpen] = useState(false);
+  const columnsDropdownRef = useRef<HTMLDivElement>(null);
+
+  useEffect(() => {
+    const handleClickOutside = (event: MouseEvent) => {
+      if (columnsDropdownRef.current && !columnsDropdownRef.current.contains(event.target as Node)) {
+        setIsColumnsDropdownOpen(false);
+      }
+    };
+    if (isColumnsDropdownOpen) {
+      document.addEventListener('mousedown', handleClickOutside);
+    }
+    return () => {
+      document.removeEventListener('mousedown', handleClickOutside);
+    };
+  }, [isColumnsDropdownOpen]);
   const [expandedStrategies, setExpandedStrategies] = useState<Set<string>>(new Set());
   const [activeFilterMenu, setActiveFilterMenu] = useState<string | null>(null);
 
@@ -1204,17 +1226,19 @@ export const TrmsSummaryTable: React.FC<TrmsSummaryTableProps> = ({ trmsData, vi
 
       // 2. Calculate Purchase Metrics from buyCalcRows
       let buyTiers: any[] = [];
-      if (buyCalcRows.length === 2) {
+      if (buyCalcRows.length >= 2) {
         buyTiers = buyCalcRows.map(r => {
           const rawVol = Number(String(r['Volume'] || '').replace(/[^0-9.-]/g, ''));
           const unit = String(r['Unit'] || r['unit'] || 'MMBtu').trim();
           const val = Number(String(r['Base_Total_Value_USD'] || '').replace(/[^0-9.-]/g, ''));
           const price = Number(String(r['Price'] || '').replace(/[^0-9.-]/g, ''));
+          const indexName = extractRowIndexName(r);
           return {
             vol: isNaN(rawVol) ? 0 : rawVol,
             unit,
             val: isNaN(val) ? 0 : val,
-            price: isNaN(price) ? 0 : price
+            price: isNaN(price) ? 0 : price,
+            indexName: indexName || undefined
           };
         });
       }
@@ -1245,18 +1269,20 @@ export const TrmsSummaryTable: React.FC<TrmsSummaryTableProps> = ({ trmsData, vi
 
       // 3. Calculate Sales Metrics from sellCalcRows
       let sellTiers: any[] = [];
-      if (sellCalcRows.length === 2) {
+      if (sellCalcRows.length >= 2) {
         sellTiers = sellCalcRows.map(r => {
           const rawVol = Number(String(r['Volume'] || '').replace(/[^0-9.-]/g, ''));
           const absVol = isNaN(rawVol) ? 0 : Math.abs(rawVol);
           const unit = String(r['Unit'] || r['unit'] || 'MMBtu').trim();
           const val = Number(String(r['Base_Total_Value_USD'] || '').replace(/[^0-9.-]/g, ''));
           const price = Number(String(r['Price'] || '').replace(/[^0-9.-]/g, ''));
+          const indexName = extractRowIndexName(r);
           return {
             vol: absVol,
             unit,
             val: isNaN(val) ? 0 : Math.abs(val),
-            price: isNaN(price) ? 0 : Math.abs(price)
+            price: isNaN(price) ? 0 : Math.abs(price),
+            indexName: indexName || undefined
           };
         });
       }
@@ -1413,6 +1439,19 @@ export const TrmsSummaryTable: React.FC<TrmsSummaryTableProps> = ({ trmsData, vi
 
       const buyer = extractEntity(sellCalcRows, underlyingRows, 'sell');
       const seller = extractEntity(buyCalcRows, underlyingRows, 'buy');
+
+      const extractIndexNames = (rows: any[]): string => {
+        if (!rows || rows.length === 0) return '—';
+        const set = new Set<string>();
+        rows.forEach((r: any) => {
+          const idx = extractRowIndexName(r);
+          if (idx) set.add(idx);
+        });
+        return set.size > 0 ? Array.from(set).join(', ') : '—';
+      };
+
+      const buyIndex = extractIndexNames(buyCalcRows);
+      const sellIndex = extractIndexNames(sellCalcRows);
 
       let basePnL = 0;
       let baseValueUSD = 0;
@@ -1648,6 +1687,8 @@ export const TrmsSummaryTable: React.FC<TrmsSummaryTableProps> = ({ trmsData, vi
         unallocatedCargo,
         buyer,
         seller,
+        buyIndex,
+        sellIndex,
         exposureMonths,
         loadingMonth,
         deliveryMonth,
@@ -1801,8 +1842,16 @@ export const TrmsSummaryTable: React.FC<TrmsSummaryTableProps> = ({ trmsData, vi
     if (showDeliveryMonth) {
       cols.push('Delivery Month');
     }
+    cols.push('Purchase Volume', 'Sales Volume');
+    cols.push('Purchase Price');
+    if (showBuyIndex) {
+      cols.push('Buy Index');
+    }
+    cols.push('Sales Price');
+    if (showSellIndex) {
+      cols.push('Sell Index');
+    }
     cols.push(
-      'Purchase Volume', 'Sales Volume', 'Purchase Price', 'Sales Price',
       'Purchase Cost', 'Sales Revenue', 'Shipping Related Costs', 'Physical P&L',
       'Hedging P&L', 'Sum of Value', 'Change in P&L'
     );
@@ -1810,7 +1859,7 @@ export const TrmsSummaryTable: React.FC<TrmsSummaryTableProps> = ({ trmsData, vi
       cols.push('Lines Count');
     }
     return cols;
-  }, [showBuyer, showSeller, showExposureMonths, showLoadingMonth, showDeliveryMonth, showLinesCount]);
+  }, [showBuyer, showSeller, showBuyIndex, showSellIndex, showExposureMonths, showLoadingMonth, showDeliveryMonth, showLinesCount]);
 
   const numCols = useMemo(() => [
     'Purchase Volume', 'Sales Volume', 'Purchase Price', 'Sales Price',
@@ -1835,6 +1884,8 @@ export const TrmsSummaryTable: React.FC<TrmsSummaryTableProps> = ({ trmsData, vi
         else if (col === 'Unallocated Cargo') val = item.unallocatedCargo;
         else if (col === 'Buyer') val = item.buyer || 'Spot';
         else if (col === 'Seller') val = item.seller || 'Spot';
+        else if (col === 'Buy Index') val = item.buyIndex || '—';
+        else if (col === 'Sell Index') val = item.sellIndex || '—';
         else if (col === 'Exposure Months') val = item.exposureMonths;
         else if (col === 'Loading Month') val = item.loadingMonth;
         else if (col === 'Delivery Month') val = item.deliveryMonth;
@@ -1893,6 +1944,10 @@ export const TrmsSummaryTable: React.FC<TrmsSummaryTableProps> = ({ trmsData, vi
           item.physicalPnLStatus.toLowerCase().includes(term) ||
           item.optimisationStatus.toLowerCase().includes(term) ||
           item.unallocatedCargo.toLowerCase().includes(term) ||
+          (item.buyer && item.buyer.toLowerCase().includes(term)) ||
+          (item.seller && item.seller.toLowerCase().includes(term)) ||
+          (item.buyIndex && item.buyIndex.toLowerCase().includes(term)) ||
+          (item.sellIndex && item.sellIndex.toLowerCase().includes(term)) ||
           item.exposureMonths.toLowerCase().includes(term) ||
           item.loadingMonth.toLowerCase().includes(term) ||
           item.deliveryMonth.toLowerCase().includes(term)
@@ -1910,6 +1965,10 @@ export const TrmsSummaryTable: React.FC<TrmsSummaryTableProps> = ({ trmsData, vi
           else if (col === 'Physical P&L Bucket') val = item.physicalPnLStatus;
           else if (col === 'Optimisation') val = item.optimisationStatus;
           else if (col === 'Unallocated Cargo') val = item.unallocatedCargo;
+          else if (col === 'Buyer') val = item.buyer || 'Spot';
+          else if (col === 'Seller') val = item.seller || 'Spot';
+          else if (col === 'Buy Index') val = item.buyIndex || '—';
+          else if (col === 'Sell Index') val = item.sellIndex || '—';
           else if (col === 'Exposure Months') val = item.exposureMonths;
           else if (col === 'Loading Month') val = item.loadingMonth;
           else if (col === 'Delivery Month') val = item.deliveryMonth;
@@ -1944,6 +2003,10 @@ export const TrmsSummaryTable: React.FC<TrmsSummaryTableProps> = ({ trmsData, vi
           else if (col === 'Physical P&L Bucket') { valStr = item.physicalPnLStatus; valNum = NaN; }
           else if (col === 'Optimisation') { valStr = item.optimisationStatus; valNum = NaN; }
           else if (col === 'Unallocated Cargo') { valStr = item.unallocatedCargo; valNum = NaN; }
+          else if (col === 'Buyer') { valStr = item.buyer || 'Spot'; valNum = NaN; }
+          else if (col === 'Seller') { valStr = item.seller || 'Spot'; valNum = NaN; }
+          else if (col === 'Buy Index') { valStr = item.buyIndex || '—'; valNum = NaN; }
+          else if (col === 'Sell Index') { valStr = item.sellIndex || '—'; valNum = NaN; }
           else if (col === 'Exposure Months') { valStr = item.exposureMonths; valNum = NaN; }
           else if (col === 'Loading Month') { valStr = item.loadingMonth; valNum = NaN; }
           else if (col === 'Delivery Month') { valStr = item.deliveryMonth; valNum = NaN; }
@@ -2004,6 +2067,10 @@ export const TrmsSummaryTable: React.FC<TrmsSummaryTableProps> = ({ trmsData, vi
         else if (col === 'Physical P&L Bucket') { valA = a.physicalPnLStatus; valB = b.physicalPnLStatus; }
         else if (col === 'Optimisation') { valA = a.optimisationStatus; valB = b.optimisationStatus; }
         else if (col === 'Unallocated Cargo') { valA = a.unallocatedCargo; valB = b.unallocatedCargo; }
+        else if (col === 'Buyer') { valA = a.buyer || 'Spot'; valB = b.buyer || 'Spot'; }
+        else if (col === 'Seller') { valA = a.seller || 'Spot'; valB = b.seller || 'Spot'; }
+        else if (col === 'Buy Index') { valA = a.buyIndex || ''; valB = b.buyIndex || ''; }
+        else if (col === 'Sell Index') { valA = a.sellIndex || ''; valB = b.sellIndex || ''; }
         else if (col === 'Exposure Months') { valA = a.exposureMonths; valB = b.exposureMonths; }
         else if (col === 'Loading Month') { valA = a.loadingMonth; valB = b.loadingMonth; }
         else if (col === 'Delivery Month') { valA = a.deliveryMonth; valB = b.deliveryMonth; }
@@ -2698,7 +2765,9 @@ export const TrmsSummaryTable: React.FC<TrmsSummaryTableProps> = ({ trmsData, vi
       'Purchase Volume', 
       'Sales Volume', 
       'Purchase Price', 
+      'Buy Index',
       'Sales Price', 
+      'Sell Index',
       'Purchase Cost', 
       'Sales Revenue', 
       'Shipping Related Costs',
@@ -2723,7 +2792,9 @@ export const TrmsSummaryTable: React.FC<TrmsSummaryTableProps> = ({ trmsData, vi
         `"${formatUnitVolumes(item.purchaseVolumeByUnit, ' | ', 'buy')}"`,
         `"${formatUnitVolumes(item.salesVolumeByUnit, ' | ', 'sell')}"`,
         item.purchasePrice,
+        `"${(item.buyIndex || '—').replace(/"/g, '""')}"`,
         item.salesPrice,
+        `"${(item.sellIndex || '—').replace(/"/g, '""')}"`,
         item.purchaseCost,
         item.salesRevenue,
         item.shippingRelatedCosts,
@@ -2750,6 +2821,8 @@ export const TrmsSummaryTable: React.FC<TrmsSummaryTableProps> = ({ trmsData, vi
     let val: any = 0;
     if (col === 'Buyer') val = item.buyer || 'Spot';
     else if (col === 'Seller') val = item.seller || 'Spot';
+    else if (col === 'Buy Index') val = item.buyIndex || '—';
+    else if (col === 'Sell Index') val = item.sellIndex || '—';
     else if (col === 'Purchase Volume') val = item.purchaseVolume;
     else if (col === 'Sales Volume') val = item.salesVolume;
     else if (col === 'Purchase Price') val = item.purchasePrice;
@@ -2765,6 +2838,42 @@ export const TrmsSummaryTable: React.FC<TrmsSummaryTableProps> = ({ trmsData, vi
     else if (col === 'Exposure Months') val = item.exposureMonths;
     else if (col === 'Loading Month') val = item.loadingMonth;
     else if (col === 'Delivery Month') val = item.deliveryMonth;
+
+    if (col === 'Buy Index') {
+      if (item.buyTiers && item.buyTiers.length >= 2) {
+        const i1 = item.buyTiers[0].indexName || '—';
+        const i2 = item.buyTiers[1].indexName || '—';
+        return (
+          <div className="flex flex-col text-left">
+            <span className="text-[10px] text-emerald-400 font-mono font-medium truncate max-w-[180px]" title={i1}>
+              {i1} <span className="text-[9px] text-slate-500 font-normal">(T1)</span>
+            </span>
+            <span className="text-[10px] text-emerald-400 font-mono font-medium truncate max-w-[180px]" title={i2}>
+              {i2} <span className="text-[9px] text-slate-500 font-normal">(T2)</span>
+            </span>
+          </div>
+        );
+      }
+      return <span className="text-[11px] text-emerald-400/90 font-mono truncate max-w-[180px] block" title={String(item.buyIndex || '—')}>{item.buyIndex || '—'}</span>;
+    }
+
+    if (col === 'Sell Index') {
+      if (item.sellTiers && item.sellTiers.length >= 2) {
+        const i1 = item.sellTiers[0].indexName || '—';
+        const i2 = item.sellTiers[1].indexName || '—';
+        return (
+          <div className="flex flex-col text-left">
+            <span className="text-[10px] text-blue-400 font-mono font-medium truncate max-w-[180px]" title={i1}>
+              {i1} <span className="text-[9px] text-slate-500 font-normal">(T1)</span>
+            </span>
+            <span className="text-[10px] text-blue-400 font-mono font-medium truncate max-w-[180px]" title={i2}>
+              {i2} <span className="text-[9px] text-slate-500 font-normal">(T2)</span>
+            </span>
+          </div>
+        );
+      }
+      return <span className="text-[11px] text-blue-400/90 font-mono truncate max-w-[180px] block" title={String(item.sellIndex || '—')}>{item.sellIndex || '—'}</span>;
+    }
 
     if (numCols.includes(col)) {
       // Custom visual for two-tier purchase pricing
@@ -5871,77 +5980,104 @@ export const TrmsSummaryTable: React.FC<TrmsSummaryTableProps> = ({ trmsData, vi
             )}
           </div>
 
-          {/* Dynamic Column Visibility controls */}
-          <div className="flex flex-wrap items-center gap-2">
-            <span className="text-[10px] uppercase font-bold text-slate-400 font-mono tracking-widest mr-1">
-              Toggle Columns:
-            </span>
+          {/* Dynamic Column Visibility controls (Dropdown Multiselection) */}
+          <div className="relative" ref={columnsDropdownRef}>
             <button
-              onClick={() => setShowBuyer(prev => !prev)}
-              className={`px-2.5 py-1 rounded text-[10px] font-bold font-mono transition-all border flex items-center gap-1.5 cursor-pointer ${
-                showBuyer
-                  ? 'bg-blue-950/40 text-blue-300 border-blue-900/60 hover:bg-blue-900/40'
-                  : 'bg-slate-900 text-slate-400 border-slate-800 hover:text-slate-200 hover:bg-slate-850'
+              onClick={() => setIsColumnsDropdownOpen(prev => !prev)}
+              className={`px-3 py-1.5 rounded-lg text-xs font-bold font-mono transition-all border flex items-center gap-2 cursor-pointer shadow-sm ${
+                isColumnsDropdownOpen || (showBuyer || showSeller || showBuyIndex || showSellIndex || showExposureMonths || showLoadingMonth || showDeliveryMonth || showLinesCount)
+                  ? 'bg-slate-800 text-blue-300 border-blue-500/50 hover:bg-slate-750'
+                  : 'bg-slate-950 text-slate-300 border-slate-800 hover:text-slate-100 hover:bg-slate-850'
               }`}
+              title="Toggle optional table columns"
             >
-              <span className={showBuyer ? "text-blue-400" : "text-slate-600"}>●</span>
-              <span>Buyer</span>
+              <SlidersHorizontal className="w-3.5 h-3.5 text-blue-400" />
+              <span>Toggle Columns</span>
+              {(showBuyer || showSeller || showBuyIndex || showSellIndex || showExposureMonths || showLoadingMonth || showDeliveryMonth || showLinesCount) && (
+                <span className="px-1.5 py-0.2 rounded-full text-[10px] font-extrabold bg-blue-600 text-white leading-none">
+                  {[showBuyer, showSeller, showBuyIndex, showSellIndex, showExposureMonths, showLoadingMonth, showDeliveryMonth, showLinesCount].filter(Boolean).length}
+                </span>
+              )}
+              <ChevronDown className={`w-3.5 h-3.5 text-slate-400 transition-transform ${isColumnsDropdownOpen ? 'rotate-180 text-blue-400' : ''}`} />
             </button>
-            <button
-              onClick={() => setShowSeller(prev => !prev)}
-              className={`px-2.5 py-1 rounded text-[10px] font-bold font-mono transition-all border flex items-center gap-1.5 cursor-pointer ${
-                showSeller
-                  ? 'bg-blue-950/40 text-blue-300 border-blue-900/60 hover:bg-blue-900/40'
-                  : 'bg-slate-900 text-slate-400 border-slate-800 hover:text-slate-200 hover:bg-slate-850'
-              }`}
-            >
-              <span className={showSeller ? "text-blue-400" : "text-slate-600"}>●</span>
-              <span>Seller</span>
-            </button>
-            <button
-              onClick={() => setShowExposureMonths(prev => !prev)}
-              className={`px-2.5 py-1 rounded text-[10px] font-bold font-mono transition-all border flex items-center gap-1.5 cursor-pointer ${
-                showExposureMonths
-                  ? 'bg-blue-950/40 text-blue-300 border-blue-900/60 hover:bg-blue-900/40'
-                  : 'bg-slate-900 text-slate-400 border-slate-800 hover:text-slate-200 hover:bg-slate-850'
-              }`}
-            >
-              <span className={showExposureMonths ? "text-blue-400" : "text-slate-600"}>●</span>
-              <span>Exposure Months</span>
-            </button>
-            <button
-              onClick={() => setShowLoadingMonth(prev => !prev)}
-              className={`px-2.5 py-1 rounded text-[10px] font-bold font-mono transition-all border flex items-center gap-1.5 cursor-pointer ${
-                showLoadingMonth
-                  ? 'bg-blue-950/40 text-blue-300 border-blue-900/60 hover:bg-blue-900/40'
-                  : 'bg-slate-900 text-slate-400 border-slate-800 hover:text-slate-200 hover:bg-slate-850'
-              }`}
-            >
-              <span className={showLoadingMonth ? "text-blue-400" : "text-slate-600"}>●</span>
-              <span>Loading Month</span>
-            </button>
-            <button
-              onClick={() => setShowDeliveryMonth(prev => !prev)}
-              className={`px-2.5 py-1 rounded text-[10px] font-bold font-mono transition-all border flex items-center gap-1.5 cursor-pointer ${
-                showDeliveryMonth
-                  ? 'bg-blue-950/40 text-blue-300 border-blue-900/60 hover:bg-blue-900/40'
-                  : 'bg-slate-900 text-slate-400 border-slate-800 hover:text-slate-200 hover:bg-slate-850'
-              }`}
-            >
-              <span className={showDeliveryMonth ? "text-blue-400" : "text-slate-600"}>●</span>
-              <span>Delivery Month</span>
-            </button>
-            <button
-              onClick={() => setShowLinesCount(prev => !prev)}
-              className={`px-2.5 py-1 rounded text-[10px] font-bold font-mono transition-all border flex items-center gap-1.5 cursor-pointer ${
-                showLinesCount
-                  ? 'bg-blue-950/40 text-blue-300 border-blue-900/60 hover:bg-blue-900/40'
-                  : 'bg-slate-900 text-slate-400 border-slate-800 hover:text-slate-200 hover:bg-slate-850'
-              }`}
-            >
-              <span className={showLinesCount ? "text-blue-400" : "text-slate-600"}>●</span>
-              <span>Lines Count</span>
-            </button>
+
+            {isColumnsDropdownOpen && (
+              <div className="absolute right-0 top-full mt-1.5 w-64 bg-slate-900 border border-slate-750 rounded-xl shadow-2xl z-50 p-2.5 space-y-2 text-xs">
+                <div className="flex items-center justify-between pb-2 border-b border-slate-800">
+                  <span className="text-[11px] font-bold text-slate-300 uppercase tracking-wider font-mono">Select Columns</span>
+                  <div className="flex items-center gap-1">
+                    <button
+                      onClick={() => {
+                        setShowBuyer(true);
+                        setShowSeller(true);
+                        setShowBuyIndex(true);
+                        setShowSellIndex(true);
+                        setShowExposureMonths(true);
+                        setShowLoadingMonth(true);
+                        setShowDeliveryMonth(true);
+                        setShowLinesCount(true);
+                      }}
+                      className="text-[10px] text-blue-400 hover:text-blue-300 font-semibold px-1.5 py-0.5 rounded hover:bg-slate-800 transition-colors cursor-pointer"
+                    >
+                      All
+                    </button>
+                    <span className="text-slate-600">|</span>
+                    <button
+                      onClick={() => {
+                        setShowBuyer(false);
+                        setShowSeller(false);
+                        setShowBuyIndex(false);
+                        setShowSellIndex(false);
+                        setShowExposureMonths(false);
+                        setShowLoadingMonth(false);
+                        setShowDeliveryMonth(false);
+                        setShowLinesCount(false);
+                      }}
+                      className="text-[10px] text-slate-400 hover:text-slate-200 font-semibold px-1.5 py-0.5 rounded hover:bg-slate-800 transition-colors cursor-pointer"
+                    >
+                      Reset
+                    </button>
+                  </div>
+                </div>
+
+                <div className="space-y-1 max-h-64 overflow-y-auto custom-scrollbar pr-0.5">
+                  {[
+                    { id: 'buyer', label: 'Buyer', checked: showBuyer, toggle: () => setShowBuyer(prev => !prev), color: 'bg-blue-400' },
+                    { id: 'seller', label: 'Seller', checked: showSeller, toggle: () => setShowSeller(prev => !prev), color: 'bg-blue-400' },
+                    { id: 'buyIndex', label: 'Buy Index', checked: showBuyIndex, toggle: () => setShowBuyIndex(prev => !prev), color: 'bg-emerald-400', badge: 'IndexName' },
+                    { id: 'sellIndex', label: 'Sell Index', checked: showSellIndex, toggle: () => setShowSellIndex(prev => !prev), color: 'bg-blue-400', badge: 'IndexName' },
+                    { id: 'exposureMonths', label: 'Exposure Months', checked: showExposureMonths, toggle: () => setShowExposureMonths(prev => !prev), color: 'bg-amber-400' },
+                    { id: 'loadingMonth', label: 'Loading Month', checked: showLoadingMonth, toggle: () => setShowLoadingMonth(prev => !prev), color: 'bg-indigo-400' },
+                    { id: 'deliveryMonth', label: 'Delivery Month', checked: showDeliveryMonth, toggle: () => setShowDeliveryMonth(prev => !prev), color: 'bg-indigo-400' },
+                    { id: 'linesCount', label: 'Lines Count', checked: showLinesCount, toggle: () => setShowLinesCount(prev => !prev), color: 'bg-slate-400' },
+                  ].map(col => (
+                    <button
+                      key={col.id}
+                      onClick={col.toggle}
+                      className={`w-full flex items-center justify-between px-2.5 py-1.5 rounded-lg transition-colors text-left cursor-pointer ${
+                        col.checked 
+                          ? 'bg-blue-950/40 text-blue-200 hover:bg-blue-900/50' 
+                          : 'text-slate-400 hover:bg-slate-800/80 hover:text-slate-200'
+                      }`}
+                    >
+                      <div className="flex items-center gap-2">
+                        <div className={`w-3.5 h-3.5 rounded border flex items-center justify-center transition-colors ${
+                          col.checked ? 'bg-blue-600 border-blue-500 text-white' : 'border-slate-700 bg-slate-950'
+                        }`}>
+                          {col.checked && <Check className="w-2.5 h-2.5 stroke-[3]" />}
+                        </div>
+                        <span className="font-semibold text-xs font-mono">{col.label}</span>
+                      </div>
+                      {col.badge && (
+                        <span className="text-[9px] px-1.5 py-0.2 rounded bg-slate-800 text-slate-400 font-mono">
+                          {col.badge}
+                        </span>
+                      )}
+                    </button>
+                  ))}
+                </div>
+              </div>
+            )}
           </div>
         </div>
       </div>
@@ -6337,7 +6473,7 @@ export const TrmsSummaryTable: React.FC<TrmsSummaryTableProps> = ({ trmsData, vi
                           const isLinesCount = col === 'Lines Count';
                           
                           // Style custom clickable columns beautifully
-                          let cellStyle = "py-2.5 px-4 font-mono text-slate-200 transition-all text-right";
+                          let cellStyle = `py-2.5 px-4 font-mono text-slate-200 transition-all ${numCols.includes(col) ? 'text-right' : 'text-left'}`;
                           if (isClickableCol) {
                             cellStyle += " font-semibold text-blue-400 underline underline-offset-4 decoration-dotted decoration-blue-500 hover:text-blue-300 hover:bg-slate-850 cursor-pointer";
                           } else if (col === 'Change in P&L') {

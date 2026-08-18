@@ -97,6 +97,10 @@ export interface ReconciliationRow {
         tier2SellVol?: number;
         effectiveBuyPrice?: number;
         effectiveSellPrice?: number;
+        buyFormula?: string;
+        sellFormula?: string;
+        tier2BuyFormula?: string;
+        tier2SellFormula?: string;
     };
     trms: {
         buyer: string;
@@ -121,6 +125,10 @@ export interface ReconciliationRow {
         src: number;
         loadingMonth: string;
         deliveryMonth: string;
+        buyIndex?: string;
+        sellIndex?: string;
+        buyFormula?: string;
+        sellFormula?: string;
         hedgingPnL?: number;
         buyTiers: Array<{ vol: number; unit: string; val: number; price: number }>;
         sellTiers: Array<{ vol: number; unit: string; val: number; price: number }>;
@@ -189,6 +197,10 @@ export interface TRMSAggregation {
         reconciledSalesRevenue: number;
         weightedBuyPrice?: number;
         weightedSellPrice?: number;
+        buyFormula?: string;
+        sellFormula?: string;
+        buyIndex?: string;
+        sellIndex?: string;
         commWindowEndDate: string;
         rawRows?: any[];
     }
@@ -591,6 +603,8 @@ export const DiscrepancyCheck: React.FC<DiscrepancyCheckProps> = ({
     'Purchase Volume': 200,
     'Sales Price': 200,
     'Sales Volume': 200,
+    'Formula': 260,
+    'SRC Costs': 200,
     'SRC Components': 200,
     'Purchase Cost': 200,
     'Sales Revenue': 200,
@@ -1036,7 +1050,11 @@ export const DiscrepancyCheck: React.FC<DiscrepancyCheckProps> = ({
           tier2SellPrice: appSellPriceT2,
           tier2SellVol: appSellVolT2,
           effectiveBuyPrice: appBuyPriceEffective,
-          effectiveSellPrice: appSellPriceEffective
+          effectiveSellPrice: appSellPriceEffective,
+          buyFormula: app?.buyFormula || '—',
+          sellFormula: app?.sellFormula || '—',
+          tier2BuyFormula: app?.tier2BuyFormula || '',
+          tier2SellFormula: app?.tier2SellFormula || ''
         },
         trms: {
           buyer: trmsBuyer,
@@ -1061,6 +1079,10 @@ export const DiscrepancyCheck: React.FC<DiscrepancyCheckProps> = ({
           src: trmsSrc,
           loadingMonth: trmsLoadingMonth,
           deliveryMonth: trmsDeliveryMonth,
+          buyIndex: trms?.buyIndex || '—',
+          sellIndex: trms?.sellIndex || '—',
+          buyFormula: trmsData.trmsAgg[strategyName]?.buyFormula || trms?.buyFormula || (trms?.buyIndex && trms.buyIndex !== '—' ? trms.buyIndex : '—'),
+          sellFormula: trmsData.trmsAgg[strategyName]?.sellFormula || trms?.sellFormula || (trms?.sellIndex && trms.sellIndex !== '—' ? trms.sellIndex : '—'),
           hedgingPnL: trmsData.trmsAgg[strategyName]?.hedgingPnL || 0,
           buyTiers: trms?.buyTiers || [],
           sellTiers: trms?.sellTiers || [],
@@ -1232,6 +1254,7 @@ export const DiscrepancyCheck: React.FC<DiscrepancyCheckProps> = ({
             'Sales Volume',
             'Purchase Price',
             'Sales Price',
+            'Formula',
             'SRC Costs',
             'Loading Month',
             'Delivery Month'
@@ -1268,6 +1291,12 @@ export const DiscrepancyCheck: React.FC<DiscrepancyCheckProps> = ({
       else if (header === 'Sales Volume') addVal(row.app.sellVolTotal);
       else if (header === 'Purchase Price') addVal(row.app.buyPriceEffective);
       else if (header === 'Sales Price') addVal(row.app.sellPriceEffective);
+      else if (header === 'Formula') {
+        if (row.app.buyFormula && row.app.buyFormula !== '—') addVal(row.app.buyFormula);
+        if (row.app.sellFormula && row.app.sellFormula !== '—') addVal(row.app.sellFormula);
+        if (row.app.tier2BuyFormula) addVal(row.app.tier2BuyFormula);
+        if (row.app.tier2SellFormula) addVal(row.app.tier2SellFormula);
+      }
       else if (header === 'SRC Costs') addVal(row.app.src);
       else if (header === 'Loading Month') {
         if (row.app.loadingMonth && row.app.loadingMonth !== '—') addVal(row.app.loadingMonth);
@@ -1288,6 +1317,12 @@ export const DiscrepancyCheck: React.FC<DiscrepancyCheckProps> = ({
       else if (header === 'Sales Volume') addVal(row.trms.sellVolTotal);
       else if (header === 'Purchase Price') addVal(row.trms.buyPriceEffective);
       else if (header === 'Sales Price') addVal(row.trms.sellPriceEffective);
+      else if (header === 'Formula') {
+        if (row.trms.buyFormula && row.trms.buyFormula !== '—') addVal(row.trms.buyFormula);
+        if (row.trms.sellFormula && row.trms.sellFormula !== '—') addVal(row.trms.sellFormula);
+        if (row.trms.buyIndex && row.trms.buyIndex !== '—') addVal(row.trms.buyIndex);
+        if (row.trms.sellIndex && row.trms.sellIndex !== '—') addVal(row.trms.sellIndex);
+      }
       else if (header === 'SRC Costs') addVal(row.trms.src);
       else if (header === 'Loading Month') {
         if (row.trms.loadingMonth && row.trms.loadingMonth !== '—') addVal(row.trms.loadingMonth);
@@ -1585,6 +1620,10 @@ export const DiscrepancyCheck: React.FC<DiscrepancyCheckProps> = ({
                     <td style="border: 1px solid #e2e8f0; padding: 10px 12px; font-size: 10px; background: ${sellPriceMismatch ? '#fef2f2' : 'transparent'};">
                         <div style="color: #64748b; font-size: 8px; font-weight: bold; text-transform: uppercase;">App: <span style="color: #1e293b; font-weight: 800;">$${r.app.sellPriceEffective.toFixed(3)}</span></div>
                         <div style="color: #64748b; font-size: 8px; font-weight: bold; text-transform: uppercase; margin-top: 4px;">TRMS: <span style="color: ${sellPriceMismatch ? '#ef4444' : '#475569'}; font-weight: 800;">$${r.trms.sellPriceEffective.toFixed(3)}</span></div>
+                    </td>
+                    <td style="border: 1px solid #e2e8f0; padding: 10px 12px; font-size: 10px; background: transparent;">
+                        <div style="color: #64748b; font-size: 8px; font-weight: bold; text-transform: uppercase;">App: <span style="color: #1e293b; font-weight: 800;">B: ${r.app.buyFormula || '—'} | S: ${r.app.sellFormula || '—'}</span></div>
+                        <div style="color: #64748b; font-size: 8px; font-weight: bold; text-transform: uppercase; margin-top: 4px;">Jarvis: <span style="color: #475569; font-weight: 800;">B: ${r.trms.buyFormula || r.trms.buyIndex || '—'} | S: ${r.trms.sellFormula || r.trms.sellIndex || '—'}</span></div>
                     </td>
                     <td style="border: 1px solid #e2e8f0; padding: 10px 12px; font-size: 10px; background: ${srcMismatch ? '#fef2f2' : 'transparent'};">
                         <div style="color: #64748b; font-size: 8px; font-weight: bold; text-transform: uppercase;">App: <span style="color: #1e293b; font-weight: 800;">${formatUSD(r.app.src)}</span></div>
@@ -1897,6 +1936,11 @@ export const DiscrepancyCheck: React.FC<DiscrepancyCheckProps> = ({
           'App Sales Price ($)': r.app.sellPriceEffective,
           'TRMS Sales Price ($)': r.trms.sellPriceEffective,
           'Sales Price Diff ($)': sellPriceDiff,
+
+          'App Buy Formula': r.app.buyFormula || '—',
+          'App Sell Formula': r.app.sellFormula || '—',
+          'Jarvis Buy Formula': r.trms.buyFormula || r.trms.buyIndex || '—',
+          'Jarvis Sell Formula': r.trms.sellFormula || r.trms.sellIndex || '—',
 
           'App SRC Costs ($)': r.app.src,
           'TRMS SRC Costs ($)': r.trms.src,
@@ -3364,6 +3408,47 @@ const ReconciliationRowItem = memo(({ row, activeTab, columnWidths, handleRowEdi
               <span className="text-slate-500 text-[8px]">T1:${r.trms.sellPriceT1.toFixed(2)} | T2:${r.trms.sellPriceT2.toFixed(2)}</span>
             ) : null}
             <span className={`font-bold ml-auto ${sellPriceMismatch ? 'text-rose-600' : 'text-slate-700'}`}>${r.trms.sellPriceEffective.toFixed(3)}</span>
+          </div>
+        </div>
+      </div>
+
+      {/* 8b. Formula (App vs Jarvis Comparison - Neutral display without red highlighting) */}
+      <div className="px-3 py-2 shrink-0 flex flex-col justify-center border-r border-slate-100 overflow-hidden" style={{ width: columnWidths['Formula'] || 260 }}>
+        <div className="flex flex-col mb-1 pb-1 border-b border-slate-100">
+          <div className="flex justify-between items-center text-[8px] text-slate-400 font-bold uppercase mb-0.5">
+            <span>App Formula</span>
+            {r.app.isTiered && (r.app.tier2BuyFormula || r.app.tier2SellFormula) ? <span className="text-indigo-600 font-extrabold">2-Tier</span> : null}
+          </div>
+          <div className="flex flex-col text-[9px] font-mono leading-tight space-y-0.5">
+            <div className="truncate text-slate-800" title={`App Buy: ${r.app.buyFormula || '—'}${r.app.isTiered && r.app.tier2BuyFormula ? ` | T2: ${r.app.tier2BuyFormula}` : ''}`}>
+              <span className="text-slate-400 font-sans text-[8px] font-bold mr-1">B:</span>
+              <span className="font-semibold text-slate-700">{r.app.buyFormula || '—'}</span>
+              {r.app.isTiered && r.app.tier2BuyFormula ? (
+                <span className="text-indigo-600 text-[8px] ml-1 font-sans font-medium">(T2: {r.app.tier2BuyFormula})</span>
+              ) : null}
+            </div>
+            <div className="truncate text-slate-800" title={`App Sell: ${r.app.sellFormula || '—'}${r.app.isTiered && r.app.tier2SellFormula ? ` | T2: ${r.app.tier2SellFormula}` : ''}`}>
+              <span className="text-slate-400 font-sans text-[8px] font-bold mr-1">S:</span>
+              <span className="font-semibold text-slate-700">{r.app.sellFormula || '—'}</span>
+              {r.app.isTiered && r.app.tier2SellFormula ? (
+                <span className="text-indigo-600 text-[8px] ml-1 font-sans font-medium">(T2: {r.app.tier2SellFormula})</span>
+              ) : null}
+            </div>
+          </div>
+        </div>
+        <div className="flex flex-col">
+          <div className="flex justify-between items-center text-[8px] text-slate-400 font-bold uppercase mb-0.5">
+            <span>Jarvis Formula</span>
+          </div>
+          <div className="flex flex-col text-[9px] font-mono leading-tight space-y-0.5">
+            <div className="truncate text-slate-600" title={`Jarvis Buy: ${r.trms.buyFormula || r.trms.buyIndex || '—'}`}>
+              <span className="text-slate-400 font-sans text-[8px] font-bold mr-1">B:</span>
+              <span className="text-slate-600">{r.trms.buyFormula || r.trms.buyIndex || '—'}</span>
+            </div>
+            <div className="truncate text-slate-600" title={`Jarvis Sell: ${r.trms.sellFormula || r.trms.sellIndex || '—'}`}>
+              <span className="text-slate-400 font-sans text-[8px] font-bold mr-1">S:</span>
+              <span className="text-slate-600">{r.trms.sellFormula || r.trms.sellIndex || '—'}</span>
+            </div>
           </div>
         </div>
       </div>

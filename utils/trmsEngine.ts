@@ -258,6 +258,10 @@ export interface TrmsStrategySummary {
   exposureMonths: string;
   loadingMonth: string;
   deliveryMonth: string;
+  buyIndex: string;
+  sellIndex: string;
+  buyFormula?: string;
+  sellFormula?: string;
   purchaseVolume: number;
   purchaseVolumeByUnit: { [unit: string]: number };
   salesVolume: number;
@@ -272,11 +276,74 @@ export interface TrmsStrategySummary {
   hedgingVolumeByUnit: { [unit: string]: number };
   paperVolume: number;
   paperVolumeByUnit: { [unit: string]: number };
-  buyTiers: Array<{ vol: number; unit: string; val: number; price: number }>;
-  sellTiers: Array<{ vol: number; unit: string; val: number; price: number }>;
+  buyTiers: Array<{ vol: number; unit: string; val: number; price: number; indexName?: string }>;
+  sellTiers: Array<{ vol: number; unit: string; val: number; price: number; indexName?: string }>;
   buyCalcRows: any[];
   sellCalcRows: any[];
   underlyingRows: any[];
+}
+
+export function extractRowIndexName(row: any): string {
+  if (!row) return '';
+  const aliases = [
+    'IndexName_ProjectionMethod',
+    'IndexName ProjectionMethod',
+    'IndexName_Projection_Method',
+    'Index Name Projection Method',
+    'Index_Name_Projection_Method',
+    'IndexName',
+    'Index Name',
+    'Projection Method',
+    'ProjectionMethod',
+    'Price Index',
+    'Index'
+  ];
+  for (const alias of aliases) {
+    const val = row[alias];
+    if (val !== undefined && val !== null && String(val).trim() !== '') {
+      return String(val).trim();
+    }
+  }
+  for (const key of Object.keys(row)) {
+    const norm = key.toLowerCase().replace(/[\s_]/g, '');
+    if (
+      norm === 'indexnameprojectionmethod' ||
+      norm === 'projectionmethod' ||
+      norm === 'indexname' ||
+      norm === 'indexnameprojection_method'
+    ) {
+      const val = row[key];
+      if (val !== undefined && val !== null && String(val).trim() !== '') {
+        return String(val).trim();
+      }
+    }
+  }
+  return '';
+}
+
+export function extractRowFormula(row: any): string {
+  if (!row) return '';
+  const aliases = [
+    'Buy Formula',
+    'Sell Formula',
+    'Formula',
+    'Pricing Formula',
+    'Price Formula',
+    'Pricing Expression',
+    'Pricing Method',
+    'Formula Expression',
+    'Formula_Expression',
+    'Pricing_Formula',
+    'IndexName_ProjectionMethod',
+    'IndexName'
+  ];
+  for (const alias of aliases) {
+    const val = row[alias];
+    if (val !== undefined && val !== null && String(val).trim() !== '') {
+      return String(val).trim();
+    }
+  }
+  return '';
 }
 
 export function computeTrmsSummaryRows(
@@ -656,7 +723,7 @@ export function computeTrmsSummaryRows(
       }
     });
 
-    let buyTiers: Array<{ vol: number; unit: string; val: number; price: number }> = [];
+    let buyTiers: Array<{ vol: number; unit: string; val: number; price: number; indexName?: string }> = [];
     if (buyCalcRows.length >= 2) {
       buyTiers = buyCalcRows.map(r => {
         const rawVol = Number(String(r['Volume'] || '').replace(/[^0-9.-]/g, ''));
@@ -664,11 +731,13 @@ export function computeTrmsSummaryRows(
         const unit = String(r['Unit'] || r['unit'] || 'MMBtu').trim();
         const val = Number(String(r['Base_Total_Value_USD'] || '').replace(/[^0-9.-]/g, ''));
         const price = Number(String(r['Price'] || '').replace(/[^0-9.-]/g, ''));
+        const indexName = extractRowIndexName(r);
         return {
           vol: absVol,
           unit,
           val: isNaN(val) ? 0 : Math.abs(val),
-          price: isNaN(price) ? 0 : Math.abs(price)
+          price: isNaN(price) ? 0 : Math.abs(price),
+          indexName: indexName || undefined
         };
       });
     }
@@ -697,7 +766,7 @@ export function computeTrmsSummaryRows(
       }
     });
 
-    let sellTiers: Array<{ vol: number; unit: string; val: number; price: number }> = [];
+    let sellTiers: Array<{ vol: number; unit: string; val: number; price: number; indexName?: string }> = [];
     if (sellCalcRows.length >= 2) {
       sellTiers = sellCalcRows.map(r => {
         const rawVol = Number(String(r['Volume'] || '').replace(/[^0-9.-]/g, ''));
@@ -705,11 +774,13 @@ export function computeTrmsSummaryRows(
         const unit = String(r['Unit'] || r['unit'] || 'MMBtu').trim();
         const val = Number(String(r['Base_Total_Value_USD'] || '').replace(/[^0-9.-]/g, ''));
         const price = Number(String(r['Price'] || '').replace(/[^0-9.-]/g, ''));
+        const indexName = extractRowIndexName(r);
         return {
           vol: absVol,
           unit,
           val: isNaN(val) ? 0 : Math.abs(val),
-          price: isNaN(price) ? 0 : Math.abs(price)
+          price: isNaN(price) ? 0 : Math.abs(price),
+          indexName: indexName || undefined
         };
       });
     }
@@ -956,6 +1027,31 @@ export function computeTrmsSummaryRows(
     const buyer = extractEntity(sellCalcRows, underlyingRows, 'sell');
     const seller = extractEntity(buyCalcRows, underlyingRows, 'buy');
 
+    const extractIndexNames = (rows: any[]): string => {
+      if (!rows || rows.length === 0) return '—';
+      const set = new Set<string>();
+      rows.forEach(r => {
+        const idx = extractRowIndexName(r);
+        if (idx) set.add(idx);
+      });
+      return set.size > 0 ? Array.from(set).join(', ') : '—';
+    };
+
+    const extractFormulas = (rows: any[]): string => {
+      if (!rows || rows.length === 0) return '';
+      const set = new Set<string>();
+      rows.forEach(r => {
+        const f = extractRowFormula(r);
+        if (f) set.add(f);
+      });
+      return set.size > 0 ? Array.from(set).join('; ') : '';
+    };
+
+    const buyIndex = extractIndexNames(buyCalcRows);
+    const sellIndex = extractIndexNames(sellCalcRows);
+    const buyFormula = extractFormulas(buyCalcRows) || buyIndex;
+    const sellFormula = extractFormulas(sellCalcRows) || sellIndex;
+
     return {
       strategyName,
       physicalPnLStatus,
@@ -966,6 +1062,10 @@ export function computeTrmsSummaryRows(
       exposureMonths,
       loadingMonth,
       deliveryMonth,
+      buyIndex,
+      sellIndex,
+      buyFormula,
+      sellFormula,
       purchaseVolume,
       purchaseVolumeByUnit,
       salesVolume,

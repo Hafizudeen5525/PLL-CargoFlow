@@ -50,12 +50,11 @@ self.onmessage = (e: MessageEvent) => {
     const mainSheet = masterSheetName ? wb.Sheets[masterSheetName] : wb.Sheets[sheetNames[0]];
     const rawData = XLSX.utils.sheet_to_json(mainSheet);
     
-    const srcRows: any[] = [];
-    const hedgingRows: any[] = [];
-    const paperRows: any[] = [];
-    const trmsAgg: any = {};
-    let portfolioName = 'Unknown';
-    let portfolioYear = 'Unknown';
+    // Check for Jarvis Purchase and Sales sheets if present
+    const purchaseSheetName = sheetNames.find(n => n.toLowerCase().trim() === 'purchase');
+    const salesSheetName = sheetNames.find(n => n.toLowerCase().trim() === 'sales');
+    const jarvisBuyFormulas: Record<string, string> = {};
+    const jarvisSellFormulas: Record<string, string> = {};
 
     const findValue = (row: any, aliases: string[]) => {
         for (const alias of aliases) {
@@ -67,6 +66,31 @@ self.onmessage = (e: MessageEvent) => {
         }
         return undefined;
     };
+
+    if (purchaseSheetName) {
+      const pRows: any[] = XLSX.utils.sheet_to_json(wb.Sheets[purchaseSheetName]);
+      pRows.forEach(r => {
+        const sn = String(findValue(r, ['Strategy Name', 'Strategy', 'Deal Name', 'No.', 'Deal No']) || '').trim();
+        const f = String(findValue(r, ['Buy Formula', 'Buy Price Formula', 'Formula', 'Pricing Formula']) || '').trim();
+        if (sn && f) jarvisBuyFormulas[sn] = f;
+      });
+    }
+
+    if (salesSheetName) {
+      const sRows: any[] = XLSX.utils.sheet_to_json(wb.Sheets[salesSheetName]);
+      sRows.forEach(r => {
+        const sn = String(findValue(r, ['Strategy Name', 'Strategy', 'Deal Name', 'No.', 'Deal No']) || '').trim();
+        const f = String(findValue(r, ['Sell Formula', 'Sales Formula', 'Sell Price Formula', 'Formula', 'Pricing Formula']) || '').trim();
+        if (sn && f) jarvisSellFormulas[sn] = f;
+      });
+    }
+
+    const srcRows: any[] = [];
+    const hedgingRows: any[] = [];
+    const paperRows: any[] = [];
+    const trmsAgg: any = {};
+    let portfolioName = 'Unknown';
+    let portfolioYear = 'Unknown';
 
     const extractIndexFromRef = (ref: string): string => {
         const r = String(ref || '').toUpperCase();
@@ -94,7 +118,8 @@ self.onmessage = (e: MessageEvent) => {
       'Event Source', 'Settlement Type', 'Cflow Type', 'Volume Type', 
       'Price Status', 'EOD Date', 'Tran_Status', 'Yday_Tran_Status', 
       'Incoterm', 'BU_L1', 'BU_L2', 'BU_L3', 'BU_L4', 'BU_L5', 'BU_L6', 
-      'Trader', 'IndexName_ProjectionMethod'
+      'Trader', 'IndexName_ProjectionMethod', 'Formula', 'Buy Formula', 'Sell Formula',
+      'Pricing Formula', 'Pricing Expression'
     ];
 
     rawData.forEach((row: any) => {
@@ -147,7 +172,19 @@ self.onmessage = (e: MessageEvent) => {
           } else if (col === 'Plsb Year Bucket') {
              val = findValue(row, ['Plsb Year Bucket', 'Plsb_Year_Bucket', 'Year Bucket', 'Year', 'PlsbYearBucket']);
           } else if (col === 'IndexName_ProjectionMethod') {
-             val = findValue(row, ['IndexName_ProjectionMethod', 'IndexName ProjectionMethod', 'IndexName_Projection_Method', 'Projection Method', 'Index Name', 'IndexName']);
+             val = findValue(row, [
+               'IndexName_ProjectionMethod',
+               'IndexName ProjectionMethod',
+               'IndexName_Projection_Method',
+               'Index Name Projection Method',
+               'Index_Name_Projection_Method',
+               'Projection Method',
+               'ProjectionMethod',
+               'Index Name',
+               'IndexName',
+               'Price Index',
+               'Index'
+             ]);
           } else {
              const normCol = col.toLowerCase().replace(/[\s_]/g, '');
              for (const key of Object.keys(row)) {
@@ -194,8 +231,17 @@ self.onmessage = (e: MessageEvent) => {
               reconciledPurchaseCost: 0,
               reconciledSalesRevenue: 0,
               commWindowEndDate: '',
+              buyFormula: jarvisBuyFormulas[sName] || '',
+              sellFormula: jarvisSellFormulas[sName] || '',
               rawRows: []
           };
+      }
+      
+      if (!trmsAgg[sName].buyFormula && jarvisBuyFormulas[sName]) {
+          trmsAgg[sName].buyFormula = jarvisBuyFormulas[sName];
+      }
+      if (!trmsAgg[sName].sellFormula && jarvisSellFormulas[sName]) {
+          trmsAgg[sName].sellFormula = jarvisSellFormulas[sName];
       }
       
       // Store clean row for deep dive
