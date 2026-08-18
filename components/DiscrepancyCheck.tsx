@@ -130,8 +130,8 @@ export interface ReconciliationRow {
         buyFormula?: string;
         sellFormula?: string;
         hedgingPnL?: number;
-        buyTiers: Array<{ vol: number; unit: string; val: number; price: number }>;
-        sellTiers: Array<{ vol: number; unit: string; val: number; price: number }>;
+        buyTiers: Array<{ vol: number; unit: string; val: number; price: number; indexName?: string }>;
+        sellTiers: Array<{ vol: number; unit: string; val: number; price: number; indexName?: string }>;
         rawRows?: any[];
         // Backwards compatibility aliases
         buyLegs: TRMSCommodityLeg[];
@@ -1081,8 +1081,8 @@ export const DiscrepancyCheck: React.FC<DiscrepancyCheckProps> = ({
           deliveryMonth: trmsDeliveryMonth,
           buyIndex: trms?.buyIndex || '—',
           sellIndex: trms?.sellIndex || '—',
-          buyFormula: trmsData.trmsAgg[strategyName]?.buyFormula || trms?.buyFormula || (trms?.buyIndex && trms.buyIndex !== '—' ? trms.buyIndex : '—'),
-          sellFormula: trmsData.trmsAgg[strategyName]?.sellFormula || trms?.sellFormula || (trms?.sellIndex && trms.sellIndex !== '—' ? trms.sellIndex : '—'),
+          buyFormula: trms?.buyIndex || '—',
+          sellFormula: trms?.sellIndex || '—',
           hedgingPnL: trmsData.trmsAgg[strategyName]?.hedgingPnL || 0,
           buyTiers: trms?.buyTiers || [],
           sellTiers: trms?.sellTiers || [],
@@ -1623,7 +1623,7 @@ export const DiscrepancyCheck: React.FC<DiscrepancyCheckProps> = ({
                     </td>
                     <td style="border: 1px solid #e2e8f0; padding: 10px 12px; font-size: 10px; background: transparent;">
                         <div style="color: #64748b; font-size: 8px; font-weight: bold; text-transform: uppercase;">App: <span style="color: #1e293b; font-weight: 800;">B: ${r.app.buyFormula || '—'} | S: ${r.app.sellFormula || '—'}</span></div>
-                        <div style="color: #64748b; font-size: 8px; font-weight: bold; text-transform: uppercase; margin-top: 4px;">Jarvis: <span style="color: #475569; font-weight: 800;">B: ${r.trms.buyFormula || r.trms.buyIndex || '—'} | S: ${r.trms.sellFormula || r.trms.sellIndex || '—'}</span></div>
+                        <div style="color: #64748b; font-size: 8px; font-weight: bold; text-transform: uppercase; margin-top: 4px;">TRMS: <span style="color: #475569; font-weight: 800;">B: ${r.trms.buyFormula || r.trms.buyIndex || '—'} | S: ${r.trms.sellFormula || r.trms.sellIndex || '—'}</span></div>
                     </td>
                     <td style="border: 1px solid #e2e8f0; padding: 10px 12px; font-size: 10px; background: ${srcMismatch ? '#fef2f2' : 'transparent'};">
                         <div style="color: #64748b; font-size: 8px; font-weight: bold; text-transform: uppercase;">App: <span style="color: #1e293b; font-weight: 800;">${formatUSD(r.app.src)}</span></div>
@@ -1939,8 +1939,8 @@ export const DiscrepancyCheck: React.FC<DiscrepancyCheckProps> = ({
 
           'App Buy Formula': r.app.buyFormula || '—',
           'App Sell Formula': r.app.sellFormula || '—',
-          'Jarvis Buy Formula': r.trms.buyFormula || r.trms.buyIndex || '—',
-          'Jarvis Sell Formula': r.trms.sellFormula || r.trms.sellIndex || '—',
+          'TRMS Buy Formula': r.trms.buyFormula || r.trms.buyIndex || '—',
+          'TRMS Sell Formula': r.trms.sellFormula || r.trms.sellIndex || '—',
 
           'App SRC Costs ($)': r.app.src,
           'TRMS SRC Costs ($)': r.trms.src,
@@ -3412,7 +3412,7 @@ const ReconciliationRowItem = memo(({ row, activeTab, columnWidths, handleRowEdi
         </div>
       </div>
 
-      {/* 8b. Formula (App vs Jarvis Comparison - Neutral display without red highlighting) */}
+      {/* 8b. Formula (App vs TRMS Comparison - Neutral display without red highlighting) */}
       <div className="px-3 py-2 shrink-0 flex flex-col justify-center border-r border-slate-100 overflow-hidden" style={{ width: columnWidths['Formula'] || 260 }}>
         <div className="flex flex-col mb-1 pb-1 border-b border-slate-100">
           <div className="flex justify-between items-center text-[8px] text-slate-400 font-bold uppercase mb-0.5">
@@ -3438,16 +3438,31 @@ const ReconciliationRowItem = memo(({ row, activeTab, columnWidths, handleRowEdi
         </div>
         <div className="flex flex-col">
           <div className="flex justify-between items-center text-[8px] text-slate-400 font-bold uppercase mb-0.5">
-            <span>Jarvis Formula</span>
+            <span>TRMS Formula</span>
+            {(r.trms.buyTiers && r.trms.buyTiers.length >= 2) || (r.trms.sellTiers && r.trms.sellTiers.length >= 2) ? (
+              <span className="text-emerald-600 font-extrabold">2-Tier</span>
+            ) : null}
           </div>
           <div className="flex flex-col text-[9px] font-mono leading-tight space-y-0.5">
-            <div className="truncate text-slate-600" title={`Jarvis Buy: ${r.trms.buyFormula || r.trms.buyIndex || '—'}`}>
+            <div className="truncate text-slate-600" title={`TRMS Buy: ${r.trms.buyTiers && r.trms.buyTiers.length >= 2 ? `${r.trms.buyTiers[0].indexName || '—'} (T1) / ${r.trms.buyTiers[1].indexName || '—'} (T2)` : (r.trms.buyFormula || r.trms.buyIndex || '—')}`}>
               <span className="text-slate-400 font-sans text-[8px] font-bold mr-1">B:</span>
-              <span className="text-slate-600">{r.trms.buyFormula || r.trms.buyIndex || '—'}</span>
+              {r.trms.buyTiers && r.trms.buyTiers.length >= 2 ? (
+                <span className="text-slate-600">
+                  {r.trms.buyTiers[0].indexName || '—'} <span className="text-slate-400 text-[8px]">(T1)</span> / {r.trms.buyTiers[1].indexName || '—'} <span className="text-slate-400 text-[8px]">(T2)</span>
+                </span>
+              ) : (
+                <span className="text-slate-600">{r.trms.buyFormula || r.trms.buyIndex || '—'}</span>
+              )}
             </div>
-            <div className="truncate text-slate-600" title={`Jarvis Sell: ${r.trms.sellFormula || r.trms.sellIndex || '—'}`}>
+            <div className="truncate text-slate-600" title={`TRMS Sell: ${r.trms.sellTiers && r.trms.sellTiers.length >= 2 ? `${r.trms.sellTiers[0].indexName || '—'} (T1) / ${r.trms.sellTiers[1].indexName || '—'} (T2)` : (r.trms.sellFormula || r.trms.sellIndex || '—')}`}>
               <span className="text-slate-400 font-sans text-[8px] font-bold mr-1">S:</span>
-              <span className="text-slate-600">{r.trms.sellFormula || r.trms.sellIndex || '—'}</span>
+              {r.trms.sellTiers && r.trms.sellTiers.length >= 2 ? (
+                <span className="text-slate-600">
+                  {r.trms.sellTiers[0].indexName || '—'} <span className="text-slate-400 text-[8px]">(T1)</span> / {r.trms.sellTiers[1].indexName || '—'} <span className="text-slate-400 text-[8px]">(T2)</span>
+                </span>
+              ) : (
+                <span className="text-slate-600">{r.trms.sellFormula || r.trms.sellIndex || '—'}</span>
+              )}
             </div>
           </div>
         </div>

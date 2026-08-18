@@ -1,3 +1,5 @@
+import { formatTrmsIndexName } from './indexRenaming';
+
 export function isUnallocatedBuyer(buyerName?: string): boolean {
   if (!buyerName || !buyerName.trim()) return true;
   const b = buyerName.trim().toUpperCase();
@@ -285,6 +287,7 @@ export interface TrmsStrategySummary {
 
 export function extractRowIndexName(row: any): string {
   if (!row) return '';
+  let raw = '';
   const aliases = [
     'IndexName_ProjectionMethod',
     'IndexName ProjectionMethod',
@@ -301,24 +304,29 @@ export function extractRowIndexName(row: any): string {
   for (const alias of aliases) {
     const val = row[alias];
     if (val !== undefined && val !== null && String(val).trim() !== '') {
-      return String(val).trim();
+      raw = String(val).trim();
+      break;
     }
   }
-  for (const key of Object.keys(row)) {
-    const norm = key.toLowerCase().replace(/[\s_]/g, '');
-    if (
-      norm === 'indexnameprojectionmethod' ||
-      norm === 'projectionmethod' ||
-      norm === 'indexname' ||
-      norm === 'indexnameprojection_method'
-    ) {
-      const val = row[key];
-      if (val !== undefined && val !== null && String(val).trim() !== '') {
-        return String(val).trim();
+  if (!raw) {
+    for (const key of Object.keys(row)) {
+      const norm = key.toLowerCase().replace(/[\s_]/g, '');
+      if (
+        norm === 'indexnameprojectionmethod' ||
+        norm === 'projectionmethod' ||
+        norm === 'indexname' ||
+        norm === 'indexnameprojection_method'
+      ) {
+        const val = row[key];
+        if (val !== undefined && val !== null && String(val).trim() !== '') {
+          raw = String(val).trim();
+          break;
+        }
       }
     }
   }
-  return '';
+  if (!raw) return '';
+  return formatTrmsIndexName(raw);
 }
 
 export function extractRowFormula(row: any): string {
@@ -1029,12 +1037,13 @@ export function computeTrmsSummaryRows(
 
     const extractIndexNames = (rows: any[]): string => {
       if (!rows || rows.length === 0) return '—';
-      const set = new Set<string>();
+      const items: string[] = [];
       rows.forEach(r => {
         const idx = extractRowIndexName(r);
-        if (idx) set.add(idx);
+        if (idx && idx !== '—') items.push(idx);
       });
-      return set.size > 0 ? Array.from(set).join(', ') : '—';
+      if (items.length === 0) return '—';
+      return formatTrmsIndexName(items.join('::'));
     };
 
     const extractFormulas = (rows: any[]): string => {
