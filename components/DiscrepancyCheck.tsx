@@ -278,6 +278,107 @@ const PRIORITY_COLUMNS = [
   'Reference'
 ];
 
+const formatAppComponentFormula = (
+  p: CargoProfile | undefined,
+  type: 'buy' | 'sell' | 'tier2Buy' | 'tier2Sell'
+): string => {
+  if (!p) return '—';
+  const prefix = type;
+
+  // Check if component fields exist
+  const hasComponents = Boolean(
+    (p as any)[`${prefix}PriceIndex1`] ||
+    (p as any)[`${prefix}PriceIndex2`] ||
+    (p as any)[`${prefix}PriceIndex3`] ||
+    ((p as any)[`${prefix}Price1Weightage`] !== undefined && (p as any)[`${prefix}Price1Weightage`] !== null && (p as any)[`${prefix}Price1Weightage`] !== 0 && (p as any)[`${prefix}Price1Weightage`] !== '') ||
+    ((p as any)[`${prefix}PriceOverallConstant`] !== undefined && (p as any)[`${prefix}PriceOverallConstant`] !== null && (p as any)[`${prefix}PriceOverallConstant`] !== 0 && (p as any)[`${prefix}PriceOverallConstant`] !== '')
+  );
+
+  if (hasComponents) {
+    const parts: string[] = [];
+    for (let i = 1; i <= 3; i++) {
+      const w = (p as any)[`${prefix}Price${i}Weightage`];
+      const s = (p as any)[`${prefix}Price${i}Slope`];
+      const idx = ((p as any)[`${prefix}PriceIndex${i}`] || '').trim();
+      const rawMDef = ((p as any)[`${prefix}Price${i}MonthDef`] || '').trim();
+      const mDef = rawMDef ? rawMDef.replace(/[()]/g, '') : '';
+      const c = (p as any)[`${prefix}Price${i}Constant`];
+
+      if (idx) {
+        let compStr = '';
+        if (idx.toLowerCase() === 'fix and firm' || idx.toLowerCase() === 'fixed') {
+          compStr = c !== undefined && c !== null && c !== '' ? `$${c}` : 'Fixed';
+        } else {
+          let mStr = '';
+          if (mDef && mDef !== 'n' && mDef !== 'None' && mDef !== '') {
+            mStr = ` (${mDef})`;
+          }
+          const indexPart = `${idx}${mStr}`;
+
+          let slopePart = '';
+          if (s !== undefined && s !== null && s !== '' && !isNaN(Number(s)) && Number(s) !== 0) {
+            const numS = Number(s);
+            if (numS !== 1) {
+              const pct = numS * 100;
+              const formattedPct = pct % 1 === 0 ? pct.toFixed(0) : pct.toFixed(2);
+              slopePart = `${formattedPct}% `;
+            }
+          }
+
+          let constPart = '';
+          if (c !== undefined && c !== null && c !== '' && !isNaN(Number(c)) && Number(c) !== 0) {
+            const numC = Number(c);
+            constPart = numC > 0 ? ` + ${numC}` : ` - ${Math.abs(numC)}`;
+          }
+
+          compStr = `${slopePart}${indexPart}${constPart}`;
+        }
+
+        // Apply weightage if defined and not 100%
+        if (w !== undefined && w !== null && w !== '' && !isNaN(Number(w)) && Number(w) > 0 && Number(w) !== 1) {
+          const numW = Number(w);
+          const wPct = (numW * 100).toFixed(numW * 100 % 1 === 0 ? 0 : 1);
+          parts.push(`${wPct}% [${compStr}]`);
+        } else {
+          parts.push(compStr);
+        }
+      } else if (c !== undefined && c !== null && c !== '' && !isNaN(Number(c)) && Number(c) !== 0 && w !== undefined && w !== null && Number(w) > 0) {
+        const numC = Number(c);
+        const numW = Number(w);
+        if (numW !== 1) {
+          const wPct = (numW * 100).toFixed(numW * 100 % 1 === 0 ? 0 : 1);
+          parts.push(`${wPct}% [${numC}]`);
+        } else {
+          parts.push(`${numC}`);
+        }
+      }
+    }
+
+    const overallC = (p as any)[`${prefix}PriceOverallConstant`];
+    let overallCStr = '';
+    if (overallC !== undefined && overallC !== null && overallC !== '' && !isNaN(Number(overallC)) && Number(overallC) !== 0) {
+      const numOverallC = Number(overallC);
+      overallCStr = numOverallC > 0 ? ` + ${numOverallC}` : ` - ${Math.abs(numOverallC)}`;
+    }
+
+    if (parts.length > 0) {
+      return `${parts.join(' + ')}${overallCStr}`;
+    } else if (overallCStr) {
+      return overallCStr.replace(/^\s*\+\s*/, '');
+    }
+  }
+
+  // Fallback to formula string if no components
+  const formulaMap: Record<string, string> = {
+    buy: p.buyFormula || '',
+    sell: p.sellFormula || '',
+    tier2Buy: p.tier2BuyFormula || '',
+    tier2Sell: p.tier2SellFormula || ''
+  };
+
+  return formulaMap[type] || '—';
+};
+
 interface StrategyHierarchy {
     [group: string]: string[];
 }
@@ -1051,10 +1152,10 @@ export const DiscrepancyCheck: React.FC<DiscrepancyCheckProps> = ({
           tier2SellVol: appSellVolT2,
           effectiveBuyPrice: appBuyPriceEffective,
           effectiveSellPrice: appSellPriceEffective,
-          buyFormula: app?.buyFormula || '—',
-          sellFormula: app?.sellFormula || '—',
-          tier2BuyFormula: app?.tier2BuyFormula || '',
-          tier2SellFormula: app?.tier2SellFormula || ''
+          buyFormula: formatAppComponentFormula(app, 'buy'),
+          sellFormula: formatAppComponentFormula(app, 'sell'),
+          tier2BuyFormula: formatAppComponentFormula(app, 'tier2Buy'),
+          tier2SellFormula: formatAppComponentFormula(app, 'tier2Sell')
         },
         trms: {
           buyer: trmsBuyer,
