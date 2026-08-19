@@ -415,8 +415,9 @@ export function normalizeMonthDef(def?: string | number): string {
 
     const lower = str.toLowerCase();
     if (lower === 'none') return 'None';
-    if (lower === 'n') return 'n';
+    if (lower === 'n' || lower === 'm') return 'n';
     if (lower.startsWith('n-') || lower.startsWith('n+')) return lower;
+    if (lower.startsWith('m-') || lower.startsWith('m+')) return `n${lower.slice(1)}`;
 
     return str;
 }

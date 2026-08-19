@@ -310,8 +310,14 @@ const formatAppComponentFormula = (
           compStr = c !== undefined && c !== null && c !== '' ? `$${c}` : 'Fixed';
         } else {
           let mStr = '';
-          if (mDef && mDef !== 'n' && mDef !== 'None' && mDef !== '') {
-            mStr = ` (${mDef})`;
+          if (mDef && mDef !== 'None' && mDef !== '') {
+            const lowerMDef = mDef.toLowerCase();
+            const normalizedMDef = (lowerMDef === 'm' || lowerMDef === 'n')
+              ? 'n'
+              : (lowerMDef.startsWith('m') ? `n${mDef.slice(1)}` : mDef);
+            if (!idx.includes('(')) {
+              mStr = ` (${normalizedMDef})`;
+            }
           }
           const indexPart = `${idx}${mStr}`;
 
