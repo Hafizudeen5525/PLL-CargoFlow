@@ -21,7 +21,7 @@ export interface SummaryRowData {
   deliveredVolume: number;
   finalPurchaseCost: number;
   finalSalesRevenue: number;
-  finalTotalCost: number;
+  finalOtherCost: number;
   finalPhysicalPnL: number;
   isYearTotal?: boolean;
   isGrandTotal?: boolean;
@@ -62,7 +62,7 @@ export const PortfolioSummaryExportModal: React.FC<PortfolioSummaryExportModalPr
     let grandDelivered = 0;
     let grandPurchase = 0;
     let grandRevenue = 0;
-    let grandTotalCost = 0;
+    let grandOtherCost = 0;
     let grandPnL = 0;
 
     selectedYears.forEach(year => {
@@ -73,7 +73,7 @@ export const PortfolioSummaryExportModal: React.FC<PortfolioSummaryExportModalPr
       let yearDelivered = 0;
       let yearPurchase = 0;
       let yearRevenue = 0;
-      let yearTotalCost = 0;
+      let yearOtherCost = 0;
       let yearPnL = 0;
 
       GROUP_DEFINITIONS.forEach(def => {
@@ -88,7 +88,13 @@ export const PortfolioSummaryExportModal: React.FC<PortfolioSummaryExportModalPr
           return sum + ((p.reconciledPurchaseCost && p.reconciledPurchaseCost > 0) ? p.reconciledPurchaseCost : (t1Purchase + t2Purchase));
         }, 0);
         const revenue = groupProfiles.reduce((sum, p) => sum + (p.finalSalesRevenue || 0), 0);
-        const totalCost = groupProfiles.reduce((sum, p) => sum + (p.finalTotalCost || 0), 0);
+        const otherCost = groupProfiles.reduce((sum, p) => {
+          const t1Purchase = (p.loadedVolume || 0) * (p.absoluteBuyPrice || 0);
+          const t2Purchase = p.isTieredPricing ? (p.tier2LoadedVolume || 0) * (p.absoluteTier2BuyPrice || 0) : 0;
+          const cargoPurchase = (p.reconciledPurchaseCost && p.reconciledPurchaseCost > 0) ? p.reconciledPurchaseCost : (t1Purchase + t2Purchase);
+          const totalCost = p.finalTotalCost !== undefined ? p.finalTotalCost : (cargoPurchase + ((p.reconciledSrcCost && p.reconciledSrcCost > 0) ? p.reconciledSrcCost : (p.incoterms === 'DES' ? (p.srcUnitFee || 0) * ((p.deliveredVolume || 0) + (p.tier2DeliveredVolume || 0)) : 0)));
+          return sum + Math.max(0, totalCost - cargoPurchase);
+        }, 0);
         const pnl = groupProfiles.reduce((sum, p) => {
           const calcPnL = p.finalPhysicalPnL !== undefined ? p.finalPhysicalPnL : ((p.finalSalesRevenue || 0) - (p.finalTotalCost || 0));
           return sum + calcPnL;
@@ -99,7 +105,7 @@ export const PortfolioSummaryExportModal: React.FC<PortfolioSummaryExportModalPr
         yearDelivered += delivered;
         yearPurchase += purchase;
         yearRevenue += revenue;
-        yearTotalCost += totalCost;
+        yearOtherCost += otherCost;
         yearPnL += pnl;
 
         rows.push({
@@ -111,7 +117,7 @@ export const PortfolioSummaryExportModal: React.FC<PortfolioSummaryExportModalPr
           deliveredVolume: delivered,
           finalPurchaseCost: purchase,
           finalSalesRevenue: revenue,
-          finalTotalCost: totalCost,
+          finalOtherCost: otherCost,
           finalPhysicalPnL: pnl
         });
       });
@@ -126,7 +132,7 @@ export const PortfolioSummaryExportModal: React.FC<PortfolioSummaryExportModalPr
         deliveredVolume: yearDelivered,
         finalPurchaseCost: yearPurchase,
         finalSalesRevenue: yearRevenue,
-        finalTotalCost: yearTotalCost,
+        finalOtherCost: yearOtherCost,
         finalPhysicalPnL: yearPnL,
         isYearTotal: true
       });
@@ -142,7 +148,13 @@ export const PortfolioSummaryExportModal: React.FC<PortfolioSummaryExportModalPr
         return sum + ((p.reconciledPurchaseCost && p.reconciledPurchaseCost > 0) ? p.reconciledPurchaseCost : (t1Purchase + t2Purchase));
       }, 0);
       const coRevenue = carvedOutProfiles.reduce((sum, p) => sum + (p.finalSalesRevenue || 0), 0);
-      const coTotalCost = carvedOutProfiles.reduce((sum, p) => sum + (p.finalTotalCost || 0), 0);
+      const coOtherCost = carvedOutProfiles.reduce((sum, p) => {
+        const t1Purchase = (p.loadedVolume || 0) * (p.absoluteBuyPrice || 0);
+        const t2Purchase = p.isTieredPricing ? (p.tier2LoadedVolume || 0) * (p.absoluteTier2BuyPrice || 0) : 0;
+        const cargoPurchase = (p.reconciledPurchaseCost && p.reconciledPurchaseCost > 0) ? p.reconciledPurchaseCost : (t1Purchase + t2Purchase);
+        const totalCost = p.finalTotalCost !== undefined ? p.finalTotalCost : (cargoPurchase + ((p.reconciledSrcCost && p.reconciledSrcCost > 0) ? p.reconciledSrcCost : (p.incoterms === 'DES' ? (p.srcUnitFee || 0) * ((p.deliveredVolume || 0) + (p.tier2DeliveredVolume || 0)) : 0)));
+        return sum + Math.max(0, totalCost - cargoPurchase);
+      }, 0);
       const coPnL = carvedOutProfiles.reduce((sum, p) => {
         const calcPnL = p.finalPhysicalPnL !== undefined ? p.finalPhysicalPnL : ((p.finalSalesRevenue || 0) - (p.finalTotalCost || 0));
         return sum + calcPnL;
@@ -157,7 +169,7 @@ export const PortfolioSummaryExportModal: React.FC<PortfolioSummaryExportModalPr
         deliveredVolume: coDelivered,
         finalPurchaseCost: coPurchase,
         finalSalesRevenue: coRevenue,
-        finalTotalCost: coTotalCost,
+        finalOtherCost: coOtherCost,
         finalPhysicalPnL: coPnL,
         isCarvedOut: true
       });
@@ -167,11 +179,11 @@ export const PortfolioSummaryExportModal: React.FC<PortfolioSummaryExportModalPr
       grandDelivered += yearDelivered;
       grandPurchase += yearPurchase;
       grandRevenue += yearRevenue;
-      grandTotalCost += yearTotalCost;
+      grandOtherCost += yearOtherCost;
       grandPnL += yearPnL;
     });
 
-    return { rows, grand: { count: grandCount, loaded: grandLoaded, delivered: grandDelivered, purchase: grandPurchase, revenue: grandRevenue, totalCost: grandTotalCost, pnl: grandPnL } };
+    return { rows, grand: { count: grandCount, loaded: grandLoaded, delivered: grandDelivered, purchase: grandPurchase, revenue: grandRevenue, otherCost: grandOtherCost, pnl: grandPnL } };
   }, [recalculatedProfiles, selectedYears]);
 
   if (!isOpen) return null;
@@ -203,7 +215,7 @@ export const PortfolioSummaryExportModal: React.FC<PortfolioSummaryExportModalPr
             'Delivered Volume (MMBtu)': r.deliveredVolume,
             'Final Purchase Cost ($)': r.finalPurchaseCost,
             'Final Sales Revenue ($)': r.finalSalesRevenue,
-            'Final Total Cost ($)': r.finalTotalCost,
+            'Other Costs (eg SRC) ($)': r.finalOtherCost,
             'Final Physical P&L ($)': r.finalPhysicalPnL
           });
         });
@@ -219,7 +231,7 @@ export const PortfolioSummaryExportModal: React.FC<PortfolioSummaryExportModalPr
         'Delivered Volume (MMBtu)': summaryData.grand.delivered,
         'Final Purchase Cost ($)': summaryData.grand.purchase,
         'Final Sales Revenue ($)': summaryData.grand.revenue,
-        'Final Total Cost ($)': summaryData.grand.totalCost,
+        'Other Costs (eg SRC) ($)': summaryData.grand.otherCost,
         'Final Physical P&L ($)': summaryData.grand.pnl
       });
 
@@ -233,7 +245,7 @@ export const PortfolioSummaryExportModal: React.FC<PortfolioSummaryExportModalPr
         { wch: 24 }, // Delivered Volume
         { wch: 24 }, // Final Purchase Cost
         { wch: 24 }, // Final Sales Revenue
-        { wch: 22 }, // Final Total Cost
+        { wch: 24 }, // Other Costs (eg SRC)
         { wch: 22 }  // Final Physical P&L
       ];
 
@@ -268,7 +280,7 @@ export const PortfolioSummaryExportModal: React.FC<PortfolioSummaryExportModalPr
             <td class="num-cell">${r.deliveredVolume.toLocaleString('en-US', { maximumFractionDigits: 0 })}</td>
             <td class="num-cell">${formatCurrency(r.finalPurchaseCost)}</td>
             <td class="num-cell">${formatCurrency(r.finalSalesRevenue)}</td>
-            <td class="num-cell">${formatCurrency(r.finalTotalCost)}</td>
+            <td class="num-cell">${formatCurrency(r.finalOtherCost)}</td>
             <td class="num-cell" style="color: ${pnlColor}; font-weight: ${isTotal ? '700' : '600'};">${formatCurrency(r.finalPhysicalPnL)}</td>
           </tr>
         `;
@@ -428,7 +440,7 @@ export const PortfolioSummaryExportModal: React.FC<PortfolioSummaryExportModalPr
               <th>Delivered Volume</th>
               <th>Final Purchase Cost</th>
               <th>Final Sales Revenue</th>
-              <th>Final Total Cost</th>
+              <th>Other Costs (eg SRC)</th>
               <th>Final Physical P&L</th>
             </tr>
           </thead>
@@ -450,7 +462,7 @@ export const PortfolioSummaryExportModal: React.FC<PortfolioSummaryExportModalPr
             <th>Delivered Volume</th>
             <th>Final Purchase Cost</th>
             <th>Final Sales Revenue</th>
-            <th>Final Total Cost</th>
+            <th>Other Costs (eg SRC)</th>
             <th>Final Physical P&L</th>
           </tr>
         </thead>
@@ -462,7 +474,7 @@ export const PortfolioSummaryExportModal: React.FC<PortfolioSummaryExportModalPr
             <td class="num-cell">${summaryData.grand.delivered.toLocaleString('en-US', { maximumFractionDigits: 0 })}</td>
             <td class="num-cell">${formatCurrency(summaryData.grand.purchase)}</td>
             <td class="num-cell">${formatCurrency(summaryData.grand.revenue)}</td>
-            <td class="num-cell">${formatCurrency(summaryData.grand.totalCost)}</td>
+            <td class="num-cell">${formatCurrency(summaryData.grand.otherCost)}</td>
             <td class="num-cell" style="color: ${grandPnLColor};">${formatCurrency(summaryData.grand.pnl)}</td>
           </tr>
         </tbody>
@@ -499,7 +511,7 @@ export const PortfolioSummaryExportModal: React.FC<PortfolioSummaryExportModalPr
 
   const handleCopyTable = () => {
     try {
-      const headers = ['Category', 'No. of Cargoes', 'Loaded Volume', 'Delivered Volume', 'Final Purchase Cost', 'Final Sales Revenue', 'Final Total Cost', 'Final Physical P&L'];
+      const headers = ['Category', 'No. of Cargoes', 'Loaded Volume', 'Delivered Volume', 'Final Purchase Cost', 'Final Sales Revenue', 'Other Costs (eg SRC)', 'Final Physical P&L'];
       const rows = summaryData.rows.map(r => [
         r.category,
         r.cargoCount,
@@ -507,7 +519,7 @@ export const PortfolioSummaryExportModal: React.FC<PortfolioSummaryExportModalPr
         r.deliveredVolume,
         r.finalPurchaseCost,
         r.finalSalesRevenue,
-        r.finalTotalCost,
+        r.finalOtherCost,
         r.finalPhysicalPnL
       ].join('\t'));
 
@@ -624,7 +636,7 @@ export const PortfolioSummaryExportModal: React.FC<PortfolioSummaryExportModalPr
                         <th className="py-2.5 px-3 text-right">Delivered Volume</th>
                         <th className="py-2.5 px-3 text-right">Final Purchase Cost</th>
                         <th className="py-2.5 px-3 text-right">Final Sales Revenue</th>
-                        <th className="py-2.5 px-3 text-right">Final Total Cost</th>
+                        <th className="py-2.5 px-3 text-right">Other Costs (eg SRC)</th>
                         <th className="py-2.5 px-4 text-right">Final Physical P&L</th>
                       </tr>
                     </thead>
@@ -666,7 +678,7 @@ export const PortfolioSummaryExportModal: React.FC<PortfolioSummaryExportModalPr
                               {formatCurrency(row.finalSalesRevenue)}
                             </td>
                             <td className="py-2.5 px-3 text-right font-mono">
-                              {formatCurrency(row.finalTotalCost)}
+                              {formatCurrency(row.finalOtherCost)}
                             </td>
                             <td className={`py-2.5 px-4 text-right font-mono font-bold ${pnlColor}`}>
                               {formatCurrency(row.finalPhysicalPnL)}
@@ -695,8 +707,8 @@ export const PortfolioSummaryExportModal: React.FC<PortfolioSummaryExportModalPr
                 <span className="font-mono font-bold text-slate-100">{formatCurrency(summaryData.grand.revenue)}</span>
               </div>
               <div>
-                <span className="text-slate-400 block text-[10px] uppercase">Total Cost</span>
-                <span className="font-mono font-bold text-slate-100">{formatCurrency(summaryData.grand.totalCost)}</span>
+                <span className="text-slate-400 block text-[10px] uppercase">Other Costs (eg SRC)</span>
+                <span className="font-mono font-bold text-slate-100">{formatCurrency(summaryData.grand.otherCost)}</span>
               </div>
               <div className="border-l border-slate-700 pl-6">
                 <span className="text-slate-400 block text-[10px] uppercase">Net Physical P&L</span>

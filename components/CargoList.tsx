@@ -312,19 +312,26 @@ export const CargoList: React.FC<CargoListProps> = ({
                             const count = (seenInSheetCount.get(lookupName) || 0) + 1;
                             seenInSheetCount.set(lookupName, count);
 
-                            const lowerStrat = cleanStratName.toLowerCase();
                             const isTier2Leg = count > 1 || 
-                                               lowerStrat.includes('t(') || 
-                                               lowerStrat.endsWith('t') || 
-                                               lowerStrat.endsWith('t2') || 
-                                               lowerStrat.includes('tier 2');
+                                               /\b(t2|tier\s*2)\b/i.test(cleanStratName) ||
+                                               /\(t2?\)/i.test(cleanStratName) ||
+                                               /[-_\s]t2$/i.test(cleanStratName) ||
+                                               /[-_\s]t$/i.test(cleanStratName);
 
                             if (!mergedData[lookupName]) {
                                 mergedData[lookupName] = { 
                                     strategyName: lookupName,
                                     portfolioYear: fileYear,
                                     strategyGroup: fileGroup,
-                                    importFileName: file.name
+                                    importFileName: file.name,
+                                    loadedVolume: 0,
+                                    deliveredVolume: 0,
+                                    tier2LoadedVolume: 0,
+                                    tier2DeliveredVolume: 0,
+                                    reconciledSrcCost: 0,
+                                    reconciledPurchaseCost: 0,
+                                    reconciledSalesRevenue: 0,
+                                    isTieredPricing: false
                                 };
                             } else {
                                 if (fileYear !== 'Unassigned') mergedData[lookupName].portfolioYear = fileYear;
@@ -630,10 +637,17 @@ export const CargoList: React.FC<CargoListProps> = ({
             const changes: Record<string, { old: any, new: any }> = {};
 
             if (existingMatch) {
-                const isTiered = Boolean(existingMatch.isTieredPricing || parsedFields.isTieredPricing || (parsedFields.tier2LoadedVolume && parsedFields.tier2LoadedVolume > 0));
+                const isTiered = Boolean(parsedFields.isTieredPricing || (parsedFields.tier2LoadedVolume && parsedFields.tier2LoadedVolume > 0));
                 const merged = { 
                     ...existingMatch, 
                     ...parsedFields, 
+                    loadedVolume: parsedFields.loadedVolume !== undefined ? parsedFields.loadedVolume : 0,
+                    deliveredVolume: parsedFields.deliveredVolume !== undefined ? parsedFields.deliveredVolume : 0,
+                    tier2LoadedVolume: parsedFields.tier2LoadedVolume !== undefined ? parsedFields.tier2LoadedVolume : 0,
+                    tier2DeliveredVolume: parsedFields.tier2DeliveredVolume !== undefined ? parsedFields.tier2DeliveredVolume : 0,
+                    reconciledSrcCost: parsedFields.reconciledSrcCost !== undefined ? parsedFields.reconciledSrcCost : 0,
+                    reconciledPurchaseCost: parsedFields.reconciledPurchaseCost !== undefined ? parsedFields.reconciledPurchaseCost : 0,
+                    reconciledSalesRevenue: parsedFields.reconciledSalesRevenue !== undefined ? parsedFields.reconciledSalesRevenue : 0,
                     portfolioYear: (parsedFields.portfolioYear && parsedFields.portfolioYear !== 'Unassigned') ? parsedFields.portfolioYear : (existingMatch.portfolioYear || parsedFields.portfolioYear || 'Unassigned'),
                     strategyGroup: (parsedFields.strategyGroup && parsedFields.strategyGroup !== 'Unassigned') ? parsedFields.strategyGroup : (existingMatch.strategyGroup || parsedFields.strategyGroup || 'Unassigned'),
                     importFileName: parsedFields.importFileName || existingMatch.importFileName,
@@ -642,15 +656,15 @@ export const CargoList: React.FC<CargoListProps> = ({
                 
                 // --- Robust Tiered Volume Splitting Logic ---
                 if (isTiered) {
-                    const t1Load = parsedFields.loadedVolume !== undefined ? parsedFields.loadedVolume : (existingMatch.loadedVolume || 0);
-                    const t2Load = parsedFields.tier2LoadedVolume !== undefined ? parsedFields.tier2LoadedVolume : (existingMatch.tier2LoadedVolume || 0);
+                    const t1Load = parsedFields.loadedVolume !== undefined ? parsedFields.loadedVolume : 0;
+                    const t2Load = parsedFields.tier2LoadedVolume !== undefined ? parsedFields.tier2LoadedVolume : 0;
                     merged.loadedVolume = t1Load;
                     merged.tier2LoadedVolume = t2Load;
                     merged.totalLoadedVolume = t1Load + t2Load;
                     merged.tierLimit = t1Load > 0 ? t1Load : (existingMatch.tierLimit || t1Load);
 
-                    const t1Del = parsedFields.deliveredVolume !== undefined ? parsedFields.deliveredVolume : (existingMatch.deliveredVolume || 0);
-                    const t2Del = parsedFields.tier2DeliveredVolume !== undefined ? parsedFields.tier2DeliveredVolume : (existingMatch.tier2DeliveredVolume || 0);
+                    const t1Del = parsedFields.deliveredVolume !== undefined ? parsedFields.deliveredVolume : 0;
+                    const t2Del = parsedFields.tier2DeliveredVolume !== undefined ? parsedFields.tier2DeliveredVolume : 0;
                     merged.deliveredVolume = t1Del;
                     merged.tier2DeliveredVolume = t2Del;
                     merged.totalDeliveredVolume = t1Del + t2Del;
