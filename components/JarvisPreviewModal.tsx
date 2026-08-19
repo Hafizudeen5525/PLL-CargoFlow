@@ -141,6 +141,8 @@ export const JarvisPreviewModal: React.FC<JarvisPreviewModalProps> = ({ existing
                             </th>
                             <th className="px-4 py-4 text-center w-24">Status</th>
                             <th className="px-6 py-4 w-48 sticky left-12 bg-slate-100 z-20 border-r border-slate-200">Strategy Name</th>
+                            <th className="px-3 py-4 text-center">Year</th>
+                            <th className="px-3 py-4 text-center">Group</th>
                             <th className="px-4 py-4">Buyer/Source</th>
                             <th className="px-4 py-4">Loading Date</th>
                             <th className="px-4 py-4">Delivery Date</th>
@@ -168,6 +170,23 @@ export const JarvisPreviewModal: React.FC<JarvisPreviewModalProps> = ({ existing
                                     </span>
                                 </td>
                                 <td className="px-6 py-3 font-bold text-slate-700 sticky left-12 bg-white group-hover:bg-indigo-50/20 z-10 border-r border-slate-200">{row.strategyName}</td>
+                                <td className="px-3 py-3 text-center">
+                                    <span className="px-2 py-0.5 rounded text-[10px] font-bold bg-slate-100 text-slate-700 border border-slate-200">
+                                        {row.portfolioYear || 'Unassigned'}
+                                    </span>
+                                </td>
+                                <td className="px-3 py-3 text-center">
+                                    <span className={`px-2 py-0.5 rounded text-[10px] font-bold border ${
+                                        row.strategyGroup === 'CarvedOut' ? 'bg-purple-50 text-purple-700 border-purple-200' :
+                                        row.strategyGroup === 'PL9SB' ? 'bg-emerald-50 text-emerald-700 border-emerald-200' :
+                                        row.strategyGroup === 'LNGC' ? 'bg-sky-50 text-sky-700 border-sky-200' :
+                                        row.strategyGroup === 'FLNG2' || row.strategyGroup === 'FLNG1' ? 'bg-amber-50 text-amber-700 border-amber-200' :
+                                        row.strategyGroup === 'Unassigned' ? 'bg-rose-50 text-rose-700 border-rose-200' :
+                                        'bg-slate-100 text-slate-700 border-slate-200'
+                                    }`}>
+                                        {row.strategyGroup || 'Unassigned'}
+                                    </span>
+                                </td>
                                 <td className="px-4 py-3">
                                     <div className="flex flex-col gap-1">
                                         <DiffCell row={row} rowIndex={i} field="source" isIgnored={ignoredChanges[i]?.has("source")} onToggle={toggleFieldChange} />

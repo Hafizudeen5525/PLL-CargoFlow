@@ -39,6 +39,9 @@ export interface CargoProfile {
   pricingEndDate?: string;
   totalLoadedVolume?: number;
   totalDeliveredVolume?: number;
+  portfolioYear?: string;
+  strategyGroup?: string;
+  importFileName?: string;
   
   // Manual Overrides & Rounding
   isBuyPriceManual?: boolean;

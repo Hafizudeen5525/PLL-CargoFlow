@@ -99,13 +99,13 @@ export const Dashboard: React.FC<DashboardProps> = ({ profiles, marketData, forw
   };
 
   const availableGroups = useMemo(() => {
-      return ['All', ...GROUPS, 'Others'];
+      return ['All', 'CarvedOut', ...GROUPS, 'Others'];
   }, []);
 
   const viewProfiles = useMemo(() => {
       let filtered = profiles;
       if (groupFilter !== 'All') {
-          filtered = profiles.filter((p: CargoProfile) => getGroupName(p.strategyName) === groupFilter);
+          filtered = profiles.filter((p: CargoProfile) => getGroupName(p.strategyName, p.strategyGroup) === groupFilter);
       }
 
       return filtered.map((p: CargoProfile) => {
@@ -163,7 +163,8 @@ export const Dashboard: React.FC<DashboardProps> = ({ profiles, marketData, forw
       const acc = {
           total: initStats(),
           realized: initStats(),
-          unrealized: initStats()
+          unrealized: initStats(),
+          carvedOut: initStats()
       };
 
       viewProfiles.forEach((p: CargoProfile) => {
@@ -176,7 +177,20 @@ export const Dashboard: React.FC<DashboardProps> = ({ profiles, marketData, forw
           const purchase = (p.reconciledPurchaseCost > 0) ? p.reconciledPurchaseCost : (totalPurchaseT1 + totalPurchaseT2);
           const other = pnl - revenue + purchase;
 
-          // Add to Total
+          const isCO = getGroupName(p.strategyName, p.strategyGroup) === 'CarvedOut';
+
+          // If groupFilter is 'All' and this is a CarvedOut cargo, accumulate in carvedOut and exclude from main totals
+          if (groupFilter === 'All' && isCO) {
+              acc.carvedOut.pnl += pnl;
+              acc.carvedOut.revenue += revenue;
+              acc.carvedOut.purchase += purchase;
+              acc.carvedOut.other += other;
+              acc.carvedOut.vol += vol;
+              acc.carvedOut.count += 1;
+              return;
+          }
+
+          // Otherwise, accumulate in main Total and Buckets
           acc.total.pnl += pnl;
           acc.total.revenue += revenue;
           acc.total.purchase += purchase;
@@ -184,7 +198,6 @@ export const Dashboard: React.FC<DashboardProps> = ({ profiles, marketData, forw
           acc.total.vol += vol;
           acc.total.count += 1;
 
-          // Add to Buckets
           if (p.pnlBucket === PnLBucket.Realized) {
               acc.realized.pnl += pnl;
               acc.realized.revenue += revenue;
@@ -203,19 +216,20 @@ export const Dashboard: React.FC<DashboardProps> = ({ profiles, marketData, forw
       });
 
       return acc;
-  }, [viewProfiles]);
+  }, [viewProfiles, groupFilter]);
 
   const getStatsSnapshot = useCallback((dateStr: string) => {
     const initStats = () => ({ pnl: 0, revenue: 0, purchase: 0, other: 0, vol: 0, count: 0 });
     const acc = {
         total: initStats(),
         realized: initStats(),
-        unrealized: initStats()
+        unrealized: initStats(),
+        carvedOut: initStats()
     };
 
     let filtered = profiles;
     if (groupFilter !== 'All') {
-        filtered = profiles.filter((p: CargoProfile) => getGroupName(p.strategyName) === groupFilter);
+        filtered = profiles.filter((p: CargoProfile) => getGroupName(p.strategyName, p.strategyGroup) === groupFilter);
     }
 
     filtered.forEach((p: CargoProfile) => {
@@ -232,6 +246,18 @@ export const Dashboard: React.FC<DashboardProps> = ({ profiles, marketData, forw
         const totalPurchaseT2 = cp.isTieredPricing ? (cp.tier2LoadedVolume || 0) * (cp.absoluteTier2BuyPrice || 0) : 0;
         const purchase = (cp.reconciledPurchaseCost > 0) ? cp.reconciledPurchaseCost : (totalPurchaseT1 + totalPurchaseT2);
         const other = pnl - revenue + purchase;
+
+        const isCO = getGroupName(cp.strategyName, cp.strategyGroup) === 'CarvedOut';
+
+        if (groupFilter === 'All' && isCO) {
+            acc.carvedOut.pnl += pnl;
+            acc.carvedOut.revenue += revenue;
+            acc.carvedOut.purchase += purchase;
+            acc.carvedOut.other += other;
+            acc.carvedOut.vol += vol;
+            acc.carvedOut.count += 1;
+            return;
+        }
 
         acc.total.pnl += pnl;
         acc.total.revenue += revenue;
@@ -419,6 +445,60 @@ export const Dashboard: React.FC<DashboardProps> = ({ profiles, marketData, forw
                 onDrillDown={(metric: any) => setActiveDrillDown({ bucket: 'Unrealized', metric })}
             />
         </div>
+
+        {/* CarvedOut Portfolio Summary (Excluded from Main P&L) */}
+        {(groupFilter === 'All' || groupFilter === 'CarvedOut') && (targetStats.carvedOut.count > 0 || groupFilter === 'CarvedOut') && (
+          <motion.div 
+            variants={itemVariants}
+            className="p-4 bg-gradient-to-r from-purple-950 via-slate-900 to-indigo-950 text-white rounded-2xl shadow-md border border-purple-500/30 flex flex-col md:flex-row items-start md:items-center justify-between gap-4"
+          >
+            <div className="flex items-center gap-3">
+              <div className="w-10 h-10 rounded-xl bg-purple-500/20 border border-purple-400/30 flex items-center justify-center text-purple-300 font-bold shrink-0">
+                <svg className="w-5 h-5" fill="none" stroke="currentColor" viewBox="0 0 24 24">
+                  <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M19 11H5m14 0a2 2 0 012 2v6a2 2 0 01-2 2H5a2 2 0 01-2-2v-6a2 2 0 012-2m14 0V9a2 2 0 00-2-2M5 11V9a2 2 0 012-2m0 0V5a2 2 0 012-2h6a2 2 0 012 2v2M7 7h10" />
+                </svg>
+              </div>
+              <div>
+                <div className="flex items-center gap-2">
+                  <h4 className="font-bold text-sm text-white">CarvedOut Portfolio</h4>
+                  <span className="px-2 py-0.5 rounded-full text-[9px] font-bold uppercase tracking-wider bg-purple-500/30 text-purple-200 border border-purple-400/30">
+                    Excluded from Main P&L
+                  </span>
+                </div>
+                <p className="text-[11px] text-purple-200/70">
+                  Tracked and reported independently from the core portfolio totals
+                </p>
+              </div>
+            </div>
+
+            <div className="flex flex-wrap items-center gap-4 sm:gap-6 bg-white/5 backdrop-blur-xs px-4 py-2.5 rounded-xl border border-white/10 w-full md:w-auto justify-between md:justify-end">
+              <div>
+                <span className="text-[9px] uppercase tracking-wider text-purple-300 font-bold block">Cargoes</span>
+                <span className="text-sm font-bold font-mono text-white">{targetStats.carvedOut.count}</span>
+              </div>
+              <div className="h-6 w-px bg-white/10" />
+              <div>
+                <span className="text-[9px] uppercase tracking-wider text-purple-300 font-bold block">Delivered Vol</span>
+                <span className="text-sm font-bold font-mono text-white">{targetStats.carvedOut.vol.toLocaleString()}</span>
+              </div>
+              <div className="h-6 w-px bg-white/10" />
+              <div>
+                <span className="text-[9px] uppercase tracking-wider text-purple-300 font-bold block">CarvedOut P&L</span>
+                <span className={`text-sm font-black font-mono ${targetStats.carvedOut.pnl >= 0 ? 'text-emerald-400' : 'text-rose-400'}`}>
+                  {formatCurrency(targetStats.carvedOut.pnl)}
+                </span>
+              </div>
+              {groupFilter !== 'CarvedOut' && (
+                <button
+                  onClick={() => setGroupFilter('CarvedOut')}
+                  className="px-3 py-1.5 rounded-lg bg-purple-600 hover:bg-purple-500 text-white text-[10px] font-bold transition-colors shadow-sm"
+                >
+                  Filter CarvedOut
+                </button>
+              )}
+            </div>
+          </motion.div>
+        )}
       </div>
 
       <motion.div variants={itemVariants}>

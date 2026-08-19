@@ -2,7 +2,25 @@
 import React, { useState, useMemo, useRef, useEffect, useCallback } from 'react';
 import { CargoProfile, PnLBucket, EmptyCargoProfile } from '../types';
 import { motion, AnimatePresence } from 'framer-motion';
-import { detectUnit, recalculateProfile, getGroupName, GROUPS, getPortfolioYear, saveForwardCurve, ForwardCurveRow, formatCurrency, formatPrice, normalizeStrategyName, normalizeMonthDef, normalizeMonthKey, saveHistoricalCurve, getHistoricalCurveSync } from '../services/calculationService';
+import { 
+  detectUnit, 
+  recalculateProfile, 
+  getGroupName, 
+  GROUPS, 
+  getPortfolioYear, 
+  saveForwardCurve, 
+  ForwardCurveRow, 
+  formatCurrency, 
+  formatPrice, 
+  normalizeStrategyName, 
+  normalizeMonthDef, 
+  normalizeMonthKey, 
+  saveHistoricalCurve, 
+  getHistoricalCurveSync,
+  parseJarvisFilename,
+  getSnGroupOverrides,
+  saveSnGroupOverrides
+} from '../services/calculationService';
 import { WorldMap } from './WorldMap';
 import { CalendarView } from './CalendarView';
 import { JarvisPreviewModal } from './JarvisPreviewModal';
@@ -36,6 +54,13 @@ export const CargoList: React.FC<CargoListProps> = ({
   const [isImportingJarvis, setIsImportingJarvis] = useState(false);
   const [pendingJarvisRows, setPendingJarvisRows] = useState<any[]>([]);
   const [isJarvisPreviewOpen, setIsJarvisPreviewOpen] = useState(false);
+
+  // Reassign Modal State
+  const [isReassignModalOpen, setIsReassignModalOpen] = useState(false);
+  const [reassignSelectedIds, setReassignSelectedIds] = useState<Set<string>>(new Set());
+  const [reassignYear, setReassignYear] = useState<string>('2026');
+  const [reassignGroup, setReassignGroup] = useState<string>('CarvedOut');
+  const [reassignSearch, setReassignSearch] = useState<string>('');
 
   const fileInputRef = useRef<HTMLInputElement>(null);
   const filterMenuRef = useRef<HTMLDivElement>(null);
@@ -76,7 +101,7 @@ export const CargoList: React.FC<CargoListProps> = ({
   }, []);
 
   const headerKeys = useMemo(() => [
-    'strategyName', 'buyer', 'source', 'deliveryDate', 'loadingDate', 
+    'strategyName', 'portfolioYear', 'strategyGroup', 'buyer', 'source', 'deliveryDate', 'loadingDate', 
     'absoluteBuyPrice', 'loadedVolume', 'purchaseCost', 
     'absoluteSellPrice', 'deliveredVolume', 'salesRevenue', 
     'reconciledSrcCost', 'trmsHedging', 'finalTotalPnL', 'pnlBucket'
@@ -91,7 +116,12 @@ export const CargoList: React.FC<CargoListProps> = ({
     Object.entries(activeFilters).forEach(([column, selectedValues]) => {
       const values = selectedValues as Set<any>;
       if (values.size > 0) {
-        result = result.filter((p: CargoProfile) => values.has((p as any)[column]));
+        result = result.filter((p: CargoProfile) => {
+          let val = (p as any)[column];
+          if (column === 'portfolioYear') val = getPortfolioYear(p);
+          if (column === 'strategyGroup') val = getGroupName(p.strategyName, p.strategyGroup);
+          return values.has(val);
+        });
       }
     });
     if (sortConfig.key) {
@@ -100,7 +130,13 @@ export const CargoList: React.FC<CargoListProps> = ({
         let aVal = (a as any)[key!];
         let bVal = (b as any)[key!];
         
-        if (key === 'purchaseCost') {
+        if (key === 'portfolioYear') {
+            aVal = getPortfolioYear(a);
+            bVal = getPortfolioYear(b);
+        } else if (key === 'strategyGroup') {
+            aVal = getGroupName(a.strategyName, a.strategyGroup);
+            bVal = getGroupName(b.strategyName, b.strategyGroup);
+        } else if (key === 'purchaseCost') {
             aVal = ((a.absoluteBuyPrice || 0) * (a.loadedVolume || 0)) + (a.isTieredPricing ? ((a.absoluteTier2BuyPrice || 0) * (a.tier2LoadedVolume || 0)) : 0);
             bVal = ((b.absoluteBuyPrice || 0) * (b.loadedVolume || 0)) + (b.isTieredPricing ? ((b.absoluteTier2BuyPrice || 0) * (b.tier2LoadedVolume || 0)) : 0);
         }
@@ -123,11 +159,17 @@ export const CargoList: React.FC<CargoListProps> = ({
     headerKeys.forEach((header: string) => {
       if (header === 'strategyName') {
         profiles.forEach((p: CargoProfile) => {
-          const group = getGroupName(p.strategyName);
+          const group = getGroupName(p.strategyName, p.strategyGroup);
           if (!strategyHierarchy[group]) strategyHierarchy[group] = [];
           if (!strategyHierarchy[group].includes(p.strategyName)) strategyHierarchy[group].push(p.strategyName);
         });
         Object.keys(strategyHierarchy).forEach((g: string) => strategyHierarchy[g].sort());
+      } else if (header === 'portfolioYear') {
+        const uniqueYears = new Set(profiles.map(p => getPortfolioYear(p)));
+        values[header] = Array.from(uniqueYears).sort().reverse();
+      } else if (header === 'strategyGroup') {
+        const uniqueGroups = new Set(profiles.map(p => getGroupName(p.strategyName, p.strategyGroup)));
+        values[header] = Array.from(uniqueGroups).sort();
       } else if (header === 'deliveryDate' || header === 'loadingDate') {
         const hierarchy: any = {};
         profiles.forEach((p: CargoProfile) => {
@@ -232,6 +274,8 @@ export const CargoList: React.FC<CargoListProps> = ({
                     const data = evt.target?.result as string;
                     const workbook = XLSX.read(data, { type: 'binary', cellDates: true });
                     
+                    const { portfolioYear: fileYear, groupName: fileGroup } = parseJarvisFilename(file.name);
+
                     const extractSheetData = (sheetName: string, mapping: Record<string, string>) => {
                         const sheet = workbook.Sheets[sheetName];
                         if (!sheet) return;
@@ -275,7 +319,18 @@ export const CargoList: React.FC<CargoListProps> = ({
                                                lowerStrat.endsWith('t2') || 
                                                lowerStrat.includes('tier 2');
 
-                            if (!mergedData[lookupName]) mergedData[lookupName] = { strategyName: lookupName };
+                            if (!mergedData[lookupName]) {
+                                mergedData[lookupName] = { 
+                                    strategyName: lookupName,
+                                    portfolioYear: fileYear,
+                                    strategyGroup: fileGroup,
+                                    importFileName: file.name
+                                };
+                            } else {
+                                if (fileYear !== 'Unassigned') mergedData[lookupName].portfolioYear = fileYear;
+                                if (fileGroup !== 'Unassigned') mergedData[lookupName].strategyGroup = fileGroup;
+                                mergedData[lookupName].importFileName = file.name;
+                            }
                             
                             if (isTier2Leg) {
                                 mergedData[lookupName].isTieredPricing = true;
@@ -576,7 +631,14 @@ export const CargoList: React.FC<CargoListProps> = ({
 
             if (existingMatch) {
                 const isTiered = Boolean(existingMatch.isTieredPricing || parsedFields.isTieredPricing || (parsedFields.tier2LoadedVolume && parsedFields.tier2LoadedVolume > 0));
-                const merged = { ...existingMatch, ...parsedFields, isTieredPricing: isTiered };
+                const merged = { 
+                    ...existingMatch, 
+                    ...parsedFields, 
+                    portfolioYear: (parsedFields.portfolioYear && parsedFields.portfolioYear !== 'Unassigned') ? parsedFields.portfolioYear : (existingMatch.portfolioYear || parsedFields.portfolioYear || 'Unassigned'),
+                    strategyGroup: (parsedFields.strategyGroup && parsedFields.strategyGroup !== 'Unassigned') ? parsedFields.strategyGroup : (existingMatch.strategyGroup || parsedFields.strategyGroup || 'Unassigned'),
+                    importFileName: parsedFields.importFileName || existingMatch.importFileName,
+                    isTieredPricing: isTiered 
+                };
                 
                 // --- Robust Tiered Volume Splitting Logic ---
                 if (isTiered) {
@@ -622,7 +684,14 @@ export const CargoList: React.FC<CargoListProps> = ({
 
                 if (Object.keys(changes).length === 0) status = 'No Change';
             } else {
-                const baseProfile = { ...EmptyCargoProfile, id: Date.now().toString() + Math.random().toString().slice(2, 6), ...parsedFields };
+                const baseProfile = { 
+                    ...EmptyCargoProfile, 
+                    id: Date.now().toString() + Math.random().toString().slice(2, 6), 
+                    portfolioYear: parsedFields.portfolioYear || 'Unassigned',
+                    strategyGroup: parsedFields.strategyGroup || 'Unassigned',
+                    importFileName: parsedFields.importFileName || '',
+                    ...parsedFields 
+                };
                 finalProfile = recalculateProfile(baseProfile, true) as CargoProfile;
                 status = 'New';
             }
@@ -649,9 +718,55 @@ export const CargoList: React.FC<CargoListProps> = ({
   };
 
   const handleFinishJarvisImport = (finalImports: CargoProfile[]) => {
+      const snOverrides: Record<string, string> = {};
+      finalImports.forEach(p => {
+          if (p.strategyGroup && p.strategyGroup !== 'Unassigned') {
+              snOverrides[p.strategyName] = p.strategyGroup;
+          }
+      });
+      if (Object.keys(snOverrides).length > 0) {
+          saveSnGroupOverrides(snOverrides);
+      }
       if (onBulkImport) onBulkImport(finalImports);
       setIsJarvisPreviewOpen(false);
       setPendingJarvisRows([]);
+  };
+
+  const handleOpenReassignModal = (singleProfile?: CargoProfile) => {
+      if (singleProfile) {
+          setReassignSelectedIds(new Set([singleProfile.id]));
+          setReassignYear(getPortfolioYear(singleProfile).toString());
+          setReassignGroup(getGroupName(singleProfile.strategyName, singleProfile.strategyGroup));
+      } else if (selectedIds.size > 0) {
+          setReassignSelectedIds(new Set(selectedIds));
+      } else {
+          setReassignSelectedIds(new Set(processedProfiles.map(p => p.id)));
+      }
+      setIsReassignModalOpen(true);
+  };
+
+  const handleApplyReassignment = () => {
+      if (reassignSelectedIds.size === 0) {
+          toast.error('Please select at least one strategy to reassign.');
+          return;
+      }
+
+      const targetProfiles = profiles.filter(p => reassignSelectedIds.has(p.id));
+      const snOverrides: Record<string, string> = {};
+      targetProfiles.forEach(p => {
+          snOverrides[p.strategyName] = reassignGroup;
+      });
+      saveSnGroupOverrides(snOverrides);
+
+      if (onBulkUpdate) {
+          onBulkUpdate(reassignSelectedIds, {
+              portfolioYear: reassignYear,
+              strategyGroup: reassignGroup
+          });
+      }
+
+      toast.success(`Successfully reassigned ${reassignSelectedIds.size} strategy/cargo(es) to ${reassignYear} • ${reassignGroup}`);
+      setIsReassignModalOpen(false);
   };
 
   /* 
@@ -819,24 +934,46 @@ export const CargoList: React.FC<CargoListProps> = ({
         </div>
         <div className="flex items-center gap-2 overflow-x-auto pb-1 sm:pb-0 w-full lg:w-auto custom-scrollbar">
             {selectedIds.size > 0 && userRole !== 'viewer' && (
-              <button
-                onClick={() => {
-                  if (window.confirm(`Are you sure you want to delete ${selectedIds.size} selected cargo(es)?`)) {
-                    if (onBulkDelete) {
-                      onBulkDelete(selectedIds);
-                    } else if (onDelete) {
-                      selectedIds.forEach(id => onDelete(id));
+              <>
+                <button
+                  onClick={() => handleOpenReassignModal()}
+                  className="whitespace-nowrap text-[10px] sm:text-xs font-bold text-indigo-700 bg-indigo-50 px-3 py-1.5 rounded-lg border border-indigo-200 hover:bg-indigo-100 transition-colors flex items-center gap-1.5 shadow-sm"
+                >
+                  <svg className="w-4 h-4" fill="none" stroke="currentColor" viewBox="0 0 24 24">
+                    <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M8 7h12m0 0l-4-4m4 4l-4 4m0 6H4m0 0l4 4m-4-4l4-4" />
+                  </svg>
+                  Reassign Group/Year ({selectedIds.size})
+                </button>
+                <button
+                  onClick={() => {
+                    if (window.confirm(`Are you sure you want to delete ${selectedIds.size} selected cargo(es)?`)) {
+                      if (onBulkDelete) {
+                        onBulkDelete(selectedIds);
+                      } else if (onDelete) {
+                        selectedIds.forEach(id => onDelete(id));
+                      }
+                      setSelectedIds(new Set());
+                      toast.success(`Deleted ${selectedIds.size} cargo(es)`);
                     }
-                    setSelectedIds(new Set());
-                    toast.success(`Deleted ${selectedIds.size} cargo(es)`);
-                  }
-                }}
-                className="whitespace-nowrap text-[10px] sm:text-xs font-bold text-red-600 bg-red-50 px-3 py-1.5 rounded-lg border border-red-200 hover:bg-red-100 transition-colors flex items-center gap-1.5 shadow-sm"
+                  }}
+                  className="whitespace-nowrap text-[10px] sm:text-xs font-bold text-red-600 bg-red-50 px-3 py-1.5 rounded-lg border border-red-200 hover:bg-red-100 transition-colors flex items-center gap-1.5 shadow-sm"
+                >
+                  <svg className="w-4 h-4" fill="none" stroke="currentColor" viewBox="0 0 24 24">
+                    <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M19 7l-.867 12.142A2 2 0 0116.138 21H7.862a2 2 0 01-1.995-1.858L5 7m5 4v6m4-6v6m1-10V4a1 1 0 00-1-1h-4a1 1 0 00-1 1v3M4 7h16" />
+                  </svg>
+                  Delete Selected ({selectedIds.size})
+                </button>
+              </>
+            )}
+            {selectedIds.size === 0 && userRole !== 'viewer' && (
+              <button
+                onClick={() => handleOpenReassignModal()}
+                className="whitespace-nowrap text-[10px] sm:text-xs font-bold text-slate-700 bg-white px-3 py-1.5 rounded-lg border border-slate-200 hover:bg-slate-50 transition-colors flex items-center gap-1.5 shadow-sm"
               >
-                <svg className="w-4 h-4" fill="none" stroke="currentColor" viewBox="0 0 24 24">
-                  <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M19 7l-.867 12.142A2 2 0 0116.138 21H7.862a2 2 0 01-1.995-1.858L5 7m5 4v6m4-6v6m1-10V4a1 1 0 00-1-1h-4a1 1 0 00-1 1v3M4 7h16" />
+                <svg className="w-4 h-4 text-slate-500" fill="none" stroke="currentColor" viewBox="0 0 24 24">
+                  <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M8 7h12m0 0l-4-4m4 4l-4 4m0 6H4m0 0l4 4m-4-4l4-4" />
                 </svg>
-                Delete Selected ({selectedIds.size})
+                Reassign SN Groups
               </button>
             )}
             {userRole !== 'viewer' && (
@@ -1065,6 +1202,38 @@ export const CargoList: React.FC<CargoListProps> = ({
                                               {p.isTieredPricing && <span className="ml-2 px-1 py-0.5 bg-indigo-50 text-indigo-600 rounded text-[9px]">2 TIER</span>}
                                           </div>
 
+                                          <div className="px-4 py-3 shrink-0 truncate text-[11px] text-slate-600 border-r border-slate-50 flex items-center" style={{ width: COLUMN_WIDTH }}>
+                                              <button 
+                                                onClick={() => handleOpenReassignModal(p)}
+                                                className="px-2 py-0.5 rounded text-[10px] font-bold bg-slate-100 text-slate-700 hover:bg-indigo-50 hover:text-indigo-600 border border-slate-200 transition-colors"
+                                                title="Click to reassign year"
+                                              >
+                                                {getPortfolioYear(p)}
+                                              </button>
+                                          </div>
+
+                                          <div className="px-4 py-3 shrink-0 truncate text-[11px] text-slate-600 border-r border-slate-50 flex items-center" style={{ width: COLUMN_WIDTH }}>
+                                              {(() => {
+                                                const grp = getGroupName(p.strategyName, p.strategyGroup);
+                                                return (
+                                                  <button 
+                                                    onClick={() => handleOpenReassignModal(p)}
+                                                    className={`px-2 py-0.5 rounded text-[10px] font-bold border transition-colors ${
+                                                      grp === 'CarvedOut' ? 'bg-purple-50 text-purple-700 border-purple-200 hover:bg-purple-100' :
+                                                      grp === 'PL9SB' ? 'bg-emerald-50 text-emerald-700 border-emerald-200 hover:bg-emerald-100' :
+                                                      grp === 'LNGC' ? 'bg-sky-50 text-sky-700 border-sky-200 hover:bg-sky-100' :
+                                                      grp === 'FLNG2' || grp === 'FLNG1' ? 'bg-amber-50 text-amber-700 border-amber-200 hover:bg-amber-100' :
+                                                      grp === 'Unassigned' ? 'bg-rose-50 text-rose-700 border-rose-200 hover:bg-rose-100' :
+                                                      'bg-slate-100 text-slate-700 border-slate-200 hover:bg-slate-200'
+                                                    }`}
+                                                    title="Click to reassign group"
+                                                  >
+                                                    {grp}
+                                                  </button>
+                                                );
+                                              })()}
+                                          </div>
+
                                           <div className="px-4 py-3 shrink-0 truncate text-[11px] text-slate-600 border-r border-slate-50" style={{ width: COLUMN_WIDTH }}>{p.buyer || '-'}</div>
                                           <div className="px-4 py-3 shrink-0 truncate text-[11px] text-slate-600 border-r border-slate-50" style={{ width: COLUMN_WIDTH }}>{p.source || '-'}</div>
                                           <div className="px-4 py-3 shrink-0 truncate text-[11px] text-slate-600 border-r border-slate-50" style={{ width: COLUMN_WIDTH }}>{p.deliveryDate || '-'}</div>
@@ -1148,6 +1317,10 @@ export const CargoList: React.FC<CargoListProps> = ({
                           <div className="min-w-0">
                             <h3 className="text-sm font-bold text-slate-800 truncate">{p.strategyName}</h3>
                             <p className="text-[10px] text-slate-400 font-bold uppercase tracking-tight truncate">{p.source} → {p.buyer}</p>
+                            <div className="flex items-center gap-1.5 mt-1">
+                              <span className="px-1.5 py-0.5 rounded text-[9px] font-bold bg-slate-100 text-slate-600">{getPortfolioYear(p)}</span>
+                              <span className="px-1.5 py-0.5 rounded text-[9px] font-bold bg-indigo-50 text-indigo-700">{getGroupName(p.strategyName, p.strategyGroup)}</span>
+                            </div>
                           </div>
                           <span className={`px-2 py-0.5 rounded-full font-bold text-[8px] uppercase ${p.pnlBucket === PnLBucket.Realized ? 'bg-blue-100 text-blue-700' : 'bg-amber-100 text-amber-700'}`}>
                             {p.pnlBucket}
@@ -1201,6 +1374,175 @@ export const CargoList: React.FC<CargoListProps> = ({
                 onClose={() => setIsJarvisPreviewOpen(false)}
                 onImport={handleFinishJarvisImport}
             />
+        )}
+      </AnimatePresence>
+
+      {/* Reassign Group / Year Modal */}
+      <AnimatePresence>
+        {isReassignModalOpen && (
+          <div className="fixed inset-0 bg-slate-900/60 backdrop-blur-xs flex items-center justify-center p-4 z-[9999]">
+            <motion.div 
+              initial={{ opacity: 0, scale: 0.95, y: 10 }}
+              animate={{ opacity: 1, scale: 1, y: 0 }}
+              exit={{ opacity: 0, scale: 0.95, y: 10 }}
+              className="bg-white rounded-2xl shadow-2xl border border-slate-200 w-full max-w-lg overflow-hidden flex flex-col max-h-[90vh]"
+            >
+              <div className="px-6 py-4 bg-slate-900 text-white flex items-center justify-between">
+                <div className="flex items-center gap-2.5">
+                  <div className="w-8 h-8 rounded-lg bg-indigo-500/20 text-indigo-400 flex items-center justify-center font-bold">
+                    <svg className="w-4 h-4" fill="none" stroke="currentColor" viewBox="0 0 24 24">
+                      <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M8 7h12m0 0l-4-4m4 4l-4 4m0 6H4m0 0l4 4m-4-4l4-4" />
+                    </svg>
+                  </div>
+                  <div>
+                    <h3 className="font-bold text-sm text-white">Reassign Portfolio & Strategy Group</h3>
+                    <p className="text-[11px] text-slate-400">Update grouping metadata and persistent SN mappings</p>
+                  </div>
+                </div>
+                <button 
+                  onClick={() => setIsReassignModalOpen(false)}
+                  className="p-1 text-slate-400 hover:text-white rounded-lg hover:bg-slate-800 transition-colors"
+                >
+                  <svg className="w-5 h-5" fill="none" stroke="currentColor" viewBox="0 0 24 24">
+                    <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M6 18L18 6M6 6l12 12" />
+                  </svg>
+                </button>
+              </div>
+
+              <div className="p-6 space-y-5 overflow-y-auto custom-scrollbar flex-1">
+                {/* Target Strategy Selection Info */}
+                <div>
+                  <div className="flex items-center justify-between mb-2">
+                    <label className="text-xs font-bold text-slate-700 uppercase tracking-wider">
+                      Selected Strategies ({reassignSelectedIds.size})
+                    </label>
+                    <div className="flex gap-2">
+                      <button 
+                        type="button" 
+                        onClick={() => setReassignSelectedIds(new Set(processedProfiles.map(p => p.id)))}
+                        className="text-[10px] text-indigo-600 font-bold hover:underline"
+                      >
+                        Select All Visible ({processedProfiles.length})
+                      </button>
+                      <span className="text-slate-300">|</span>
+                      <button 
+                        type="button" 
+                        onClick={() => setReassignSelectedIds(new Set())}
+                        className="text-[10px] text-slate-500 font-bold hover:underline"
+                      >
+                        Clear
+                      </button>
+                    </div>
+                  </div>
+                  <div className="max-h-36 overflow-y-auto border border-slate-200 rounded-xl p-2 bg-slate-50 space-y-1 custom-scrollbar">
+                    {profiles.map(p => {
+                      const isChecked = reassignSelectedIds.has(p.id);
+                      return (
+                        <label key={p.id} className="flex items-center justify-between px-2 py-1 rounded hover:bg-white text-xs cursor-pointer">
+                          <div className="flex items-center gap-2 truncate">
+                            <input 
+                              type="checkbox"
+                              checked={isChecked}
+                              onChange={(e) => {
+                                const next = new Set(reassignSelectedIds);
+                                if (e.target.checked) next.add(p.id); else next.delete(p.id);
+                                setReassignSelectedIds(next);
+                              }}
+                              className="rounded border-slate-300 text-indigo-600 w-3.5 h-3.5"
+                            />
+                            <span className="font-semibold text-slate-800 truncate">{p.strategyName}</span>
+                          </div>
+                          <div className="flex items-center gap-1 shrink-0 text-[10px] text-slate-400 font-mono">
+                            <span>{getPortfolioYear(p)}</span>
+                            <span>•</span>
+                            <span>{getGroupName(p.strategyName, p.strategyGroup)}</span>
+                          </div>
+                        </label>
+                      );
+                    })}
+                  </div>
+                </div>
+
+                {/* Target Portfolio Year */}
+                <div>
+                  <label className="block text-xs font-bold text-slate-700 uppercase tracking-wider mb-2">
+                    Target Portfolio Year
+                  </label>
+                  <div className="grid grid-cols-4 gap-2">
+                    {['2026', '2027', '2028', 'Unassigned'].map((year) => (
+                      <button
+                        key={year}
+                        type="button"
+                        onClick={() => setReassignYear(year)}
+                        className={`py-2 px-3 text-xs font-bold rounded-xl border transition-all ${
+                          reassignYear === year 
+                            ? 'bg-indigo-600 text-white border-indigo-600 shadow-sm' 
+                            : 'bg-white text-slate-700 border-slate-200 hover:bg-slate-50'
+                        }`}
+                      >
+                        {year}
+                      </button>
+                    ))}
+                  </div>
+                </div>
+
+                {/* Target Strategy Group */}
+                <div>
+                  <label className="block text-xs font-bold text-slate-700 uppercase tracking-wider mb-2">
+                    Target Strategy Group
+                  </label>
+                  <div className="grid grid-cols-2 sm:grid-cols-3 gap-2">
+                    {[
+                      { id: 'CarvedOut', label: 'CarvedOut', desc: 'Separate / Excluded from main P&L' },
+                      { id: 'PL9SB', label: 'PL9SB (Train 9)', desc: 'Train 9 Portfolio' },
+                      { id: 'LNGC', label: 'LNGC', desc: 'LNGC Portfolio' },
+                      { id: 'FLNG1', label: 'FLNG1', desc: 'PFLNG1 Portfolio' },
+                      { id: 'FLNG2', label: 'FLNG2', desc: 'PFLNG2 Portfolio' },
+                      { id: 'Cheniere', label: 'Cheniere', desc: 'Cheniere Portfolio' },
+                      { id: 'Others', label: 'Others', desc: 'Other Portfolios' },
+                      { id: 'Spot', label: 'Spot', desc: 'Spot Portfolio' },
+                      { id: 'Unassigned', label: 'Unassigned', desc: 'No group assigned' },
+                    ].map((g) => (
+                      <button
+                        key={g.id}
+                        type="button"
+                        onClick={() => setReassignGroup(g.id)}
+                        className={`p-2.5 text-left rounded-xl border transition-all flex flex-col justify-between ${
+                          reassignGroup === g.id 
+                            ? 'bg-indigo-50 border-indigo-500 text-indigo-900 ring-2 ring-indigo-500/20' 
+                            : 'bg-white border-slate-200 text-slate-700 hover:bg-slate-50'
+                        }`}
+                      >
+                        <span className="text-xs font-bold flex items-center justify-between w-full">
+                          {g.label}
+                          {reassignGroup === g.id && <span className="w-1.5 h-1.5 rounded-full bg-indigo-600" />}
+                        </span>
+                        <span className="text-[9px] text-slate-400 mt-1 line-clamp-1">{g.desc}</span>
+                      </button>
+                    ))}
+                  </div>
+                </div>
+              </div>
+
+              <div className="px-6 py-4 bg-slate-50 border-t border-slate-200 flex items-center justify-between">
+                <button
+                  type="button"
+                  onClick={() => setIsReassignModalOpen(false)}
+                  className="px-4 py-2 text-xs font-bold text-slate-600 hover:text-slate-800 bg-white border border-slate-200 rounded-xl hover:bg-slate-50 transition-colors"
+                >
+                  Cancel
+                </button>
+                <button
+                  type="button"
+                  onClick={handleApplyReassignment}
+                  disabled={reassignSelectedIds.size === 0}
+                  className="px-5 py-2 text-xs font-bold text-white bg-indigo-600 hover:bg-indigo-700 disabled:opacity-50 disabled:cursor-not-allowed rounded-xl shadow-lg shadow-indigo-200 transition-all flex items-center gap-2"
+                >
+                  Apply Reassignment ({reassignSelectedIds.size})
+                </button>
+              </div>
+            </motion.div>
+          </div>
         )}
       </AnimatePresence>
     </div>

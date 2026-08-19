@@ -25,6 +25,7 @@ export interface SummaryRowData {
   finalPhysicalPnL: number;
   isYearTotal?: boolean;
   isGrandTotal?: boolean;
+  isCarvedOut?: boolean;
 }
 
 const GROUP_DEFINITIONS: Array<{ label: string; groupKey: string }> = [
@@ -65,7 +66,7 @@ export const PortfolioSummaryExportModal: React.FC<PortfolioSummaryExportModalPr
     let grandPnL = 0;
 
     selectedYears.forEach(year => {
-      const yearProfiles = recalculatedProfiles.filter(p => getPortfolioYear(p) === year);
+      const yearProfiles = recalculatedProfiles.filter(p => getPortfolioYear(p) === year.toString());
 
       let yearCount = 0;
       let yearLoaded = 0;
@@ -76,7 +77,7 @@ export const PortfolioSummaryExportModal: React.FC<PortfolioSummaryExportModalPr
       let yearPnL = 0;
 
       GROUP_DEFINITIONS.forEach(def => {
-        const groupProfiles = yearProfiles.filter(p => getGroupName(p.strategyName) === def.groupKey);
+        const groupProfiles = yearProfiles.filter(p => getGroupName(p.strategyName, p.strategyGroup) === def.groupKey);
 
         const count = groupProfiles.length;
         const loaded = groupProfiles.reduce((sum, p) => sum + (p.loadedVolume || 0) + (p.tier2LoadedVolume || 0), 0);
@@ -115,7 +116,7 @@ export const PortfolioSummaryExportModal: React.FC<PortfolioSummaryExportModalPr
         });
       });
 
-      // Year Total Row
+      // Main Year Total Row (Excluding CarvedOut)
       rows.push({
         category: `Total ${year}`,
         year,
@@ -128,6 +129,37 @@ export const PortfolioSummaryExportModal: React.FC<PortfolioSummaryExportModalPr
         finalTotalCost: yearTotalCost,
         finalPhysicalPnL: yearPnL,
         isYearTotal: true
+      });
+
+      // Separate CarvedOut Row for Year (Not in main total)
+      const carvedOutProfiles = yearProfiles.filter(p => getGroupName(p.strategyName, p.strategyGroup) === 'CarvedOut');
+      const coCount = carvedOutProfiles.length;
+      const coLoaded = carvedOutProfiles.reduce((sum, p) => sum + (p.loadedVolume || 0) + (p.tier2LoadedVolume || 0), 0);
+      const coDelivered = carvedOutProfiles.reduce((sum, p) => sum + (p.deliveredVolume || 0) + (p.tier2DeliveredVolume || 0), 0);
+      const coPurchase = carvedOutProfiles.reduce((sum, p) => {
+        const t1Purchase = (p.loadedVolume || 0) * (p.absoluteBuyPrice || 0);
+        const t2Purchase = p.isTieredPricing ? (p.tier2LoadedVolume || 0) * (p.absoluteTier2BuyPrice || 0) : 0;
+        return sum + ((p.reconciledPurchaseCost && p.reconciledPurchaseCost > 0) ? p.reconciledPurchaseCost : (t1Purchase + t2Purchase));
+      }, 0);
+      const coRevenue = carvedOutProfiles.reduce((sum, p) => sum + (p.finalSalesRevenue || 0), 0);
+      const coTotalCost = carvedOutProfiles.reduce((sum, p) => sum + (p.finalTotalCost || 0), 0);
+      const coPnL = carvedOutProfiles.reduce((sum, p) => {
+        const calcPnL = p.finalPhysicalPnL !== undefined ? p.finalPhysicalPnL : ((p.finalSalesRevenue || 0) - (p.finalTotalCost || 0));
+        return sum + calcPnL;
+      }, 0);
+
+      rows.push({
+        category: `Total CarvedOut ${year}`,
+        year,
+        groupKey: 'CarvedOut',
+        cargoCount: coCount,
+        loadedVolume: coLoaded,
+        deliveredVolume: coDelivered,
+        finalPurchaseCost: coPurchase,
+        finalSalesRevenue: coRevenue,
+        finalTotalCost: coTotalCost,
+        finalPhysicalPnL: coPnL,
+        isCarvedOut: true
       });
 
       grandCount += yearCount;
@@ -599,6 +631,7 @@ export const PortfolioSummaryExportModal: React.FC<PortfolioSummaryExportModalPr
                     <tbody className="divide-y divide-slate-100">
                       {yearRows.map((row, idx) => {
                         const isTotal = row.isYearTotal;
+                        const isCO = row.isCarvedOut;
                         const pnlColor = row.finalPhysicalPnL >= 0 ? 'text-emerald-600' : 'text-rose-600';
                         return (
                           <tr
@@ -606,10 +639,19 @@ export const PortfolioSummaryExportModal: React.FC<PortfolioSummaryExportModalPr
                             className={`transition-colors ${
                               isTotal
                                 ? 'bg-slate-100 font-bold text-slate-900 border-t-2 border-slate-300'
+                                : isCO
+                                ? 'bg-purple-50/50 text-purple-900 italic hover:bg-purple-50'
                                 : 'hover:bg-slate-50/80 text-slate-700'
                             }`}
                           >
-                            <td className="py-2.5 px-4 font-medium">{row.category}</td>
+                            <td className="py-2.5 px-4 font-medium flex items-center gap-2">
+                              <span>{row.category}</span>
+                              {isCO && (
+                                <span className="not-italic text-[9px] px-1.5 py-0.5 rounded bg-purple-100 text-purple-700 font-bold uppercase">
+                                  Separate / Excluded
+                                </span>
+                              )}
+                            </td>
                             <td className="py-2.5 px-3 text-right font-mono">{row.cargoCount}</td>
                             <td className="py-2.5 px-3 text-right font-mono">
                               {row.loadedVolume.toLocaleString('en-US', { maximumFractionDigits: 0 })}

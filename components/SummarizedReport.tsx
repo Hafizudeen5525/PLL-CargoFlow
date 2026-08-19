@@ -38,13 +38,34 @@ export const SummarizedReport: React.FC<SummarizedReportProps> = ({ profiles, po
       let inceptionValue = 0;
       let extrinsicValue = 0;
       
+      let carvedOutPnL = 0;
+      let carvedOutRealized = 0;
+      let carvedOutUnrealized = 0;
+      let carvedOutVolume = 0;
+      let carvedOutCount = 0;
+
       const groupPnL: Record<string, number> = {};
 
       yearProfiles.forEach(p => {
         const cp = recalculateProfile(p, true, date) as CargoProfile;
         const pnl = cp.finalTotalPnL || 0;
+        const vol = cp.deliveredVolume || 0;
+        const group = getGroupName(cp.strategyName, cp.strategyGroup);
+
+        if (group === 'CarvedOut') {
+          carvedOutPnL += pnl;
+          carvedOutVolume += vol;
+          carvedOutCount += 1;
+          if (cp.pnlBucket === PnLBucket.Realized) {
+            carvedOutRealized += pnl;
+          } else {
+            carvedOutUnrealized += pnl;
+          }
+          return;
+        }
+
         totalPnL += pnl;
-        totalVolume += cp.deliveredVolume || 0;
+        totalVolume += vol;
 
         if (cp.pnlBucket === PnLBucket.Realized) {
           realizedPnL += pnl;
@@ -53,18 +74,30 @@ export const SummarizedReport: React.FC<SummarizedReportProps> = ({ profiles, po
         }
 
         // Logic for Inception vs Extrinsic
-        // If optimized, we assume 20% of its P&L is extrinsic (optimization gain)
-        // Otherwise, 5% is extrinsic (market timing/small optimizations)
         const extrinsicRatio = cp.optimized ? 0.25 : 0.08;
         const extrinsic = pnl * extrinsicRatio;
         extrinsicValue += extrinsic;
         inceptionValue += (pnl - extrinsic);
 
-        const group = getGroupName(cp.strategyName);
         groupPnL[group] = (groupPnL[group] || 0) + pnl;
       });
 
-      return { totalPnL, realizedPnL, unrealizedPnL, totalVolume, inceptionValue, extrinsicValue, groupPnL };
+      return { 
+        totalPnL, 
+        realizedPnL, 
+        unrealizedPnL, 
+        totalVolume, 
+        inceptionValue, 
+        extrinsicValue, 
+        groupPnL,
+        carvedOut: {
+          pnl: carvedOutPnL,
+          realized: carvedOutRealized,
+          unrealized: carvedOutUnrealized,
+          volume: carvedOutVolume,
+          count: carvedOutCount
+        }
+      };
     };
 
     const today = calculateStats(targetDate);
@@ -197,6 +230,23 @@ export const SummarizedReport: React.FC<SummarizedReportProps> = ({ profiles, po
                   <p className="text-[8px] font-bold text-blue-400 mt-1">Trading Alpha Generated</p>
                 </div>
               </div>
+
+              {reportData.today.carvedOut.count > 0 && (
+                <div className="bg-purple-50/80 p-3 rounded-xl border border-purple-200">
+                  <div className="flex items-center justify-between mb-1">
+                    <span className="text-[9px] font-black text-purple-700 uppercase">CarvedOut Portfolio</span>
+                    <span className="text-[8px] font-bold px-1.5 py-0.5 rounded bg-purple-200 text-purple-800 uppercase">Excluded</span>
+                  </div>
+                  <div className="flex items-baseline justify-between">
+                    <span className={`text-base font-black ${reportData.today.carvedOut.pnl >= 0 ? 'text-purple-900' : 'text-rose-600'}`}>
+                      {formatCompact(reportData.today.carvedOut.pnl)}
+                    </span>
+                    <span className="text-[9px] font-mono text-purple-600 font-bold">
+                      {reportData.today.carvedOut.count} Cargoes • {reportData.today.carvedOut.volume.toLocaleString()} Vol
+                    </span>
+                  </div>
+                </div>
+              )}
 
               <div className="flex-1 flex flex-col">
                 <h2 className="text-[10px] font-black text-slate-400 uppercase tracking-widest mb-4 border-b border-slate-100 pb-2">P&L by Strategy Group</h2>

@@ -255,8 +255,51 @@ const STORAGE_KEY_HISTORICAL = 'historical_market_data';
 export const STORAGE_KEY_SN_GROUP_OVERRIDES = 'sn_group_overrides';
 export const STORAGE_KEY_CUSTOM_GROUPS = 'custom_portfolio_groups';
 
-export const DEFAULT_GROUPS = ['PL9SB', 'FLNG1', 'FLNG2', 'LNGC', 'Spot', 'Cheniere'];
-export const GROUPS = ['PL9SB', 'FLNG1', 'FLNG2', 'LNGC', 'Spot', 'Cheniere'];
+export const DEFAULT_GROUPS = ['PL9SB', 'FLNG1', 'FLNG2', 'LNGC', 'Spot', 'Cheniere', 'CarvedOut'];
+export const GROUPS = ['PL9SB', 'FLNG1', 'FLNG2', 'LNGC', 'Spot', 'Cheniere', 'CarvedOut'];
+
+/**
+ * Parses Jarvis Excel file name to automatically extract:
+ * 1. Portfolio Year (e.g. 2026, 2027, 2028)
+ * 2. Portfolio Strategy Group (e.g. CarvedOut, PL9SB, LNGC, FLNG2, FLNG1, Cheniere, Spot)
+ * 
+ * Example file names:
+ * - 2026_JARVISv3_CarvedOut_19082026 -> Year: '2026', Group: 'CarvedOut'
+ * - 2026_JARVISv3_Train9_19082026    -> Year: '2026', Group: 'PL9SB'
+ * - 2026_JARVISv2_LNGC_19082026      -> Year: '2026', Group: 'LNGC'
+ * - 2027_JARVISv3_PFLNG2_19082026    -> Year: '2027', Group: 'FLNG2'
+ */
+export function parseJarvisFilename(fileName: string): { portfolioYear: string; groupName: string } {
+    if (!fileName) return { portfolioYear: 'Unassigned', groupName: 'Unassigned' };
+    
+    const cleanName = fileName.replace(/\.[^/.]+$/, ''); // Remove extension
+    
+    // Extract Year (e.g. starts with 2026 or has 2026/2027/2028 as token)
+    const yearMatch = cleanName.match(/(?:^|[_\s-])(20\d{2})(?:[_\s-]|$)/i) || cleanName.match(/(20\d{2})/);
+    const portfolioYear = yearMatch ? yearMatch[1] : 'Unassigned';
+
+    // Extract Group
+    const upper = cleanName.toUpperCase();
+    let groupName = 'Unassigned';
+    
+    if (upper.includes('CARVEDOUT') || upper.includes('CARVED_OUT') || upper.includes('CARVED OUT')) {
+        groupName = 'CarvedOut';
+    } else if (upper.includes('TRAIN9') || upper.includes('TRAIN 9') || upper.includes('TRAIN_9') || upper.includes('PL9SB') || upper.includes('PL9') || upper.includes('T9')) {
+        groupName = 'PL9SB';
+    } else if (upper.includes('PFLNG1') || upper.includes('FLNG1')) {
+        groupName = 'FLNG1';
+    } else if (upper.includes('PFLNG2') || upper.includes('FLNG2')) {
+        groupName = 'FLNG2';
+    } else if (upper.includes('LNGC')) {
+        groupName = 'LNGC';
+    } else if (upper.includes('CHENIERE') || upper.includes('SPL') || upper.includes('CCL')) {
+        groupName = 'Cheniere';
+    } else if (upper.includes('SPOT')) {
+        groupName = 'Spot';
+    }
+
+    return { portfolioYear, groupName };
+}
 
 export function getCustomGroups(): string[] {
     try {
@@ -305,7 +348,17 @@ export function normalizeSnKey(sn: string): string {
     return String(sn || '').trim().toLowerCase().replace(/[^a-z0-9]/g, '');
 }
 
-export function getGroupName(strategyName: string = ''): string {
+export function getGroupName(strategyName: string = '', explicitGroup?: string): string {
+    // If explicitly assigned group is valid, prioritize it
+    if (explicitGroup && explicitGroup.trim() !== '' && explicitGroup !== 'Unassigned') {
+        const eg = explicitGroup.trim();
+        if (eg.toUpperCase().includes('CARVEDOUT') || eg.toUpperCase().includes('CARVED OUT')) return 'CarvedOut';
+        if (eg.toUpperCase().includes('TRAIN9') || eg.toUpperCase().includes('PL9SB')) return 'PL9SB';
+        if (eg.toUpperCase().includes('PFLNG1') || eg.toUpperCase().includes('FLNG1')) return 'FLNG1';
+        if (eg.toUpperCase().includes('PFLNG2') || eg.toUpperCase().includes('FLNG2')) return 'FLNG2';
+        return eg;
+    }
+
     if (!strategyName) return 'Others';
     const cleanSn = String(strategyName).trim();
     const overrides = getSnGroupOverrides();
@@ -320,7 +373,8 @@ export function getGroupName(strategyName: string = ''): string {
     }
 
     const sn = cleanSn.toUpperCase();
-    if (sn.includes('PL9SB')) return 'PL9SB';
+    if (sn.includes('CARVEDOUT') || sn.includes('CARVED_OUT') || sn.includes('CARVED OUT')) return 'CarvedOut';
+    if (sn.includes('PL9SB') || sn.includes('TRAIN9') || sn.includes('TRAIN 9') || sn.includes('PL9')) return 'PL9SB';
     if (sn.includes('FLNG1') || sn.includes('PFLNG1')) return 'FLNG1';
     if (sn.includes('FLNG2') || sn.includes('PFLNG2')) return 'FLNG2';
     if (sn.includes('LNGC')) return 'LNGC';
@@ -1072,7 +1126,28 @@ export function getHistoricalCurveSync(): ForwardCurveRow[] {
 
 export function getPricesSnapshot(d?: string) { return getForwardCurveSync(d)[0]?.prices || {}; }
 export function getMarketData() { return getPricesSnapshot(); }
-export function getPortfolioYear(p: CargoProfile) { return new Date(p.deliveryDate || p.loadingDate || Date.now()).getFullYear(); }
+
+export function getPortfolioYear(p: Partial<CargoProfile> | undefined | null): string {
+    if (!p) return 'Unassigned';
+    if (p.portfolioYear !== undefined && p.portfolioYear !== null && String(p.portfolioYear).trim() !== '') {
+        return String(p.portfolioYear).trim();
+    }
+    if (p.importFileName) {
+        const parsed = parseJarvisFilename(p.importFileName);
+        if (parsed.portfolioYear && parsed.portfolioYear !== 'Unassigned') {
+            return parsed.portfolioYear;
+        }
+    }
+    if (p.deliveryDate || p.loadingDate) {
+        try {
+            const d = new Date(p.deliveryDate || p.loadingDate || '');
+            if (!isNaN(d.getTime())) return d.getFullYear().toString();
+        } catch {
+            return 'Unassigned';
+        }
+    }
+    return 'Unassigned';
+}
 
 export function detectUnit(f?: string) {
     if (!f) return 'MMBtu';
