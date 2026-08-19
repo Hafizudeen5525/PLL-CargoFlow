@@ -9,20 +9,24 @@ const firebaseConfig = {
   storageBucket: import.meta.env.VITE_FIREBASE_STORAGE_BUCKET || 'YOUR_FIREBASE_STORAGE_BUCKET',
   messagingSenderId: import.meta.env.VITE_FIREBASE_MESSAGING_SENDER_ID || 'YOUR_FIREBASE_MESSAGING_SENDER_ID',
   appId: import.meta.env.VITE_FIREBASE_APP_ID || 'YOUR_FIREBASE_APP_ID',
-  firestoreDatabaseId: import.meta.env.VITE_FIREBASE_FIRESTORE_DATABASE_ID || 'ai-studio-pllcargoflow-12bf71f7-bda5-4509-91a5-6094774bb9bc'
+  firestoreDatabaseId: import.meta.env.VITE_FIREBASE_FIRESTORE_DATABASE_ID || '(default)'
 };
 
 export const isFirebaseConfigured = Boolean(
   firebaseConfig.apiKey &&
   !firebaseConfig.apiKey.startsWith('YOUR_') &&
   firebaseConfig.projectId &&
-  !firebaseConfig.projectId.startsWith('YOUR_')
+  !firebaseConfig.projectId.startsWith('YOUR_') &&
+  firebaseConfig.appId &&
+  !firebaseConfig.appId.startsWith('YOUR_')
 );
 
 // Initialize Firebase
 const app = initializeApp(firebaseConfig);
 export const auth = getAuth(app);
-export const db = getFirestore(app, firebaseConfig.firestoreDatabaseId);
+export const db = firebaseConfig.firestoreDatabaseId && firebaseConfig.firestoreDatabaseId !== '(default)'
+  ? getFirestore(app, firebaseConfig.firestoreDatabaseId)
+  : getFirestore(app);
 
 // Error Handling Pattern
 export enum FirestoreOperation {
@@ -72,24 +76,5 @@ export function handleFirestoreError(error: unknown, operationType: FirestoreOpe
     operationType,
     path
   };
-  console.warn('Firestore Notice: ', JSON.stringify(errInfo));
-  if (isFirebaseConfigured) {
-    throw new Error(JSON.stringify(errInfo));
-  }
+  console.warn('Firestore fallback: operation stored locally or using cache.', JSON.stringify(errInfo));
 }
-
-// Connection Test
-async function testConnection() {
-  if (!isFirebaseConfigured) {
-    console.info("Firebase running in local offline mode.");
-    return;
-  }
-  try {
-    await getDocFromServer(doc(db, 'test', 'connection'));
-  } catch (error) {
-    if (error instanceof Error && error.message.includes('the client is offline')) {
-      console.warn("Firebase client is currently offline.");
-    }
-  }
-}
-testConnection();

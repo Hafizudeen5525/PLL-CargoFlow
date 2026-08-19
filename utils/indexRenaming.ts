@@ -60,9 +60,9 @@ export const INDEX_RENAMING_MAP: Record<string, string> = {
   // NBP / TTF
   "FUT_NBP_M_ICE -- LNG_ICE NBP/TTF - Contract Avg": "FUT_NBP_M_ICE -- LNG_ICE NBP/TTF - Contract Avg",
   "FUT_NBP_M_ICE -- LNG_ICE NBP/TTF-Trade M Avg Spot": "NBP (n)",
-  "FUT_NBP_M_ICE -- LNG_NBP_ICE_Swap month": "FUT_NBP_M_ICE -- LNG_NBP_ICE_Swap month",
+  "FUT_NBP_M_ICE -- LNG_NBP_ICE_Swap month": "NBP (n)",
   "FUT_NBP_M_ICE -- None": "FUT_NBP_M_ICE -- None",
-  "FUT_NBP_M_ICE_USD -- LNG_NBP_ICE_Swap month": "FUT_NBP_M_ICE_USD -- LNG_NBP_ICE_Swap month",
+  "FUT_NBP_M_ICE_USD -- LNG_NBP_ICE_Swap month": "NBP (n)",
   "FUT_TTF_M_ICE_Endex -- LNG_TTF_ICE_Swap month": "TTF(n)",
   "FUT_TTF_M_ICE_Endex -- None": "FUT_TTF_M_ICE_Endex -- None",
   "FUT_TTF_M_ICE_Endex_USD.MMBTU -- LNG_TTF_ICE_Swap month": "TTF(n)",
@@ -250,7 +250,7 @@ export function normalizeSingleIndexToken(rawToken: string): string {
   }
 
   // NBP
-  if (/NBP.*Avg\s*Spot/i.test(token) || /LNG_ICE\s+NBP.*\([Mn]\)/i.test(token)) {
+  if (/NBP.*(?:Avg\s*Spot|Swap\s*month)/i.test(token) || /LNG_ICE\s+NBP/i.test(token) || /LNG_NBP_ICE/i.test(token)) {
     return 'NBP (n)';
   }
 

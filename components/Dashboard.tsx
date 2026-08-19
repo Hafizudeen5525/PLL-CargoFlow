@@ -7,6 +7,8 @@ import { PnLBreakdown } from './PnLBreakdown';
 import { PnLVarianceExplainer } from './PnLVarianceExplainer';
 import { IndexWeightedPrices } from './IndexWeightedPrices';
 import { AutoScalingText } from './AutoScalingText';
+import { PortfolioSummaryExportModal } from './PortfolioSummaryExportModal';
+import { Download } from 'lucide-react';
 import { toast } from 'react-hot-toast';
 
 interface DashboardProps {
@@ -72,6 +74,7 @@ export const Dashboard: React.FC<DashboardProps> = ({ profiles, marketData, forw
   });
 
   const [testFormula, setTestFormula] = useState('');
+  const [isExportModalOpen, setIsExportModalOpen] = useState(false);
 
   const [availableDates, setAvailableDates] = useState<string[]>([]);
 
@@ -355,11 +358,20 @@ export const Dashboard: React.FC<DashboardProps> = ({ profiles, marketData, forw
               </div>
               <button 
                 onClick={handleSaveBaseline}
-                className="flex items-center justify-center gap-2 px-4 py-2 bg-indigo-50 text-indigo-600 border border-indigo-100 rounded-lg text-[10px] sm:text-xs font-bold hover:bg-indigo-100 transition-colors"
+                className="flex items-center justify-center gap-2 px-3.5 py-2 bg-indigo-50 text-indigo-600 border border-indigo-100 rounded-lg text-[10px] sm:text-xs font-bold hover:bg-indigo-100 transition-colors"
+                title="Save current portfolio snapshot as baseline"
               >
                   <svg className="w-3.5 h-3.5" fill="none" stroke="currentColor" viewBox="0 0 24 24"><path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M8 7H5a2 2 0 00-2 2v9a2 2 0 002 2h14a2 2 0 002-2V9a2 2 0 00-2-2h-3m-1 4l-3 3m0 0l-3-3m3 3V4" /></svg>
                   <span className="hidden sm:inline">Snapshot Baseline</span>
                   <span className="sm:hidden">Snapshot</span>
+              </button>
+              <button 
+                onClick={() => setIsExportModalOpen(true)}
+                className="flex items-center justify-center gap-2 px-3.5 py-2 bg-emerald-600 hover:bg-emerald-700 text-white rounded-lg text-[10px] sm:text-xs font-bold transition-all shadow-sm"
+                title="Download annual summarized data (2026, 2027, 2028) in Excel or HTML format"
+              >
+                  <Download className="w-3.5 h-3.5" />
+                  <span>Download Summary</span>
               </button>
           </div>
       </div>
@@ -586,6 +598,13 @@ export const Dashboard: React.FC<DashboardProps> = ({ profiles, marketData, forw
             </div>
           )}
       </AnimatePresence>
+
+      <PortfolioSummaryExportModal
+        isOpen={isExportModalOpen}
+        onClose={() => setIsExportModalOpen(false)}
+        profiles={profiles}
+        targetDate={targetDate}
+      />
     </motion.div>
   );
 };
