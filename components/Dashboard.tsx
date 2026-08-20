@@ -18,6 +18,8 @@ interface DashboardProps {
   onRefreshMarket: () => void;
   onCargoClick?: (profile: CargoProfile) => void;
   portfolioYear?: string;
+  onPortfolioYearChange?: (year: string) => void;
+  availableYears?: string[];
   editingProfileId?: string;
   userRole?: 'admin' | 'trader' | 'viewer';
 }
@@ -57,7 +59,18 @@ interface DrillDownConfig {
     metric: 'PnL' | 'Revenue' | 'Purchase' | 'Other' | 'Volume';
 }
 
-export const Dashboard: React.FC<DashboardProps> = ({ profiles, marketData, forwardCurve, onRefreshMarket, onCargoClick, portfolioYear = 'All', editingProfileId, userRole }) => {
+export const Dashboard: React.FC<DashboardProps> = ({ 
+  profiles, 
+  marketData, 
+  forwardCurve, 
+  onRefreshMarket, 
+  onCargoClick, 
+  portfolioYear = 'All', 
+  onPortfolioYearChange,
+  availableYears,
+  editingProfileId, 
+  userRole 
+}) => {
   const [curveView, setCurveView] = useState<'gas' | 'oil'>('gas');
   const [groupFilter, setGroupFilter] = useState<string>('All');
   
@@ -81,11 +94,15 @@ export const Dashboard: React.FC<DashboardProps> = ({ profiles, marketData, forw
   useEffect(() => {
     const initDates = async () => {
       const dates = await getAvailableCurveDates();
-      setAvailableDates(dates);
-      if (dates.length > 0) {
-        setTargetDate(dates[0]);
-        if (dates.length > 1) setBaselineDate(dates[1]);
-        else setBaselineDate(dates[0]);
+      const sortedDates = dates.slice().sort((a, b) => b.localeCompare(a));
+      setAvailableDates(sortedDates);
+      if (sortedDates.length > 0) {
+        setTargetDate(sortedDates[0]);
+        if (sortedDates.length > 1) {
+          setBaselineDate(sortedDates[1]);
+        } else {
+          setBaselineDate(sortedDates[0]);
+        }
       }
     };
     initDates();
@@ -325,11 +342,26 @@ export const Dashboard: React.FC<DashboardProps> = ({ profiles, marketData, forw
   return (
     <motion.div className="flex-1 flex flex-col min-h-0 space-y-4 lg:space-y-6 relative" variants={containerVariants} initial="hidden" animate="visible">
       <div className="flex flex-col xl:flex-row justify-between items-stretch xl:items-center bg-white p-3 rounded-xl border border-slate-200 shadow-sm gap-4">
-          <div className="flex flex-col sm:flex-row items-stretch sm:items-center gap-3 w-full lg:w-auto">
-              <span className="text-[10px] sm:text-xs font-bold text-slate-500 uppercase tracking-wide px-1">Derived Group:</span>
-              <select value={groupFilter} onChange={(e) => setGroupFilter(e.target.value)} className="bg-slate-50 border border-slate-200 text-slate-700 text-xs sm:text-sm rounded-lg p-2 font-medium">
-                  {availableGroups.map((g: string) => <option key={g} value={g}>{g === 'All' ? 'All (Auto-mapped)' : g}</option>)}
-              </select>
+          <div className="flex flex-wrap items-center gap-3 w-full lg:w-auto">
+              <div className="flex items-center gap-2">
+                  <span className="text-[10px] sm:text-xs font-bold text-slate-500 uppercase tracking-wide px-1">Portfolio Year:</span>
+                  <select 
+                      value={portfolioYear} 
+                      onChange={(e) => onPortfolioYearChange && onPortfolioYearChange(e.target.value)} 
+                      className="bg-slate-50 border border-slate-200 text-slate-700 text-xs sm:text-sm rounded-lg p-2 font-bold focus:ring-1 focus:ring-blue-500 cursor-pointer"
+                  >
+                      {(availableYears || ['All', '2026', '2027', '2028']).map((y: string) => (
+                          <option key={y} value={y}>{y}</option>
+                      ))}
+                  </select>
+              </div>
+
+              <div className="flex items-center gap-2">
+                  <span className="text-[10px] sm:text-xs font-bold text-slate-500 uppercase tracking-wide px-1">Derived Group:</span>
+                  <select value={groupFilter} onChange={(e) => setGroupFilter(e.target.value)} className="bg-slate-50 border border-slate-200 text-slate-700 text-xs sm:text-sm rounded-lg p-2 font-medium cursor-pointer">
+                      {availableGroups.map((g: string) => <option key={g} value={g}>{g === 'All' ? 'All (Auto-mapped)' : g}</option>)}
+                  </select>
+              </div>
               {dataGaps.length > 0 && (
                   <button 
                     onClick={() => {

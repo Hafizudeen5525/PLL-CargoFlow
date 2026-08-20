@@ -49,9 +49,13 @@ export interface CargoProfile {
   buyPriceRounding?: number;
   sellPriceRounding?: number;
   
-  // SRC (Shipping Related Cost) for DES cargoes
+  // SRC (Shipping Related Cost) for DES cargoes & Other costs (SRC, Misc Cost, Finance Cost)
   srcUnitFee?: number;
   reconciledSrcCost?: number;
+  srcCost?: number;
+  miscCost?: number;
+  financeCost?: number;
+  reconciledOtherCost?: number;
   
   loadingWindowStart?: string;
   loadingWindowEnd?: string;
@@ -214,6 +218,10 @@ export const EmptyCargoProfile: Omit<CargoProfile, 'id'> = {
   sellPriceRounding: 3,
   srcUnitFee: 0,
   reconciledSrcCost: 0,
+  srcCost: 0,
+  miscCost: 0,
+  financeCost: 0,
+  reconciledOtherCost: 0,
   isTieredPricing: false,
   tier2DeliveredVolume: 0,
   tier2SellFormula: '',

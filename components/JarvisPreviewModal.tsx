@@ -151,7 +151,7 @@ export const JarvisPreviewModal: React.FC<JarvisPreviewModalProps> = ({ existing
                             <th className="px-4 py-4 text-right">Price</th>
                             <th className="px-4 py-4">P&L Bucket</th>
                             <th className="px-4 py-4 text-right">Reconciled Cost/Rev</th>
-                            <th className="px-4 py-4 text-right">SRC</th>
+                            <th className="px-4 py-4 text-right">Other Costs</th>
                         </tr>
                     </thead>
                     <tbody className="divide-y divide-slate-100">

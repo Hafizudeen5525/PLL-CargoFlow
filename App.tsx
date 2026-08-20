@@ -654,23 +654,6 @@ const App: React.FC = () => {
       </nav>
 
       <div className="p-4 border-t border-slate-800 space-y-3">
-           <div className="px-2">
-               <label className="text-[10px] font-bold text-slate-500 uppercase block mb-2">Portfolio Year</label>
-               <select 
-                  value={portfolioYear} 
-                  onChange={(e) => {
-                    const year = e.target.value;
-                    setPortfolioYear(year);
-                    if (user) {
-                      setDoc(doc(db, 'users', user.uid), { preferredYear: year }, { merge: true });
-                    }
-                  }}
-                  className="w-full bg-slate-800 border-none rounded-lg text-sm text-slate-300 focus:ring-1 focus:ring-blue-500"
-               >
-                   {availableYears.map((y: string) => <option key={y} value={y}>{y}</option>)}
-               </select>
-           </div>
-
            <button 
               onClick={() => {
                 setIsForwardCurveOpen(true);
@@ -831,6 +814,13 @@ const App: React.FC = () => {
                             onRefreshMarket={handleMarketRefresh}
                             onCargoClick={(p: CargoProfile) => handleEdit(p, 'dashboard')}
                             portfolioYear={portfolioYear}
+                            onPortfolioYearChange={(year: string) => {
+                              setPortfolioYear(year);
+                              if (user) {
+                                setDoc(doc(db, 'users', user.uid), { preferredYear: year }, { merge: true });
+                              }
+                            }}
+                            availableYears={availableYears}
                             editingProfileId={editingProfile?.id}
                             userRole={activeRole}
                         />

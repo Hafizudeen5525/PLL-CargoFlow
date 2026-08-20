@@ -329,6 +329,10 @@ export const CargoList: React.FC<CargoListProps> = ({
                                     tier2LoadedVolume: 0,
                                     tier2DeliveredVolume: 0,
                                     reconciledSrcCost: 0,
+                                    reconciledOtherCost: 0,
+                                    srcCost: 0,
+                                    miscCost: 0,
+                                    financeCost: 0,
                                     reconciledPurchaseCost: 0,
                                     reconciledSalesRevenue: 0,
                                     isTieredPricing: false
@@ -343,71 +347,94 @@ export const CargoList: React.FC<CargoListProps> = ({
                                 mergedData[lookupName].isTieredPricing = true;
                             }
 
-                            Object.entries(mapping).forEach(([excelHeader, profileKey]) => {
-                                const idx = headersArr.indexOf(excelHeader.toLowerCase().trim());
-                                if (idx !== -1 && row[idx] !== undefined && row[idx] !== '') {
-                                    const rawVal = row[idx];
-                                    
-                                    const isStringData = 
-                                        profileKey.toLowerCase().includes('index') || 
-                                        profileKey.toLowerCase().includes('monthdef') ||
-                                        profileKey.toLowerCase().includes('formula') ||
-                                        ['source', 'buyer', 'strategyName', 'manualGroup', 'deliveryDate', 'loadingDate', 'incoterms', 'pnlBucket'].includes(profileKey);
+                            if (sheetName === 'Cost') {
+                                const incoIdx = headersArr.findIndex(h => h === 'incoterm' || h === 'incoterms');
+                                const srcIdx = headersArr.findIndex(h => h === 'src' || h.includes('shipping related') || h.startsWith('src'));
+                                const miscIdx = headersArr.findIndex(h => h === 'misc cost' || h === 'misc_cost' || h === 'miscellaneous cost' || h === 'misc');
+                                const finIdx = headersArr.findIndex(h => h === 'finance cost' || h === 'finance_cost' || h === 'financial cost' || h === 'fin cost');
 
-                                    let val = isStringData ? String(rawVal).trim() : cleanNumeric(rawVal);
-                                    
-                                    if (profileKey.toLowerCase().includes('monthdef')) {
-                                        val = normalizeMonthDef(val as string);
-                                    }
+                                if (incoIdx !== -1 && row[incoIdx] !== undefined && row[incoIdx] !== '') {
+                                    mergedData[lookupName].incoterms = String(row[incoIdx]).trim();
+                                }
 
-                                    if (profileKey === 'loadingDate' || profileKey === 'deliveryDate') {
-                                        val = normalizeDate(rawVal);
-                                    }
+                                const srcVal = srcIdx !== -1 ? (cleanNumeric(row[srcIdx]) as number) : 0;
+                                const miscVal = miscIdx !== -1 ? (cleanNumeric(row[miscIdx]) as number) : 0;
+                                const finVal = finIdx !== -1 ? (cleanNumeric(row[finIdx]) as number) : 0;
 
-                                    // Special handling for P&L Bucket
-                                    if (profileKey === 'pnlBucket') {
-                                        const bucketStr = String(val).toLowerCase();
-                                        if (bucketStr.includes('realized') && !bucketStr.includes('unrealized')) {
-                                            val = PnLBucket.Realized;
-                                        } else if (bucketStr.includes('unrealized')) {
-                                            val = PnLBucket.Unrealized;
+                                const rowOtherTotal = (srcVal || 0) + (miscVal || 0) + (finVal || 0);
+
+                                mergedData[lookupName].reconciledSrcCost = ((mergedData[lookupName].reconciledSrcCost || 0) + rowOtherTotal);
+                                mergedData[lookupName].reconciledOtherCost = mergedData[lookupName].reconciledSrcCost;
+                                mergedData[lookupName].srcCost = ((mergedData[lookupName].srcCost || 0) + (srcVal || 0));
+                                mergedData[lookupName].miscCost = ((mergedData[lookupName].miscCost || 0) + (miscVal || 0));
+                                mergedData[lookupName].financeCost = ((mergedData[lookupName].financeCost || 0) + (finVal || 0));
+                            } else {
+                                Object.entries(mapping).forEach(([excelHeader, profileKey]) => {
+                                    const idx = headersArr.indexOf(excelHeader.toLowerCase().trim());
+                                    if (idx !== -1 && row[idx] !== undefined && row[idx] !== '') {
+                                        const rawVal = row[idx];
+                                        
+                                        const isStringData = 
+                                            profileKey.toLowerCase().includes('index') || 
+                                            profileKey.toLowerCase().includes('monthdef') ||
+                                            profileKey.toLowerCase().includes('formula') ||
+                                            ['source', 'buyer', 'strategyName', 'manualGroup', 'deliveryDate', 'loadingDate', 'incoterms', 'pnlBucket'].includes(profileKey);
+
+                                        let val = isStringData ? String(rawVal).trim() : cleanNumeric(rawVal);
+                                        
+                                        if (profileKey.toLowerCase().includes('monthdef')) {
+                                            val = normalizeMonthDef(val as string);
+                                        }
+
+                                        if (profileKey === 'loadingDate' || profileKey === 'deliveryDate') {
+                                            val = normalizeDate(rawVal);
+                                        }
+
+                                        // Special handling for P&L Bucket
+                                        if (profileKey === 'pnlBucket') {
+                                            const bucketStr = String(val).toLowerCase();
+                                            if (bucketStr.includes('realized') && !bucketStr.includes('unrealized')) {
+                                                val = PnLBucket.Realized;
+                                            } else if (bucketStr.includes('unrealized')) {
+                                                val = PnLBucket.Unrealized;
+                                            }
+                                        }
+
+                                        if (isTier2Leg && (sheetName === 'Purchase' || sheetName === 'Sales')) {
+                                             mergedData[lookupName].isTieredPricing = true;
+                                             if (profileKey === 'deliveredVolume') {
+                                                 mergedData[lookupName].tier2DeliveredVolume = val as number;
+                                             } else if (profileKey === 'loadedVolume') {
+                                                 mergedData[lookupName].tier2LoadedVolume = val as number;
+                                             } else if (profileKey === 'sellFormula') {
+                                                 mergedData[lookupName].tier2SellFormula = val as string;
+                                             } else if (profileKey === 'buyFormula') {
+                                                 mergedData[lookupName].tier2BuyFormula = val as string;
+                                             } else if (profileKey.startsWith('sellPrice') || profileKey.startsWith('buyPrice')) {
+                                                 const tier2Key = profileKey.replace('sellPrice', 'tier2SellPrice').replace('buyPrice', 'tier2BuyPrice');
+                                                 (mergedData[lookupName] as any)[tier2Key] = val;
+                                             }
+                                        } else {
+                                             // Aggregate reconciled values if multiple lines exist (two-tier pricing in Master Sheet)
+                                             if (['reconciledSrcCost', 'reconciledPurchaseCost', 'reconciledSalesRevenue'].includes(profileKey)) {
+                                                (mergedData[lookupName] as any)[profileKey] = ((mergedData[lookupName] as any)[profileKey] || 0) + (val as number);
+                                             } else if (rawVal instanceof Date) {
+                                                 const adjustedDate = new Date(rawVal.getTime() + (12 * 60 * 60 * 1000));
+                                                 const y = adjustedDate.getUTCFullYear();
+                                                 const m = String(adjustedDate.getUTCMonth() + 1).padStart(2, '0');
+                                                 const d = String(adjustedDate.getUTCDate()).padStart(2, '0');
+                                                 (mergedData[lookupName] as any)[profileKey] = `${y}-${m}-${d}`;
+                                             } else if (profileKey === 'optimized') {
+                                                 mergedData[lookupName].optimized = String(rawVal).toLowerCase().includes('yes') || rawVal === true;
+                                             } else if (profileKey === 'strategyName') {
+                                                 (mergedData[lookupName] as any)[profileKey] = lookupName;
+                                             } else {
+                                                 (mergedData[lookupName] as any)[profileKey] = val;
+                                             }
                                         }
                                     }
-
-                                    if (isTier2Leg && (sheetName === 'Purchase' || sheetName === 'Sales')) {
-                                         mergedData[lookupName].isTieredPricing = true;
-                                         if (profileKey === 'deliveredVolume') {
-                                             mergedData[lookupName].tier2DeliveredVolume = val as number;
-                                         } else if (profileKey === 'loadedVolume') {
-                                             mergedData[lookupName].tier2LoadedVolume = val as number;
-                                         } else if (profileKey === 'sellFormula') {
-                                             mergedData[lookupName].tier2SellFormula = val as string;
-                                         } else if (profileKey === 'buyFormula') {
-                                             mergedData[lookupName].tier2BuyFormula = val as string;
-                                         } else if (profileKey.startsWith('sellPrice') || profileKey.startsWith('buyPrice')) {
-                                             const tier2Key = profileKey.replace('sellPrice', 'tier2SellPrice').replace('buyPrice', 'tier2BuyPrice');
-                                             (mergedData[lookupName] as any)[tier2Key] = val;
-                                         }
-                                    } else {
-                                         // Aggregate reconciled values if multiple lines exist (two-tier pricing in Master Sheet)
-                                         if (['reconciledSrcCost', 'reconciledPurchaseCost', 'reconciledSalesRevenue'].includes(profileKey)) {
-                                            (mergedData[lookupName] as any)[profileKey] = ((mergedData[lookupName] as any)[profileKey] || 0) + (val as number);
-                                         } else if (rawVal instanceof Date) {
-                                             const adjustedDate = new Date(rawVal.getTime() + (12 * 60 * 60 * 1000));
-                                             const y = adjustedDate.getUTCFullYear();
-                                             const m = String(adjustedDate.getUTCMonth() + 1).padStart(2, '0');
-                                             const d = String(adjustedDate.getUTCDate()).padStart(2, '0');
-                                             (mergedData[lookupName] as any)[profileKey] = `${y}-${m}-${d}`;
-                                         } else if (profileKey === 'optimized') {
-                                             mergedData[lookupName].optimized = String(rawVal).toLowerCase().includes('yes') || rawVal === true;
-                                         } else if (profileKey === 'strategyName') {
-                                             (mergedData[lookupName] as any)[profileKey] = lookupName;
-                                         } else {
-                                             (mergedData[lookupName] as any)[profileKey] = val;
-                                         }
-                                    }
-                                }
-                            });
+                                });
+                            }
                         });
                     };
 
@@ -646,6 +673,10 @@ export const CargoList: React.FC<CargoListProps> = ({
                     tier2LoadedVolume: parsedFields.tier2LoadedVolume !== undefined ? parsedFields.tier2LoadedVolume : 0,
                     tier2DeliveredVolume: parsedFields.tier2DeliveredVolume !== undefined ? parsedFields.tier2DeliveredVolume : 0,
                     reconciledSrcCost: parsedFields.reconciledSrcCost !== undefined ? parsedFields.reconciledSrcCost : 0,
+                    reconciledOtherCost: parsedFields.reconciledOtherCost !== undefined ? parsedFields.reconciledOtherCost : (parsedFields.reconciledSrcCost !== undefined ? parsedFields.reconciledSrcCost : 0),
+                    srcCost: parsedFields.srcCost !== undefined ? parsedFields.srcCost : 0,
+                    miscCost: parsedFields.miscCost !== undefined ? parsedFields.miscCost : 0,
+                    financeCost: parsedFields.financeCost !== undefined ? parsedFields.financeCost : 0,
                     reconciledPurchaseCost: parsedFields.reconciledPurchaseCost !== undefined ? parsedFields.reconciledPurchaseCost : 0,
                     reconciledSalesRevenue: parsedFields.reconciledSalesRevenue !== undefined ? parsedFields.reconciledSalesRevenue : 0,
                     portfolioYear: (parsedFields.portfolioYear && parsedFields.portfolioYear !== 'Unassigned') ? parsedFields.portfolioYear : (existingMatch.portfolioYear || parsedFields.portfolioYear || 'Unassigned'),

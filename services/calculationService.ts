@@ -904,11 +904,13 @@ export function recalculateProfile(p: Partial<CargoProfile>, useMarket: boolean 
 
     const totalDelVol = (up.deliveredVolume || 0) + (up.tier2DeliveredVolume || 0);
     const calcSrcCost = (up.incoterms === 'DES') ? (up.srcUnitFee || 0) * totalDelVol : 0;
-    const finalSrcCost = (up.reconciledSrcCost && up.reconciledSrcCost > 0) ? up.reconciledSrcCost : calcSrcCost;
+    const finalOtherCost = (up.reconciledSrcCost && up.reconciledSrcCost > 0) 
+        ? up.reconciledSrcCost 
+        : ((up.reconciledOtherCost && up.reconciledOtherCost > 0) ? up.reconciledOtherCost : calcSrcCost);
 
     up.finalSalesRevenue = (up.reconciledSalesRevenue > 0) ? up.reconciledSalesRevenue : up.salesRevenue;
     const basePurchaseCost = (up.reconciledPurchaseCost > 0) ? up.reconciledPurchaseCost : totalPurchaseCost;
-    up.finalTotalCost = basePurchaseCost + finalSrcCost;
+    up.finalTotalCost = basePurchaseCost + finalOtherCost;
 
     // Implied Unit Price Fallback:
     // If unit buy or sell price evaluated to 0 (e.g. missing curve or imported lump-sum data without index formulas),
@@ -1003,7 +1005,7 @@ let historicalCache: ForwardCurveRow[] | null = (() => {
 export async function getForwardCurve(dateStr?: string): Promise<ForwardCurveRow[]> {
     if (!auth.currentUser || !isFirebaseConfigured) {
         if (dateStr && curveCache[dateStr]) return curveCache[dateStr];
-        const keys = Object.keys(curveCache);
+        const keys = Object.keys(curveCache).sort((a, b) => b.localeCompare(a));
         return keys.length > 0 ? curveCache[keys[0]] : [];
     }
     try {
@@ -1027,11 +1029,13 @@ export async function getForwardCurve(dateStr?: string): Promise<ForwardCurveRow
                 curveCache[date] = data;
                 return data;
             }
-            return [];
+            const fallbackKeys = Object.keys(curveCache).sort((a, b) => b.localeCompare(a));
+            return fallbackKeys.length > 0 ? curveCache[fallbackKeys[0]] : [];
         }
     } catch (err) {
         handleFirestoreError(err, FirestoreOperation.GET, 'forward_curves');
-        return [];
+        const fallbackKeys = Object.keys(curveCache).sort((a, b) => b.localeCompare(a));
+        return fallbackKeys.length > 0 ? curveCache[fallbackKeys[0]] : [];
     }
 }
 
@@ -1071,15 +1075,23 @@ export async function saveHistoricalCurve(curve: ForwardCurveRow[]) {
 }
 
 export async function getAvailableCurveDates(): Promise<string[]> {
-    if (!auth.currentUser || !isFirebaseConfigured) return Object.keys(curveCache);
-    try {
-        const q = query(collection(db, 'users', auth.currentUser.uid, 'forward_curves'), orderBy('asOfDate', 'desc'));
-        const snap = await getDocs(q);
-        return snap.docs.map(d => d.id);
-    } catch (err) {
-        handleFirestoreError(err, FirestoreOperation.LIST, 'forward_curves');
-        return [];
+    let dates: string[] = [];
+    if (!auth.currentUser || !isFirebaseConfigured) {
+        dates = Object.keys(curveCache);
+    } else {
+        try {
+            const q = query(collection(db, 'users', auth.currentUser.uid, 'forward_curves'), orderBy('asOfDate', 'desc'));
+            const snap = await getDocs(q);
+            dates = snap.docs.map(d => d.id);
+            if (dates.length === 0) {
+                dates = Object.keys(curveCache);
+            }
+        } catch (err) {
+            handleFirestoreError(err, FirestoreOperation.LIST, 'forward_curves');
+            dates = Object.keys(curveCache);
+        }
     }
+    return Array.from(new Set(dates)).sort((a, b) => b.localeCompare(a));
 }
 
 export async function saveForwardCurve(date: string, curve: ForwardCurveRow[]) {
@@ -1111,12 +1123,12 @@ export async function deleteForwardCurve(date: string) {
 }
 
 export function getAvailableCurveDatesSync(): string[] {
-    return Object.keys(curveCache).sort().reverse();
+    return Object.keys(curveCache).sort((a, b) => b.localeCompare(a));
 }
 
 export function getForwardCurveSync(dateStr?: string): ForwardCurveRow[] {
     if (dateStr) return curveCache[dateStr] || [];
-    const keys = Object.keys(curveCache).sort().reverse();
+    const keys = Object.keys(curveCache).sort((a, b) => b.localeCompare(a));
     return keys.length > 0 ? curveCache[keys[0]] : [];
 }
 

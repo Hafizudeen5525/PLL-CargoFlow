@@ -251,7 +251,6 @@ self.onmessage = (e: MessageEvent) => {
       const recPurchaseRaw = findValue(row, [
           'Reconciled Purchase Cost', 
           'Finance Purchase Cost', 
-          'Finance Cost', 
           'Actual Purchase Cost', 
           'Purchase Cost Reconciled'
       ]);
