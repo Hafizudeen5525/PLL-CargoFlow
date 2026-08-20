@@ -904,31 +904,36 @@ export function recalculateProfile(p: Partial<CargoProfile>, useMarket: boolean 
 
     const totalDelVol = (up.deliveredVolume || 0) + (up.tier2DeliveredVolume || 0);
     const calcSrcCost = (up.incoterms === 'DES') ? (up.srcUnitFee || 0) * totalDelVol : 0;
-    const finalOtherCost = (up.reconciledSrcCost && up.reconciledSrcCost > 0) 
-        ? up.reconciledSrcCost 
-        : ((up.reconciledOtherCost && up.reconciledOtherCost > 0) ? up.reconciledOtherCost : calcSrcCost);
+    const hasRecSrc = up.reconciledSrcCost !== undefined && up.reconciledSrcCost !== null && up.reconciledSrcCost !== 0 && !isNaN(Number(up.reconciledSrcCost));
+    const hasRecOther = up.reconciledOtherCost !== undefined && up.reconciledOtherCost !== null && up.reconciledOtherCost !== 0 && !isNaN(Number(up.reconciledOtherCost));
+    const finalOtherCost = hasRecSrc 
+        ? Number(up.reconciledSrcCost) 
+        : (hasRecOther ? Number(up.reconciledOtherCost) : calcSrcCost);
 
-    up.finalSalesRevenue = (up.reconciledSalesRevenue > 0) ? up.reconciledSalesRevenue : up.salesRevenue;
-    const basePurchaseCost = (up.reconciledPurchaseCost > 0) ? up.reconciledPurchaseCost : totalPurchaseCost;
+    const hasRecSales = up.reconciledSalesRevenue !== undefined && up.reconciledSalesRevenue !== null && up.reconciledSalesRevenue !== 0 && !isNaN(Number(up.reconciledSalesRevenue));
+    up.finalSalesRevenue = hasRecSales ? Number(up.reconciledSalesRevenue) : up.salesRevenue;
+
+    const hasRecPurchase = up.reconciledPurchaseCost !== undefined && up.reconciledPurchaseCost !== null && up.reconciledPurchaseCost !== 0 && !isNaN(Number(up.reconciledPurchaseCost));
+    const basePurchaseCost = hasRecPurchase ? Number(up.reconciledPurchaseCost) : totalPurchaseCost;
     up.finalTotalCost = basePurchaseCost + finalOtherCost;
 
     // Implied Unit Price Fallback:
     // If unit buy or sell price evaluated to 0 (e.g. missing curve or imported lump-sum data without index formulas),
     // derive the implied unit price from total purchase cost / sales revenue so unit prices are populated.
-    if (!up.isBuyPriceManual && (!up.absoluteBuyPrice || up.absoluteBuyPrice === 0) && (up.loadedVolume || 0) > 0 && basePurchaseCost > 0) {
+    if (!up.isBuyPriceManual && (!up.absoluteBuyPrice || up.absoluteBuyPrice === 0) && (up.loadedVolume || 0) > 0 && basePurchaseCost !== 0) {
         up.absoluteBuyPrice = applyRounding(basePurchaseCost / up.loadedVolume, up.buyPriceRounding);
         up.finalPurchaseCostT1 = (up.loadedVolume || 0) * up.absoluteBuyPrice;
     }
-    if (!up.isSellPriceManual && (!up.absoluteSellPrice || up.absoluteSellPrice === 0) && (up.deliveredVolume || 0) > 0 && up.finalSalesRevenue > 0) {
+    if (!up.isSellPriceManual && (!up.absoluteSellPrice || up.absoluteSellPrice === 0) && (up.deliveredVolume || 0) > 0 && up.finalSalesRevenue !== 0) {
         up.absoluteSellPrice = applyRounding(up.finalSalesRevenue / up.deliveredVolume, up.sellPriceRounding);
         up.finalSalesRevenueT1 = (up.deliveredVolume || 0) * up.absoluteSellPrice;
     }
 
     if (up.isTieredPricing) {
-        if (!up.isTier2BuyPriceManual && (!up.absoluteTier2BuyPrice || up.absoluteTier2BuyPrice === 0) && (up.tier2LoadedVolume || 0) > 0 && (up.finalPurchaseCostT2 || 0) > 0) {
+        if (!up.isTier2BuyPriceManual && (!up.absoluteTier2BuyPrice || up.absoluteTier2BuyPrice === 0) && (up.tier2LoadedVolume || 0) > 0 && (up.finalPurchaseCostT2 || 0) !== 0) {
             up.absoluteTier2BuyPrice = applyRounding((up.finalPurchaseCostT2 || 0) / (up.tier2LoadedVolume || 1), up.tier2BuyPriceRounding);
         }
-        if (!up.isTier2SellPriceManual && (!up.absoluteTier2SellPrice || up.absoluteTier2SellPrice === 0) && (up.tier2DeliveredVolume || 0) > 0 && (up.finalSalesRevenueT2 || 0) > 0) {
+        if (!up.isTier2SellPriceManual && (!up.absoluteTier2SellPrice || up.absoluteTier2SellPrice === 0) && (up.tier2DeliveredVolume || 0) > 0 && (up.finalSalesRevenueT2 || 0) !== 0) {
             up.absoluteTier2SellPrice = applyRounding((up.finalSalesRevenueT2 || 0) / (up.tier2DeliveredVolume || 1), up.tier2SellPriceRounding);
         }
     }

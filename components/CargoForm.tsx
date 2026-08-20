@@ -23,6 +23,8 @@ const VOLUME_UNIT_OPTIONS = ['MMBtu', 'CBM', 'MT', 'Bbl', 'Gal'];
 
 const formatWithCommas = (val: number | string) => {
     if (val === undefined || val === null || val === '') return '';
+    if (val === '-' || val === '-.' || val === '-0') return String(val);
+    if (typeof val === 'string' && (val.endsWith('.') || val.endsWith('.-') || val.match(/^-?\d+\.0*$/))) return val;
     const num = Number(val);
     if (isNaN(num)) return String(val);
     // Use a fixed precision for display if it's a small number, or standard locale string
@@ -63,7 +65,7 @@ const InputGroup: React.FC<{
 
             const raw = parseCommas(val);
             // Only allow numbers, one decimal point, and leading minus
-            if (raw !== '' && isNaN(Number(raw)) && raw !== '-' && raw !== '.') return;
+            if (raw !== '' && isNaN(Number(raw)) && raw !== '-' && raw !== '.' && raw !== '-.') return;
             
             const fakeEvent = {
                 ...e,
@@ -438,7 +440,7 @@ export const CargoForm: React.FC<CargoFormProps> = ({ initialData, source = 'lis
             } else {
                 newValue = 0;
             }
-        } else if (typeof raw === 'string' && raw.endsWith('.')) {
+        } else if (typeof raw === 'string' && (raw.endsWith('.') || raw === '-' || raw === '-.')) {
             newValue = raw; 
         } else {
             newValue = raw === '' ? 0 : parseFloat(raw);
@@ -457,6 +459,8 @@ export const CargoForm: React.FC<CargoFormProps> = ({ initialData, source = 'lis
             const updated = recalculateProfile(prev);
             // Only update if something actually changed (primitive comparison of key metrics)
             if (updated.finalTotalPnL === prev.finalTotalPnL && 
+                updated.finalSalesRevenue === prev.finalSalesRevenue &&
+                updated.finalTotalCost === prev.finalTotalCost &&
                 updated.absoluteBuyPrice === prev.absoluteBuyPrice && 
                 updated.absoluteSellPrice === prev.absoluteSellPrice &&
                 updated.totalLoadedVolume === prev.totalLoadedVolume &&
@@ -479,8 +483,10 @@ export const CargoForm: React.FC<CargoFormProps> = ({ initialData, source = 'lis
     formData.isBuyPriceManual, formData.isSellPriceManual,
     formData.buyPriceOverallConstant, formData.sellPriceOverallConstant,
     formData.buyPriceRounding, formData.sellPriceRounding,
-    formData.tier2BuyPriceRounding, formData.tier2SellPriceRounding
-    // Add other critical fields that trigger recalculation
+    formData.tier2BuyPriceRounding, formData.tier2SellPriceRounding,
+    formData.reconciledPurchaseCost, formData.reconciledSalesRevenue,
+    formData.reconciledSrcCost, formData.reconciledOtherCost, formData.srcUnitFee,
+    formData.incoterms
   ]);
 
   const handleManualPriceToggle = async (type: 'buy' | 'sell' | 'tier2sell' | 'tier2buy') => {

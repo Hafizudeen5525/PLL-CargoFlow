@@ -191,8 +191,10 @@ export const Dashboard: React.FC<DashboardProps> = ({
           
           const totalPurchaseT1 = (p.loadedVolume || 0) * (p.absoluteBuyPrice || 0);
           const totalPurchaseT2 = p.isTieredPricing ? (p.tier2LoadedVolume || 0) * (p.absoluteTier2BuyPrice || 0) : 0;
-          const purchase = (p.reconciledPurchaseCost > 0) ? p.reconciledPurchaseCost : (totalPurchaseT1 + totalPurchaseT2);
-          const other = pnl - revenue + purchase;
+          const hasRecPurchase = p.reconciledPurchaseCost !== undefined && p.reconciledPurchaseCost !== null && p.reconciledPurchaseCost !== 0;
+          const purchase = hasRecPurchase ? Number(p.reconciledPurchaseCost) : (totalPurchaseT1 + totalPurchaseT2);
+          const totalCost = p.finalTotalCost !== undefined ? p.finalTotalCost : (revenue - pnl);
+          const other = totalCost - purchase;
 
           const isCO = getGroupName(p.strategyName, p.strategyGroup) === 'CarvedOut';
 
@@ -261,8 +263,10 @@ export const Dashboard: React.FC<DashboardProps> = ({
         
         const totalPurchaseT1 = (cp.loadedVolume || 0) * (cp.absoluteBuyPrice || 0);
         const totalPurchaseT2 = cp.isTieredPricing ? (cp.tier2LoadedVolume || 0) * (cp.absoluteTier2BuyPrice || 0) : 0;
-        const purchase = (cp.reconciledPurchaseCost > 0) ? cp.reconciledPurchaseCost : (totalPurchaseT1 + totalPurchaseT2);
-        const other = pnl - revenue + purchase;
+        const hasRecPurchase = cp.reconciledPurchaseCost !== undefined && cp.reconciledPurchaseCost !== null && cp.reconciledPurchaseCost !== 0;
+        const purchase = hasRecPurchase ? Number(cp.reconciledPurchaseCost) : (totalPurchaseT1 + totalPurchaseT2);
+        const totalCost = cp.finalTotalCost !== undefined ? cp.finalTotalCost : (revenue - pnl);
+        const other = totalCost - purchase;
 
         const isCO = getGroupName(cp.strategyName, cp.strategyGroup) === 'CarvedOut';
 

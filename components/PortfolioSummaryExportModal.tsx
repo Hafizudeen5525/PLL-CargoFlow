@@ -85,15 +85,17 @@ export const PortfolioSummaryExportModal: React.FC<PortfolioSummaryExportModalPr
         const purchase = groupProfiles.reduce((sum, p) => {
           const t1Purchase = (p.loadedVolume || 0) * (p.absoluteBuyPrice || 0);
           const t2Purchase = p.isTieredPricing ? (p.tier2LoadedVolume || 0) * (p.absoluteTier2BuyPrice || 0) : 0;
-          return sum + ((p.reconciledPurchaseCost && p.reconciledPurchaseCost > 0) ? p.reconciledPurchaseCost : (t1Purchase + t2Purchase));
+          const hasRec = p.reconciledPurchaseCost !== undefined && p.reconciledPurchaseCost !== null && p.reconciledPurchaseCost !== 0;
+          return sum + (hasRec ? Number(p.reconciledPurchaseCost) : (t1Purchase + t2Purchase));
         }, 0);
         const revenue = groupProfiles.reduce((sum, p) => sum + (p.finalSalesRevenue || 0), 0);
         const otherCost = groupProfiles.reduce((sum, p) => {
           const t1Purchase = (p.loadedVolume || 0) * (p.absoluteBuyPrice || 0);
           const t2Purchase = p.isTieredPricing ? (p.tier2LoadedVolume || 0) * (p.absoluteTier2BuyPrice || 0) : 0;
-          const cargoPurchase = (p.reconciledPurchaseCost && p.reconciledPurchaseCost > 0) ? p.reconciledPurchaseCost : (t1Purchase + t2Purchase);
-          const totalCost = p.finalTotalCost !== undefined ? p.finalTotalCost : (cargoPurchase + ((p.reconciledSrcCost && p.reconciledSrcCost > 0) ? p.reconciledSrcCost : (p.incoterms === 'DES' ? (p.srcUnitFee || 0) * ((p.deliveredVolume || 0) + (p.tier2DeliveredVolume || 0)) : 0)));
-          return sum + Math.max(0, totalCost - cargoPurchase);
+          const hasRec = p.reconciledPurchaseCost !== undefined && p.reconciledPurchaseCost !== null && p.reconciledPurchaseCost !== 0;
+          const cargoPurchase = hasRec ? Number(p.reconciledPurchaseCost) : (t1Purchase + t2Purchase);
+          const totalCost = p.finalTotalCost !== undefined ? p.finalTotalCost : (cargoPurchase + ((p.reconciledSrcCost && p.reconciledSrcCost !== 0) ? p.reconciledSrcCost : (p.incoterms === 'DES' ? (p.srcUnitFee || 0) * ((p.deliveredVolume || 0) + (p.tier2DeliveredVolume || 0)) : 0)));
+          return sum + (totalCost - cargoPurchase);
         }, 0);
         const pnl = groupProfiles.reduce((sum, p) => {
           const calcPnL = p.finalPhysicalPnL !== undefined ? p.finalPhysicalPnL : ((p.finalSalesRevenue || 0) - (p.finalTotalCost || 0));
@@ -145,15 +147,17 @@ export const PortfolioSummaryExportModal: React.FC<PortfolioSummaryExportModalPr
       const coPurchase = carvedOutProfiles.reduce((sum, p) => {
         const t1Purchase = (p.loadedVolume || 0) * (p.absoluteBuyPrice || 0);
         const t2Purchase = p.isTieredPricing ? (p.tier2LoadedVolume || 0) * (p.absoluteTier2BuyPrice || 0) : 0;
-        return sum + ((p.reconciledPurchaseCost && p.reconciledPurchaseCost > 0) ? p.reconciledPurchaseCost : (t1Purchase + t2Purchase));
+        const hasRec = p.reconciledPurchaseCost !== undefined && p.reconciledPurchaseCost !== null && p.reconciledPurchaseCost !== 0;
+        return sum + (hasRec ? Number(p.reconciledPurchaseCost) : (t1Purchase + t2Purchase));
       }, 0);
       const coRevenue = carvedOutProfiles.reduce((sum, p) => sum + (p.finalSalesRevenue || 0), 0);
       const coOtherCost = carvedOutProfiles.reduce((sum, p) => {
         const t1Purchase = (p.loadedVolume || 0) * (p.absoluteBuyPrice || 0);
         const t2Purchase = p.isTieredPricing ? (p.tier2LoadedVolume || 0) * (p.absoluteTier2BuyPrice || 0) : 0;
-        const cargoPurchase = (p.reconciledPurchaseCost && p.reconciledPurchaseCost > 0) ? p.reconciledPurchaseCost : (t1Purchase + t2Purchase);
-        const totalCost = p.finalTotalCost !== undefined ? p.finalTotalCost : (cargoPurchase + ((p.reconciledSrcCost && p.reconciledSrcCost > 0) ? p.reconciledSrcCost : (p.incoterms === 'DES' ? (p.srcUnitFee || 0) * ((p.deliveredVolume || 0) + (p.tier2DeliveredVolume || 0)) : 0)));
-        return sum + Math.max(0, totalCost - cargoPurchase);
+        const hasRec = p.reconciledPurchaseCost !== undefined && p.reconciledPurchaseCost !== null && p.reconciledPurchaseCost !== 0;
+        const cargoPurchase = hasRec ? Number(p.reconciledPurchaseCost) : (t1Purchase + t2Purchase);
+        const totalCost = p.finalTotalCost !== undefined ? p.finalTotalCost : (cargoPurchase + ((p.reconciledSrcCost && p.reconciledSrcCost !== 0) ? p.reconciledSrcCost : (p.incoterms === 'DES' ? (p.srcUnitFee || 0) * ((p.deliveredVolume || 0) + (p.tier2DeliveredVolume || 0)) : 0)));
+        return sum + (totalCost - cargoPurchase);
       }, 0);
       const coPnL = carvedOutProfiles.reduce((sum, p) => {
         const calcPnL = p.finalPhysicalPnL !== undefined ? p.finalPhysicalPnL : ((p.finalSalesRevenue || 0) - (p.finalTotalCost || 0));
