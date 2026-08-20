@@ -276,6 +276,12 @@ export interface TrmsStrategySummary {
   hedgingPnL: number;
   hedgingVolume: number;
   hedgingVolumeByUnit: { [unit: string]: number };
+  dhPnL: number;
+  dhVolume: number;
+  dhVolumeByUnit: { [unit: string]: number };
+  dftPnL: number;
+  dftVolume: number;
+  dftVolumeByUnit: { [unit: string]: number };
   paperVolume: number;
   paperVolumeByUnit: { [unit: string]: number };
   buyTiers: Array<{ vol: number; unit: string; val: number; price: number; indexName?: string }>;
@@ -476,6 +482,12 @@ export function computeTrmsSummaryRows(
     let hedgingPnL = 0;
     let hedgingVolume = 0;
     const hedgingVolumeByUnit: { [unit: string]: number } = {};
+    let dhPnL = 0;
+    let dhVolume = 0;
+    const dhVolumeByUnit: { [unit: string]: number } = {};
+    let dftPnL = 0;
+    let dftVolume = 0;
+    const dftVolumeByUnit: { [unit: string]: number } = {};
     let paperVolume = 0;
     const paperVolumeByUnit: { [unit: string]: number } = {};
 
@@ -694,8 +706,10 @@ export function computeTrmsSummaryRows(
       const insType = String(r['Ins Type'] || r['Instrument Type'] || '').trim().toUpperCase();
 
       const isCommodity = cflowType === 'commodity' && insType === 'COMM-PHYS';
-      const isHedgingLng = internalPortfolio === 'hedging lng';
-      const isPaperLng = internalPortfolio === 'dh lng' || internalPortfolio === 'dft lng';
+      const isHedgingLng = internalPortfolio === 'hedging lng' || internalPortfolio.includes('hedging') || cflowType.includes('hedge');
+      const isDhLng = internalPortfolio === 'dh lng' || internalPortfolio === 'dh' || internalPortfolio.includes('dynamic hedging') || internalPortfolio.includes('dh lng') || (internalPortfolio.startsWith('dh') && !internalPortfolio.startsWith('dft')) || cflowType.includes('dh');
+      const isDftLng = internalPortfolio === 'dft lng' || internalPortfolio === 'dft' || internalPortfolio.includes('financial trading') || internalPortfolio.includes('dft lng') || internalPortfolio.includes('derivative') || cflowType.includes('dft');
+      const isPaperLng = isDhLng || isDftLng;
 
       let includeCommodityVol = true;
       if (isCommodity) {
@@ -708,6 +722,16 @@ export function computeTrmsSummaryRows(
         if (isHedgingLng) {
           hedgingVolume += absVol;
           addUnitVolume(hedgingVolumeByUnit, absVol, unit);
+        } else if (isDhLng) {
+          dhVolume += absVol;
+          addUnitVolume(dhVolumeByUnit, absVol, unit);
+          paperVolume += absVol;
+          addUnitVolume(paperVolumeByUnit, absVol, unit);
+        } else if (isDftLng) {
+          dftVolume += absVol;
+          addUnitVolume(dftVolumeByUnit, absVol, unit);
+          paperVolume += absVol;
+          addUnitVolume(paperVolumeByUnit, absVol, unit);
         } else if (isPaperLng) {
           paperVolume += absVol;
           addUnitVolume(paperVolumeByUnit, absVol, unit);
@@ -727,6 +751,10 @@ export function computeTrmsSummaryRows(
 
         if (isHedgingLng) {
           hedgingPnL += val;
+        } else if (isDhLng) {
+          dhPnL += val;
+        } else if (isDftLng) {
+          dftPnL += val;
         }
       }
     });
@@ -1087,6 +1115,12 @@ export function computeTrmsSummaryRows(
       hedgingPnL,
       hedgingVolume,
       hedgingVolumeByUnit,
+      dhPnL,
+      dhVolume,
+      dhVolumeByUnit,
+      dftPnL,
+      dftVolume,
+      dftVolumeByUnit,
       paperVolume,
       paperVolumeByUnit,
       buyTiers,

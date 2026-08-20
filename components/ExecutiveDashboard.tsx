@@ -13,18 +13,22 @@ import {
   Clock, 
   Boxes, 
   Ship, 
-  Activity,
-  Sparkles,
-  ChevronRight,
-  X,
-  Search,
-  ArrowUpDown,
-  ArrowUp,
-  ArrowDown,
-  Download,
-  RotateCcw,
-  SlidersHorizontal,
-  ChevronDown
+  Activity, 
+  Sparkles, 
+  ChevronRight, 
+  ChevronDown, 
+  X, 
+  Search, 
+  ArrowUpDown, 
+  ArrowUp, 
+  ArrowDown, 
+  Download, 
+  RotateCcw, 
+  SlidersHorizontal, 
+  ShieldCheck, 
+  FileSpreadsheet, 
+  ExternalLink,
+  ChevronLeft
 } from 'lucide-react';
 import { ReconciliationData } from './DiscrepancyCheck';
 import { getGroupName, GROUPS, formatCurrency } from '../services/calculationService';
@@ -53,6 +57,68 @@ interface ActiveDrillDownConfig {
   metric: DrillDownMetric;
 }
 
+export type DerivativeCategory = 'PHYSICAL_HEDGING' | 'DH' | 'DFT';
+
+export interface DerivativeCategoryConfig {
+  id: DerivativeCategory;
+  title: string;
+  shortTitle: string;
+  code: string;
+  portfolioDesc: string;
+  badge: string;
+  themeColor: 'emerald' | 'indigo' | 'purple';
+  icon: any;
+  filterFn: (row: any) => boolean;
+}
+
+const DERIVATIVE_CONFIGS: Record<DerivativeCategory, DerivativeCategoryConfig> = {
+  PHYSICAL_HEDGING: {
+    id: 'PHYSICAL_HEDGING',
+    title: 'Physical Hedging P&L',
+    shortTitle: 'Physical Hedging',
+    code: 'HEDGE',
+    portfolioDesc: 'HEDGING LNG',
+    badge: 'Physical Hedging',
+    themeColor: 'emerald',
+    icon: ShieldCheck,
+    filterFn: (r: any) => {
+      const port = String(r['Internal Portfolio'] || r['Portfolio'] || '').trim().toLowerCase();
+      const cflow = String(r['Cflow Type'] || '').trim().toLowerCase();
+      return port === 'hedging lng' || port.includes('hedging') || cflow.includes('hedge');
+    }
+  },
+  DH: {
+    id: 'DH',
+    title: 'Dynamic Hedging (DH) P&L',
+    shortTitle: 'Dynamic Hedging (DH)',
+    code: 'DH',
+    portfolioDesc: 'DH LNG',
+    badge: 'Dynamic Hedging',
+    themeColor: 'indigo',
+    icon: Activity,
+    filterFn: (r: any) => {
+      const port = String(r['Internal Portfolio'] || r['Portfolio'] || '').trim().toLowerCase();
+      const cflow = String(r['Cflow Type'] || '').trim().toLowerCase();
+      return port === 'dh lng' || port === 'dh' || port.includes('dynamic hedging') || port.includes('dh lng') || (port.startsWith('dh') && !port.startsWith('dft')) || cflow.includes('dh');
+    }
+  },
+  DFT: {
+    id: 'DFT',
+    title: 'Derivatives Trading (DFT) P&L',
+    shortTitle: 'Financial Trading (DFT)',
+    code: 'DFT',
+    portfolioDesc: 'DFT LNG',
+    badge: 'Derivatives & Financial',
+    themeColor: 'purple',
+    icon: TrendingUp,
+    filterFn: (r: any) => {
+      const port = String(r['Internal Portfolio'] || r['Portfolio'] || '').trim().toLowerCase();
+      const cflow = String(r['Cflow Type'] || '').trim().toLowerCase();
+      return port === 'dft lng' || port === 'dft' || port.includes('financial trading') || port.includes('dft lng') || port.includes('derivative') || cflow.includes('dft');
+    }
+  }
+};
+
 export const ExecutiveDashboard: React.FC<ExecutiveDashboardProps> = ({ trmsData, onCargoClick }) => {
   const [selectedGroup, setSelectedGroup] = useState<string>('All');
   const [targetDate, setTargetDate] = useState<string>('all');
@@ -74,6 +140,17 @@ export const ExecutiveDashboard: React.FC<ExecutiveDashboardProps> = ({ trmsData
   // Sorting state for modal table
   const [sortColumn, setSortColumn] = useState<string>('pnl');
   const [sortDirection, setSortDirection] = useState<'asc' | 'desc'>('desc');
+
+  // Derivatives (Physical Hedging, DH, DFT) Modal & Drilldown State
+  const [activeDerivativeCategory, setActiveDerivativeCategory] = useState<DerivativeCategory>('PHYSICAL_HEDGING');
+  const [isDerivativesModalOpen, setIsDerivativesModalOpen] = useState<boolean>(false);
+  const [selectedDerivativeGroup, setSelectedDerivativeGroup] = useState<string | null>(null);
+  const [derivativeModalFilterStatus, setDerivativeModalFilterStatus] = useState<'ALL' | 'Realized' | 'Unrealized'>('ALL');
+  const [derivativeModalSearch, setDerivativeModalSearch] = useState<string>('');
+  const [derivativeOnlyActive, setDerivativeOnlyActive] = useState<boolean>(false);
+  const [derivativeSortColumn, setDerivativeSortColumn] = useState<string>('totalPnL');
+  const [derivativeSortDirection, setDerivativeSortDirection] = useState<'asc' | 'desc'>('desc');
+  const [expandedDerivativeSN, setExpandedDerivativeSN] = useState<string | null>(null);
 
   const rawRows = useMemo(() => {
     if (trmsData.extractedRows && trmsData.extractedRows.length > 0) {
@@ -140,6 +217,61 @@ export const ExecutiveDashboard: React.FC<ExecutiveDashboardProps> = ({ trmsData
     return getComputedSummaries(baselineDate, selectedYear, selectedGroup);
   }, [getComputedSummaries, baselineDate, selectedYear, selectedGroup]);
 
+  // Helper to extract specific derivative category details for a strategy
+  const extractStrategyDerivatives = useCallback((s: TrmsStrategySummary, cat: DerivativeCategory) => {
+    const cfg = DERIVATIVE_CONFIGS[cat];
+    const dealRows = (s.underlyingRows || []).filter(cfg.filterFn);
+
+    let realizedPnL = 0;
+    let unrealizedPnL = 0;
+    let vol = 0;
+
+    if (dealRows.length > 0) {
+      let rawVolSum = 0;
+      dealRows.forEach((r: any) => {
+        const val = Number(String(r['Base_Total_Value_USD'] || '').replace(/[^0-9.-]/g, '')) || 0;
+        const vType = String(r['Volume Type'] || r['Vol Type'] || '').trim().toLowerCase();
+        const rVol = Math.abs(Number(String(r['Volume'] || '').replace(/[^0-9.-]/g, '')) || 0);
+        rawVolSum += rVol;
+
+        if (vType === 'actual' || (vType === '' && s.physicalPnLStatus === 'Realized')) {
+          realizedPnL += val;
+        } else {
+          unrealizedPnL += val;
+        }
+      });
+      vol = rawVolSum;
+    } else {
+      // Fallbacks from summary object if precomputed
+      if (cat === 'PHYSICAL_HEDGING' && s.hedgingPnL) {
+        if (s.physicalPnLStatus === 'Realized') realizedPnL = s.hedgingPnL;
+        else unrealizedPnL = s.hedgingPnL;
+        vol = s.hedgingVolume || 0;
+      } else if (cat === 'DH' && s.dhPnL) {
+        if (s.physicalPnLStatus === 'Realized') realizedPnL = s.dhPnL;
+        else unrealizedPnL = s.dhPnL;
+        vol = s.dhVolume || 0;
+      } else if (cat === 'DFT' && s.dftPnL) {
+        if (s.physicalPnLStatus === 'Realized') realizedPnL = s.dftPnL;
+        else unrealizedPnL = s.dftPnL;
+        vol = s.dftVolume || 0;
+      }
+    }
+
+    const totalPnL = realizedPnL + unrealizedPnL;
+    const isRealized = realizedPnL !== 0 && unrealizedPnL === 0 ? true : (unrealizedPnL !== 0 ? false : s.physicalPnLStatus === 'Realized');
+
+    return {
+      dealRows,
+      realizedPnL,
+      unrealizedPnL,
+      totalPnL,
+      vol,
+      isRealized,
+      hasTrades: Math.abs(totalPnL) > 0.001 || vol > 0 || dealRows.length > 0
+    };
+  }, []);
+
   // Strategy PnL Map for Baseline Date to compute Day-over-Day movements
   const baselinePnlMap = useMemo(() => {
     const map = new Map<string, number>();
@@ -149,6 +281,241 @@ export const ExecutiveDashboard: React.FC<ExecutiveDashboardProps> = ({ trmsData
     });
     return map;
   }, [baselineSummaries]);
+
+  // Baseline map for each derivative category per strategy
+  const baselineDerivativesMap = useMemo(() => {
+    const map: Record<DerivativeCategory, Map<string, number>> = {
+      PHYSICAL_HEDGING: new Map(),
+      DH: new Map(),
+      DFT: new Map()
+    };
+    baselineSummaries.forEach(s => {
+      (['PHYSICAL_HEDGING', 'DH', 'DFT'] as DerivativeCategory[]).forEach(cat => {
+        const details = extractStrategyDerivatives(s, cat);
+        map[cat].set(s.strategyName, details.totalPnL);
+      });
+    });
+    return map;
+  }, [baselineSummaries, extractStrategyDerivatives]);
+
+  // Target and baseline overview stats for each derivative category
+  const targetDerivativesStats = useMemo(() => {
+    const res: Record<DerivativeCategory, {
+      totalPnL: number;
+      realizedPnL: number;
+      unrealizedPnL: number;
+      volume: number;
+      count: number;
+      activeCount: number;
+    }> = {
+      PHYSICAL_HEDGING: { totalPnL: 0, realizedPnL: 0, unrealizedPnL: 0, volume: 0, count: targetSummaries.length, activeCount: 0 },
+      DH: { totalPnL: 0, realizedPnL: 0, unrealizedPnL: 0, volume: 0, count: targetSummaries.length, activeCount: 0 },
+      DFT: { totalPnL: 0, realizedPnL: 0, unrealizedPnL: 0, volume: 0, count: targetSummaries.length, activeCount: 0 }
+    };
+
+    targetSummaries.forEach(s => {
+      (['PHYSICAL_HEDGING', 'DH', 'DFT'] as DerivativeCategory[]).forEach(cat => {
+        const d = extractStrategyDerivatives(s, cat);
+        res[cat].totalPnL += d.totalPnL;
+        res[cat].realizedPnL += d.realizedPnL;
+        res[cat].unrealizedPnL += d.unrealizedPnL;
+        res[cat].volume += d.vol;
+        if (d.hasTrades) res[cat].activeCount++;
+      });
+    });
+
+    return res;
+  }, [targetSummaries, extractStrategyDerivatives]);
+
+  const baselineDerivativesStats = useMemo(() => {
+    const res: Record<DerivativeCategory, {
+      totalPnL: number;
+      realizedPnL: number;
+      unrealizedPnL: number;
+      volume: number;
+      count: number;
+      activeCount: number;
+    }> = {
+      PHYSICAL_HEDGING: { totalPnL: 0, realizedPnL: 0, unrealizedPnL: 0, volume: 0, count: baselineSummaries.length, activeCount: 0 },
+      DH: { totalPnL: 0, realizedPnL: 0, unrealizedPnL: 0, volume: 0, count: baselineSummaries.length, activeCount: 0 },
+      DFT: { totalPnL: 0, realizedPnL: 0, unrealizedPnL: 0, volume: 0, count: baselineSummaries.length, activeCount: 0 }
+    };
+
+    baselineSummaries.forEach(s => {
+      (['PHYSICAL_HEDGING', 'DH', 'DFT'] as DerivativeCategory[]).forEach(cat => {
+        const d = extractStrategyDerivatives(s, cat);
+        res[cat].totalPnL += d.totalPnL;
+        res[cat].realizedPnL += d.realizedPnL;
+        res[cat].unrealizedPnL += d.unrealizedPnL;
+        res[cat].volume += d.vol;
+        if (d.hasTrades) res[cat].activeCount++;
+      });
+    });
+
+    return res;
+  }, [baselineSummaries, extractStrategyDerivatives]);
+
+  // Group-level Aggregations for Active Derivative Category
+  const derivativesByGroup = useMemo(() => {
+    const groupMap: Record<string, {
+      groupName: string;
+      strategyCount: number;
+      activeCount: number;
+      totalPnL: number;
+      realizedPnL: number;
+      unrealizedPnL: number;
+      volume: number;
+      prevTotalPnL: number;
+      pnlChange: number;
+      strategies: Array<any>;
+    }> = {};
+
+    targetSummaries.forEach(s => {
+      const g = getGroupName(s.strategyName) || 'Unassigned';
+      if (!groupMap[g]) {
+        groupMap[g] = {
+          groupName: g,
+          strategyCount: 0,
+          activeCount: 0,
+          totalPnL: 0,
+          realizedPnL: 0,
+          unrealizedPnL: 0,
+          volume: 0,
+          prevTotalPnL: 0,
+          pnlChange: 0,
+          strategies: []
+        };
+      }
+
+      const details = extractStrategyDerivatives(s, activeDerivativeCategory);
+      const prevPnL = baselineDerivativesMap[activeDerivativeCategory].get(s.strategyName) || 0;
+      const pnlChange = details.totalPnL - prevPnL;
+
+      groupMap[g].strategyCount += 1;
+      if (details.hasTrades) groupMap[g].activeCount += 1;
+      groupMap[g].totalPnL += details.totalPnL;
+      groupMap[g].realizedPnL += details.realizedPnL;
+      groupMap[g].unrealizedPnL += details.unrealizedPnL;
+      groupMap[g].volume += details.vol;
+      groupMap[g].prevTotalPnL += prevPnL;
+      groupMap[g].pnlChange += pnlChange;
+
+      groupMap[g].strategies.push({
+        ...s,
+        group: g,
+        ...details,
+        prevPnL,
+        pnlChange
+      });
+    });
+
+    return Object.values(groupMap).sort((a, b) => Math.abs(b.totalPnL) - Math.abs(a.totalPnL));
+  }, [targetSummaries, baselineDerivativesMap, extractStrategyDerivatives, activeDerivativeCategory]);
+
+  // Derivative SN Table Data for the active category modal
+  const derivativeSNTableData = useMemo(() => {
+    let list: any[] = [];
+
+    if (selectedDerivativeGroup && selectedDerivativeGroup !== 'ALL') {
+      const foundGroup = derivativesByGroup.find(g => g.groupName === selectedDerivativeGroup);
+      if (foundGroup) {
+        list = [...foundGroup.strategies];
+      }
+    } else {
+      derivativesByGroup.forEach(g => {
+        list.push(...g.strategies);
+      });
+    }
+
+    if (derivativeModalFilterStatus === 'Realized') {
+      list = list.filter(item => Math.abs(item.realizedPnL) > 0.001 || item.physicalPnLStatus === 'Realized');
+    } else if (derivativeModalFilterStatus === 'Unrealized') {
+      list = list.filter(item => Math.abs(item.unrealizedPnL) > 0.001 || item.physicalPnLStatus === 'Unrealized');
+    }
+
+    if (derivativeOnlyActive) {
+      list = list.filter(item => item.hasTrades);
+    }
+
+    if (derivativeModalSearch.trim()) {
+      const q = derivativeModalSearch.toLowerCase().trim();
+      list = list.filter(item =>
+        item.strategyName.toLowerCase().includes(q) ||
+        (item.group && item.group.toLowerCase().includes(q)) ||
+        (item.buyer && item.buyer.toLowerCase().includes(q)) ||
+        (item.seller && item.seller.toLowerCase().includes(q)) ||
+        (item.loadingMonth && item.loadingMonth.toLowerCase().includes(q)) ||
+        (item.deliveryMonth && item.deliveryMonth.toLowerCase().includes(q))
+      );
+    }
+
+    list.sort((a, b) => {
+      const valA = (a as any)[derivativeSortColumn];
+      const valB = (b as any)[derivativeSortColumn];
+
+      if (typeof valA === 'string') {
+        return derivativeSortDirection === 'asc' ? valA.localeCompare(valB) : valB.localeCompare(valA);
+      }
+      return derivativeSortDirection === 'asc' ? (valA || 0) - (valB || 0) : (valB || 0) - (valA || 0);
+    });
+
+    return list;
+  }, [derivativesByGroup, selectedDerivativeGroup, derivativeModalFilterStatus, derivativeOnlyActive, derivativeModalSearch, derivativeSortColumn, derivativeSortDirection]);
+
+  // Export Derivative data to CSV
+  const handleExportDerivativeCSV = useCallback(() => {
+    const cfg = DERIVATIVE_CONFIGS[activeDerivativeCategory];
+    const catCode = cfg.code;
+
+    if (selectedDerivativeGroup === null) {
+      // Export Group Breakdown
+      const headers = ['Group', 'Total SNs', `Active ${catCode} SNs`, `${catCode} Volume (MMBtu)`, `Realized ${catCode} PnL ($)`, `Unrealized ${catCode} PnL ($)`, `Total ${catCode} PnL ($)`, 'DoD Change ($)'];
+      const rows = derivativesByGroup.map(g => [
+        `"${g.groupName}"`,
+        g.strategyCount,
+        g.activeCount,
+        Math.round(g.volume),
+        g.realizedPnL.toFixed(2),
+        g.unrealizedPnL.toFixed(2),
+        g.totalPnL.toFixed(2),
+        g.pnlChange.toFixed(2)
+      ]);
+      const csvContent = 'data:text/csv;charset=utf-8,' + [headers.join(','), ...rows.map(e => e.join(','))].join('\n');
+      const encodedUri = encodeURI(csvContent);
+      const link = document.createElement('a');
+      link.setAttribute('href', encodedUri);
+      link.setAttribute('download', `${catCode}_By_Group_${targetDate}.csv`);
+      document.body.appendChild(link);
+      link.click();
+      document.body.removeChild(link);
+    } else {
+      // Export SN Breakdown
+      const headers = ['Strategy Name', 'Group', 'Status', 'Buyer', 'Seller', 'Loading Month', 'Delivery Month', `${catCode} Volume (MMBtu)`, `Realized ${catCode} PnL ($)`, `Unrealized ${catCode} PnL ($)`, `Total ${catCode} PnL ($)`, 'DoD Change ($)', `${catCode} Deals Count`];
+      const rows = derivativeSNTableData.map(item => [
+        `"${item.strategyName}"`,
+        `"${item.group}"`,
+        `"${item.physicalPnLStatus}"`,
+        `"${item.buyer || ''}"`,
+        `"${item.seller || ''}"`,
+        `"${item.loadingMonth || ''}"`,
+        `"${item.deliveryMonth || ''}"`,
+        Math.round(item.vol || 0),
+        (item.realizedPnL || 0).toFixed(2),
+        (item.unrealizedPnL || 0).toFixed(2),
+        (item.totalPnL || 0).toFixed(2),
+        (item.pnlChange || 0).toFixed(2),
+        item.dealRows ? item.dealRows.length : 0
+      ]);
+      const csvContent = 'data:text/csv;charset=utf-8,' + [headers.join(','), ...rows.map(e => e.join(','))].join('\n');
+      const encodedUri = encodeURI(csvContent);
+      const link = document.createElement('a');
+      link.setAttribute('href', encodedUri);
+      link.setAttribute('download', `${catCode}_SN_${selectedDerivativeGroup}_${targetDate}.csv`);
+      document.body.appendChild(link);
+      link.click();
+      document.body.removeChild(link);
+    }
+  }, [activeDerivativeCategory, selectedDerivativeGroup, derivativesByGroup, derivativeSNTableData, targetDate]);
 
   // Aggregate stats helper for Total, Realized, Unrealized
   const aggregateStats = useCallback((summaries: TrmsStrategySummary[]) => {
@@ -545,7 +912,7 @@ export const ExecutiveDashboard: React.FC<ExecutiveDashboardProps> = ({ trmsData
           />
         </div>
 
-        {/* ROW 2: REALIZED PHYSICAL P&L & UNREALIZED PHYSICAL P&L */}
+        {/* ROW 2: REALIZED & UNREALIZED PHYSICAL P&L CARDS */}
         <div className="grid grid-cols-1 md:grid-cols-2 gap-4">
           <FinancialHeroCard 
             title="Realized Physical P&L" 
@@ -566,6 +933,46 @@ export const ExecutiveDashboard: React.FC<ExecutiveDashboardProps> = ({ trmsData
             colorClass="text-amber-600"
             badgeText="Open / Forward"
             onDrillDown={(metric: DrillDownMetric) => handleOpenDrilldown('Unrealized', metric)}
+          />
+        </div>
+
+        {/* ROW 3: DERIVATIVE & HEDGING PORTFOLIOS (Physical Hedging, DH, DFT) */}
+        <div className="grid grid-cols-1 md:grid-cols-3 gap-4">
+          <DerivativeHeroCard
+            category="PHYSICAL_HEDGING"
+            stats={targetDerivativesStats.PHYSICAL_HEDGING}
+            baseline={baselineDerivativesStats.PHYSICAL_HEDGING}
+            compareDate={baselineDate}
+            onOpenModal={(group?: string | null, status?: 'ALL' | 'Realized' | 'Unrealized') => {
+              setActiveDerivativeCategory('PHYSICAL_HEDGING');
+              setIsDerivativesModalOpen(true);
+              setSelectedDerivativeGroup(group !== undefined ? group : null);
+              if (status) setDerivativeModalFilterStatus(status);
+            }}
+          />
+          <DerivativeHeroCard
+            category="DH"
+            stats={targetDerivativesStats.DH}
+            baseline={baselineDerivativesStats.DH}
+            compareDate={baselineDate}
+            onOpenModal={(group?: string | null, status?: 'ALL' | 'Realized' | 'Unrealized') => {
+              setActiveDerivativeCategory('DH');
+              setIsDerivativesModalOpen(true);
+              setSelectedDerivativeGroup(group !== undefined ? group : null);
+              if (status) setDerivativeModalFilterStatus(status);
+            }}
+          />
+          <DerivativeHeroCard
+            category="DFT"
+            stats={targetDerivativesStats.DFT}
+            baseline={baselineDerivativesStats.DFT}
+            compareDate={baselineDate}
+            onOpenModal={(group?: string | null, status?: 'ALL' | 'Realized' | 'Unrealized') => {
+              setActiveDerivativeCategory('DFT');
+              setIsDerivativesModalOpen(true);
+              setSelectedDerivativeGroup(group !== undefined ? group : null);
+              if (status) setDerivativeModalFilterStatus(status);
+            }}
           />
         </div>
 
@@ -1137,6 +1544,47 @@ export const ExecutiveDashboard: React.FC<ExecutiveDashboardProps> = ({ trmsData
             </motion.div>
           </div>
         )}
+
+        {/* DERIVATIVES & HEDGING DRILL-DOWN MODAL (Group -> SN -> Trade Details for Physical Hedging, DH, DFT) */}
+        {isDerivativesModalOpen && (
+          <DerivativePortfolioModal
+            isOpen={isDerivativesModalOpen}
+            onClose={() => setIsDerivativesModalOpen(false)}
+            activeCategory={activeDerivativeCategory}
+            onSelectCategory={(cat: DerivativeCategory) => {
+              setActiveDerivativeCategory(cat);
+              setSelectedDerivativeGroup(null);
+            }}
+            targetDate={targetDate}
+            baselineDate={baselineDate}
+            selectedGroup={selectedDerivativeGroup}
+            onSelectGroup={(g) => setSelectedDerivativeGroup(g)}
+            filterStatus={derivativeModalFilterStatus}
+            onFilterStatusChange={(st) => setDerivativeModalFilterStatus(st)}
+            searchQuery={derivativeModalSearch}
+            onSearchChange={(q) => setDerivativeModalSearch(q)}
+            onlyActive={derivativeOnlyActive}
+            onToggleOnlyActive={(val) => setDerivativeOnlyActive(val)}
+            sortColumn={derivativeSortColumn}
+            sortDirection={derivativeSortDirection}
+            onSort={(col) => {
+              if (derivativeSortColumn === col) {
+                setDerivativeSortDirection(prev => prev === 'asc' ? 'desc' : 'asc');
+              } else {
+                setDerivativeSortColumn(col);
+                setDerivativeSortDirection('desc');
+              }
+            }}
+            expandedSN={expandedDerivativeSN}
+            onToggleExpandSN={(sn) => setExpandedDerivativeSN(prev => prev === sn ? null : sn)}
+            overviewStats={targetDerivativesStats}
+            baselineStats={baselineDerivativesStats}
+            groupsData={derivativesByGroup}
+            snData={derivativeSNTableData}
+            onCargoClick={onCargoClick}
+            onExportCSV={handleExportDerivativeCSV}
+          />
+        )}
       </AnimatePresence>
 
     </motion.div>
@@ -1346,6 +1794,900 @@ const StrategyTicker = ({
           animation-play-state: paused;
         }
       `}</style>
+    </div>
+  );
+};
+
+/* -------------------------------------------------------------------------- */
+/* DERIVATIVE & HEDGING HERO CARD (Physical Hedging, DH, DFT)                 */
+/* -------------------------------------------------------------------------- */
+interface DerivativeHeroCardProps {
+  category: DerivativeCategory;
+  stats: any;
+  baseline: any;
+  compareDate: string;
+  onOpenModal: (group?: string | null, status?: 'ALL' | 'Realized' | 'Unrealized') => void;
+}
+
+const DerivativeHeroCard: React.FC<DerivativeHeroCardProps> = ({
+  category,
+  stats = { totalPnL: 0, realizedPnL: 0, unrealizedPnL: 0, volume: 0, count: 0, activeCount: 0 },
+  baseline,
+  compareDate,
+  onOpenModal
+}) => {
+  const config = DERIVATIVE_CONFIGS[category];
+  const IconComponent = config.icon || ShieldCheck;
+  const delta = stats.totalPnL - (baseline ? baseline.totalPnL : 0);
+  const isPositive = delta >= 0;
+
+  const colorStyles = {
+    emerald: {
+      border: 'border-emerald-100 ring-2 ring-emerald-50/60',
+      badgeBg: 'bg-emerald-100/80 text-emerald-800',
+      titleText: 'text-emerald-800',
+      pillBg: 'bg-emerald-50 text-emerald-700 border-emerald-200',
+      activeText: 'text-emerald-600',
+      hoverText: 'group-hover/sub:text-emerald-600',
+      pnlPositive: 'text-emerald-600'
+    },
+    indigo: {
+      border: 'border-indigo-100 ring-2 ring-indigo-50/60',
+      badgeBg: 'bg-indigo-100/80 text-indigo-800',
+      titleText: 'text-indigo-800',
+      pillBg: 'bg-indigo-50 text-indigo-700 border-indigo-200',
+      activeText: 'text-indigo-600',
+      hoverText: 'group-hover/sub:text-indigo-600',
+      pnlPositive: 'text-indigo-600'
+    },
+    purple: {
+      border: 'border-purple-100 ring-2 ring-purple-50/60',
+      badgeBg: 'bg-purple-100/80 text-purple-800',
+      titleText: 'text-purple-800',
+      pillBg: 'bg-purple-50 text-purple-700 border-purple-200',
+      activeText: 'text-purple-600',
+      hoverText: 'group-hover/sub:text-purple-600',
+      pnlPositive: 'text-purple-600'
+    }
+  }[config.themeColor] || {
+    border: 'border-slate-100',
+    badgeBg: 'bg-slate-100 text-slate-800',
+    titleText: 'text-slate-800',
+    pillBg: 'bg-slate-50 text-slate-700 border-slate-200',
+    activeText: 'text-slate-600',
+    hoverText: 'group-hover/sub:text-slate-600',
+    pnlPositive: 'text-emerald-600'
+  };
+
+  return (
+    <motion.div 
+      className={`bg-white p-4 sm:p-6 rounded-2xl shadow-sm border ${colorStyles.border} transition-all flex flex-col justify-between h-full hover:shadow-md hover:-translate-y-0.5`}
+      variants={{ hidden: { opacity: 0, y: 10 }, visible: { opacity: 1, y: 0 } }}
+    >
+      <div className="cursor-pointer" onClick={() => onOpenModal(null, 'ALL')}>
+        <div className="flex justify-between items-start mb-2 sm:mb-4">
+          <div className="flex flex-col">
+            <div className="flex items-center gap-1.5">
+              <span className={`p-1 rounded-md ${colorStyles.badgeBg}`}>
+                <IconComponent className="w-3.5 h-3.5" />
+              </span>
+              <p className={`text-[10px] sm:text-xs font-black uppercase tracking-widest ${colorStyles.titleText}`}>
+                {config.title}
+              </p>
+            </div>
+            <div className="flex items-center gap-2 mt-1">
+              <p className="text-[8px] sm:text-[9px] font-bold text-slate-400 uppercase">
+                {stats.activeCount} Active / {stats.count} Total SNs
+              </p>
+              <span className={`px-1.5 py-0.5 rounded text-[8px] font-bold border shadow-2xs ${colorStyles.pillBg}`}>
+                Click to Drilldown
+              </span>
+            </div>
+          </div>
+          
+          {/* Day-over-Day Delta Badge */}
+          <div className="flex items-center gap-2">
+            <div className={`px-1.5 py-0.5 sm:px-2 sm:py-1 rounded-lg text-[8px] sm:text-[10px] font-bold ${
+              isPositive ? 'bg-emerald-50 text-emerald-600' : 'bg-rose-50 text-rose-600'
+            }`}>
+              {isPositive ? '▲' : '▼'} {formatCurrency(Math.abs(delta))}
+            </div>
+          </div>
+        </div>
+
+        {/* Primary PnL Number */}
+        <div className={`font-black ${stats.totalPnL >= 0 ? colorStyles.pnlPositive : 'text-rose-600'}`}>
+          <AutoScalingText maxFontSize={30} minFontSize={14}>
+            {formatCurrency(stats.totalPnL)}
+          </AutoScalingText>
+        </div>
+        <p className="text-[8px] sm:text-[10px] text-slate-400 mt-1 font-bold uppercase tracking-tight">
+          vs Basis: {compareDate || 'Previous'}
+        </p>
+      </div>
+
+      {/* Sub-Metric Split: Realized P&L, Unrealized P&L, Volume */}
+      <div className="grid grid-cols-3 gap-2 sm:gap-4 mt-4 sm:mt-8 pt-4 sm:pt-6 border-t border-slate-50">
+        <SubMetric 
+          label="Realized" 
+          fullLabel="Realized P&L" 
+          value={stats.realizedPnL} 
+          baseline={baseline ? baseline.realizedPnL : 0} 
+          color="text-blue-600" 
+          onClick={() => onOpenModal(null, 'Realized')} 
+        />
+        <SubMetric 
+          label="Unrealized" 
+          fullLabel="Unrealized P&L" 
+          value={stats.unrealizedPnL} 
+          baseline={baseline ? baseline.unrealizedPnL : 0} 
+          color="text-amber-600" 
+          onClick={() => onOpenModal(null, 'Unrealized')} 
+        />
+        <div 
+          className="cursor-pointer group/sub" 
+          onClick={(e: React.MouseEvent) => { e.stopPropagation(); onOpenModal(null, 'ALL'); }}
+        >
+          <p className={`text-[8px] sm:text-[9px] font-black text-slate-400 uppercase tracking-tighter mb-0.5 ${colorStyles.hoverText} transition-colors`}>
+            <span className="sm:hidden">{config.code} Vol</span>
+            <span className="hidden sm:inline">{config.code} Volume</span>
+          </p>
+          <p className="text-[10px] sm:text-xs font-bold text-slate-800">
+            {stats.volume > 0 ? `${Math.round(stats.volume).toLocaleString()}` : '0'} <span className="text-[8px] font-normal text-slate-500">MMBtu</span>
+          </p>
+          <div className="text-[7px] sm:text-[8px] font-bold text-slate-400 mt-0.5">
+            {stats.activeCount} Active Positions
+          </div>
+        </div>
+      </div>
+    </motion.div>
+  );
+};
+
+/* -------------------------------------------------------------------------- */
+/* DERIVATIVES & HEDGING DRILLDOWN MODAL (Group -> SN -> Trade Lines)         */
+/* -------------------------------------------------------------------------- */
+interface DerivativePortfolioModalProps {
+  isOpen: boolean;
+  onClose: () => void;
+  activeCategory: DerivativeCategory;
+  onSelectCategory: (category: DerivativeCategory) => void;
+  targetDate: string;
+  baselineDate: string;
+  selectedGroup: string | null;
+  onSelectGroup: (group: string | null) => void;
+  filterStatus: 'ALL' | 'Realized' | 'Unrealized';
+  onFilterStatusChange: (status: 'ALL' | 'Realized' | 'Unrealized') => void;
+  searchQuery: string;
+  onSearchChange: (q: string) => void;
+  onlyActive: boolean;
+  onToggleOnlyActive: (val: boolean) => void;
+  sortColumn: string;
+  sortDirection: 'asc' | 'desc';
+  onSort: (col: string) => void;
+  expandedSN: string | null;
+  onToggleExpandSN: (sn: string) => void;
+  overviewStats: Record<DerivativeCategory, any>;
+  baselineStats: Record<DerivativeCategory, any>;
+  groupsData: any[];
+  snData: any[];
+  onCargoClick?: (strategyName: string) => void;
+  onExportCSV: () => void;
+}
+
+const DerivativePortfolioModal: React.FC<DerivativePortfolioModalProps> = ({
+  isOpen,
+  onClose,
+  activeCategory,
+  onSelectCategory,
+  targetDate,
+  baselineDate,
+  selectedGroup,
+  onSelectGroup,
+  filterStatus,
+  onFilterStatusChange,
+  searchQuery,
+  onSearchChange,
+  onlyActive,
+  onToggleOnlyActive,
+  sortColumn,
+  sortDirection,
+  onSort,
+  expandedSN,
+  onToggleExpandSN,
+  overviewStats,
+  baselineStats,
+  groupsData,
+  snData,
+  onCargoClick,
+  onExportCSV
+}) => {
+  if (!isOpen) return null;
+
+  const currentConfig = DERIVATIVE_CONFIGS[activeCategory];
+  const IconComponent = currentConfig.icon || ShieldCheck;
+  const currentStats = overviewStats[activeCategory] || { totalPnL: 0, realizedPnL: 0, unrealizedPnL: 0, volume: 0, count: 0, activeCount: 0 };
+  const currentBaseline = baselineStats[activeCategory];
+  const isSNLevel = selectedGroup !== null;
+
+  const themeClasses = {
+    emerald: {
+      headerBg: 'from-emerald-50/40 via-white to-slate-50',
+      iconBox: 'bg-emerald-500 text-white shadow-emerald-500/20',
+      textAccent: 'text-emerald-800',
+      breadcrumbTag: 'bg-emerald-100/70 text-emerald-800',
+      buttonAccent: 'text-emerald-700 bg-emerald-50 hover:bg-emerald-100/80 border-emerald-200',
+      dotColor: 'bg-emerald-500',
+      activeTab: 'bg-emerald-600 text-white shadow-sm',
+      tableHover: 'hover:bg-emerald-50/40',
+      activeRowBg: 'bg-emerald-50/25',
+      primaryText: 'text-emerald-600',
+      footerTotalText: 'text-emerald-700'
+    },
+    indigo: {
+      headerBg: 'from-indigo-50/40 via-white to-slate-50',
+      iconBox: 'bg-indigo-500 text-white shadow-indigo-500/20',
+      textAccent: 'text-indigo-800',
+      breadcrumbTag: 'bg-indigo-100/70 text-indigo-800',
+      buttonAccent: 'text-indigo-700 bg-indigo-50 hover:bg-indigo-100/80 border-indigo-200',
+      dotColor: 'bg-indigo-500',
+      activeTab: 'bg-indigo-600 text-white shadow-sm',
+      tableHover: 'hover:bg-indigo-50/40',
+      activeRowBg: 'bg-indigo-50/25',
+      primaryText: 'text-indigo-600',
+      footerTotalText: 'text-indigo-700'
+    },
+    purple: {
+      headerBg: 'from-purple-50/40 via-white to-slate-50',
+      iconBox: 'bg-purple-500 text-white shadow-purple-500/20',
+      textAccent: 'text-purple-800',
+      breadcrumbTag: 'bg-purple-100/70 text-purple-800',
+      buttonAccent: 'text-purple-700 bg-purple-50 hover:bg-purple-100/80 border-purple-200',
+      dotColor: 'bg-purple-500',
+      activeTab: 'bg-purple-600 text-white shadow-sm',
+      tableHover: 'hover:bg-purple-50/40',
+      activeRowBg: 'bg-purple-50/25',
+      primaryText: 'text-purple-600',
+      footerTotalText: 'text-purple-700'
+    }
+  }[currentConfig.themeColor] || {
+    headerBg: 'from-slate-50 via-white to-slate-50',
+    iconBox: 'bg-slate-700 text-white shadow-slate-700/20',
+    textAccent: 'text-slate-800',
+    breadcrumbTag: 'bg-slate-100 text-slate-800',
+    buttonAccent: 'text-slate-700 bg-slate-50 hover:bg-slate-100 border-slate-200',
+    dotColor: 'bg-slate-500',
+    activeTab: 'bg-slate-700 text-white shadow-sm',
+    tableHover: 'hover:bg-slate-50/80',
+    activeRowBg: 'bg-slate-50/50',
+    primaryText: 'text-emerald-600',
+    footerTotalText: 'text-slate-800'
+  };
+
+  return (
+    <div className="fixed inset-0 bg-slate-900/60 backdrop-blur-sm z-[200] flex items-center justify-center p-2 sm:p-4 lg:p-6">
+      <motion.div 
+        initial={{ opacity: 0, scale: 0.96, y: 15 }}
+        animate={{ opacity: 1, scale: 1, y: 0 }}
+        exit={{ opacity: 0, scale: 0.96, y: 15 }}
+        className="bg-white w-full max-w-7xl max-h-[92vh] rounded-2xl shadow-2xl border border-slate-200 flex flex-col overflow-hidden"
+      >
+        {/* Modal Top Header */}
+        <div className={`p-4 sm:p-5 border-b border-slate-100 flex flex-col sm:flex-row items-start sm:items-center justify-between gap-3 bg-gradient-to-r ${themeClasses.headerBg} shrink-0`}>
+          <div className="flex items-center gap-3">
+            <div className={`p-2.5 rounded-xl ${themeClasses.iconBox} shadow-md`}>
+              <IconComponent className="w-5 h-5" />
+            </div>
+            <div>
+              <div className="flex items-center gap-2">
+                <h3 className="text-base sm:text-lg font-black text-slate-800">
+                  {currentConfig.title} Analysis
+                </h3>
+                {isSNLevel ? (
+                  <div className="flex items-center gap-1.5 text-xs font-bold">
+                    <span className="text-slate-400">/</span>
+                    <button 
+                      onClick={() => onSelectGroup(null)}
+                      className="text-slate-600 hover:text-slate-900 underline underline-offset-2"
+                    >
+                      All Groups
+                    </button>
+                    <span className="text-slate-400">/</span>
+                    <span className={`px-2 py-0.5 ${themeClasses.breadcrumbTag} rounded-md font-mono text-xs`}>
+                      {selectedGroup === 'ALL' ? 'All Portfolios (Flat)' : `Group: ${selectedGroup}`}
+                    </span>
+                  </div>
+                ) : (
+                  <span className="px-2 py-0.5 bg-slate-100 text-slate-600 rounded-md text-xs font-bold">
+                    Portfolio Group Breakdown
+                  </span>
+                )}
+              </div>
+              <p className="text-[11px] text-slate-500 font-medium mt-0.5">
+                Internal Portfolio: <span className="font-mono font-bold text-slate-700">{currentConfig.portfolioDesc}</span> • EOD Date: <span className="font-bold text-slate-700">{targetDate || 'All'}</span> (Baseline: {baselineDate || 'Prior'})
+              </p>
+            </div>
+          </div>
+
+          {/* Category Selector Tabs & Actions */}
+          <div className="flex flex-wrap items-center gap-2 self-end sm:self-center">
+            {/* Category Switcher Tabs */}
+            <div className="flex items-center p-1 bg-slate-100 rounded-xl text-xs font-bold border border-slate-200/60 shadow-2xs">
+              {(['PHYSICAL_HEDGING', 'DH', 'DFT'] as DerivativeCategory[]).map((cat) => {
+                const conf = DERIVATIVE_CONFIGS[cat];
+                const isSelected = activeCategory === cat;
+                return (
+                  <button
+                    key={cat}
+                    onClick={() => onSelectCategory(cat)}
+                    className={`px-2.5 py-1 rounded-lg transition-all flex items-center gap-1.5 text-[11px] font-bold ${
+                      isSelected
+                        ? themeClasses.activeTab
+                        : 'text-slate-600 hover:text-slate-900 hover:bg-white/60'
+                    }`}
+                  >
+                    <span>{conf.shortTitle}</span>
+                  </button>
+                );
+              })}
+            </div>
+
+            {isSNLevel && (
+              <button
+                onClick={() => onSelectGroup(null)}
+                className="flex items-center gap-1 px-3 py-1.5 text-xs font-bold text-slate-600 bg-white hover:bg-slate-50 border border-slate-200 rounded-lg shadow-2xs transition-colors"
+              >
+                <ChevronLeft className="w-3.5 h-3.5" />
+                Back to Groups
+              </button>
+            )}
+            <button
+              onClick={onExportCSV}
+              className={`flex items-center gap-1.5 px-3 py-1.5 text-xs font-bold border rounded-lg shadow-2xs transition-colors ${themeClasses.buttonAccent}`}
+              title="Export visible data to CSV"
+            >
+              <Download className="w-3.5 h-3.5" />
+              Export CSV
+            </button>
+            <button 
+              onClick={onClose}
+              className="p-2 text-slate-400 hover:text-slate-700 hover:bg-slate-100 rounded-xl transition-colors"
+            >
+              <X className="w-5 h-5" />
+            </button>
+          </div>
+        </div>
+
+        {/* Modal Top Summary KPI Bar */}
+        <div className="grid grid-cols-2 sm:grid-cols-5 gap-3 p-3 sm:p-4 bg-slate-50/70 border-b border-slate-100 shrink-0 text-xs">
+          <div className="bg-white p-2.5 rounded-xl border border-slate-200 shadow-2xs">
+            <span className="text-[10px] font-bold text-slate-400 uppercase">Total {currentConfig.code} P&amp;L</span>
+            <div className={`text-base font-black ${currentStats.totalPnL >= 0 ? themeClasses.primaryText : 'text-rose-600'}`}>
+              {formatCurrency(currentStats.totalPnL)}
+            </div>
+            <div className="text-[9px] font-bold text-slate-400 mt-0.5">
+              DoD: {formatCurrency(currentStats.totalPnL - (currentBaseline ? currentBaseline.totalPnL : 0))}
+            </div>
+          </div>
+          <div className="bg-white p-2.5 rounded-xl border border-slate-200 shadow-2xs">
+            <span className="text-[10px] font-bold text-slate-400 uppercase">Realized {currentConfig.code}</span>
+            <div className={`text-base font-black ${currentStats.realizedPnL >= 0 ? 'text-blue-600' : 'text-rose-600'}`}>
+              {formatCurrency(currentStats.realizedPnL)}
+            </div>
+            <div className="text-[9px] font-bold text-slate-400 mt-0.5">
+              Settled contracts
+            </div>
+          </div>
+          <div className="bg-white p-2.5 rounded-xl border border-slate-200 shadow-2xs">
+            <span className="text-[10px] font-bold text-slate-400 uppercase">Unrealized {currentConfig.code}</span>
+            <div className={`text-base font-black ${currentStats.unrealizedPnL >= 0 ? 'text-amber-600' : 'text-rose-600'}`}>
+              {formatCurrency(currentStats.unrealizedPnL)}
+            </div>
+            <div className="text-[9px] font-bold text-slate-400 mt-0.5">
+              Open / forward positions
+            </div>
+          </div>
+          <div className="bg-white p-2.5 rounded-xl border border-slate-200 shadow-2xs">
+            <span className="text-[10px] font-bold text-slate-400 uppercase">{currentConfig.code} Volume</span>
+            <div className="text-base font-black text-slate-800">
+              {Math.round(currentStats.volume).toLocaleString()} <span className="text-[10px] font-normal text-slate-500">MMBtu</span>
+            </div>
+            <div className="text-[9px] font-bold text-slate-400 mt-0.5">
+              Across all {currentConfig.code} deals
+            </div>
+          </div>
+          <div className="bg-white p-2.5 rounded-xl border border-slate-200 shadow-2xs col-span-2 sm:col-span-1">
+            <span className="text-[10px] font-bold text-slate-400 uppercase">Active Strategies</span>
+            <div className="text-base font-black text-slate-800">
+              {currentStats.activeCount} <span className="text-xs font-normal text-slate-500">/ {currentStats.count} total</span>
+            </div>
+            <div className={`text-[9px] font-bold ${themeClasses.primaryText} mt-0.5`}>
+              {groupsData.length} Portfolio Groups
+            </div>
+          </div>
+        </div>
+
+        {/* Modal Controls & Filters */}
+        <div className="p-3 sm:p-4 border-b border-slate-100 flex flex-wrap items-center justify-between gap-3 bg-white shrink-0">
+          <div className="flex flex-wrap items-center gap-2">
+            {/* Search Input */}
+            <div className="relative min-w-[200px] sm:min-w-[260px]">
+              <Search className="w-3.5 h-3.5 absolute left-3 top-1/2 -translate-y-1/2 text-slate-400" />
+              <input 
+                type="text" 
+                placeholder={isSNLevel ? "Search Strategy Name, buyer, seller, month..." : "Search group or portfolio..."}
+                value={searchQuery}
+                onChange={(e) => onSearchChange(e.target.value)}
+                className="w-full pl-9 pr-3 py-1.5 text-xs bg-slate-50 border border-slate-200 rounded-lg outline-none focus:bg-white focus:border-slate-400 transition-colors"
+              />
+              {searchQuery && (
+                <button 
+                  onClick={() => onSearchChange('')}
+                  className="absolute right-2.5 top-1/2 -translate-y-1/2 text-slate-400 hover:text-slate-600"
+                >
+                  <X className="w-3.5 h-3.5" />
+                </button>
+              )}
+            </div>
+
+            {/* Status Filter Buttons */}
+            <div className="flex items-center p-0.5 bg-slate-100 rounded-lg text-xs font-bold">
+              {(['ALL', 'Realized', 'Unrealized'] as const).map((st) => (
+                <button
+                  key={st}
+                  onClick={() => onFilterStatusChange(st)}
+                  className={`px-3 py-1 rounded-md transition-all ${
+                    filterStatus === st 
+                      ? 'bg-white text-slate-800 shadow-2xs' 
+                      : 'text-slate-500 hover:text-slate-800'
+                  }`}
+                >
+                  {st === 'ALL' ? 'All Status' : st}
+                </button>
+              ))}
+            </div>
+
+            {/* Only Active Toggle */}
+            <label className="flex items-center gap-1.5 px-2.5 py-1 text-xs font-semibold text-slate-600 bg-slate-50 hover:bg-slate-100 border border-slate-200 rounded-lg cursor-pointer select-none">
+              <input 
+                type="checkbox"
+                checked={onlyActive}
+                onChange={(e) => onToggleOnlyActive(e.target.checked)}
+                className="rounded border-slate-300 text-slate-700 focus:ring-slate-400 cursor-pointer"
+              />
+              <span>Only Non-Zero Positions</span>
+            </label>
+          </div>
+
+          {/* Quick Level Switches */}
+          <div className="flex items-center gap-2">
+            {!isSNLevel ? (
+              <button
+                onClick={() => onSelectGroup('ALL')}
+                className={`flex items-center gap-1.5 px-3 py-1.5 text-xs font-bold border rounded-lg shadow-2xs transition-colors ${themeClasses.buttonAccent}`}
+              >
+                <Layers className="w-3.5 h-3.5" />
+                View All SNs Directly
+              </button>
+            ) : (
+              <div className="flex items-center gap-1 overflow-x-auto max-w-xs sm:max-w-md py-1">
+                <span className="text-[10px] font-bold text-slate-400 uppercase shrink-0">Switch Group:</span>
+                <button
+                  onClick={() => onSelectGroup('ALL')}
+                  className={`px-2 py-0.5 text-[11px] font-bold rounded-md shrink-0 ${
+                    selectedGroup === 'ALL' ? themeClasses.activeTab : 'bg-slate-100 text-slate-600 hover:bg-slate-200'
+                  }`}
+                >
+                  All
+                </button>
+                {groupsData.map(g => (
+                  <button
+                    key={g.groupName}
+                    onClick={() => onSelectGroup(g.groupName)}
+                    className={`px-2 py-0.5 text-[11px] font-bold rounded-md shrink-0 ${
+                      selectedGroup === g.groupName ? themeClasses.activeTab : 'bg-slate-100 text-slate-600 hover:bg-slate-200'
+                    }`}
+                  >
+                    {g.groupName}
+                  </button>
+                ))}
+              </div>
+            )}
+          </div>
+        </div>
+
+        {/* Main Content Area */}
+        <div className="flex-1 overflow-y-auto min-h-0 divide-y divide-slate-100">
+          {!isSNLevel ? (
+            /* ========================================================================= */
+            /* LEVEL 2: GROUP BREAKDOWN VIEW                                             */
+            /* ========================================================================= */
+            <div>
+              <div className="p-3 bg-slate-50 text-xs font-medium text-slate-700 flex items-center justify-between border-b border-slate-200/70">
+                <div className="flex items-center gap-2">
+                  <span className={`w-2 h-2 rounded-full ${themeClasses.dotColor} animate-pulse`}></span>
+                  <span>Click on any portfolio group row below to drill down into <strong>{currentConfig.shortTitle} by Strategy Name (SN)</strong>.</span>
+                </div>
+                <span className="text-[11px] font-bold text-slate-600">
+                  {groupsData.length} Groups Total
+                </span>
+              </div>
+
+              <table className="w-full text-left text-xs border-collapse">
+                <thead className="bg-slate-50 text-slate-600 font-bold sticky top-0 z-10 border-b border-slate-200 shadow-2xs">
+                  <tr>
+                    <th className="p-3">Portfolio Group</th>
+                    <th className="p-3 text-center">Strategies (Active / Total)</th>
+                    <th className="p-3 text-right">{currentConfig.code} Vol (MMBtu)</th>
+                    <th className="p-3 text-right">Realized P&amp;L</th>
+                    <th className="p-3 text-right">Unrealized P&amp;L</th>
+                    <th className="p-3 text-right">Total {currentConfig.code} P&amp;L</th>
+                    <th className="p-3 text-right">Change vs DoD</th>
+                    <th className="p-3 text-center">Actions</th>
+                  </tr>
+                </thead>
+                <tbody className="divide-y divide-slate-100">
+                  {groupsData.length === 0 ? (
+                    <tr>
+                      <td colSpan={8} className="p-8 text-center text-slate-400 font-medium">
+                        No groups found matching filter criteria.
+                      </td>
+                    </tr>
+                  ) : (
+                    groupsData.map((g) => {
+                      const isZero = Math.abs(g.totalHedgingPnL) < 0.001 && g.volume === 0;
+                      return (
+                        <tr 
+                          key={g.groupName}
+                          onClick={() => onSelectGroup(g.groupName)}
+                          className={`cursor-pointer transition-colors group ${
+                            isZero ? 'opacity-60 hover:opacity-100 hover:bg-slate-50/80' : themeClasses.tableHover
+                          }`}
+                        >
+                          <td className="p-3 font-black text-slate-800 flex items-center gap-2">
+                            <span className={`w-2.5 h-2.5 rounded-full ${themeClasses.dotColor} group-hover:scale-125 transition-transform`} />
+                            <span className="group-hover:text-slate-900 transition-colors">{g.groupName}</span>
+                          </td>
+                          <td className="p-3 text-center">
+                            <span className="px-2 py-0.5 rounded-full bg-slate-100 font-bold text-slate-700 text-[11px]">
+                              {g.activeCount} active <span className="text-slate-400 font-normal">/ {g.strategyCount} total</span>
+                            </span>
+                          </td>
+                          <td className="p-3 text-right font-mono font-bold text-slate-700">
+                            {g.volume > 0 ? `${Math.round(g.volume).toLocaleString()}` : '—'}
+                          </td>
+                          <td className={`p-3 text-right font-mono font-bold ${
+                            Math.abs(g.realizedPnL) < 0.01 ? 'text-slate-400' : g.realizedPnL >= 0 ? 'text-blue-600' : 'text-rose-600'
+                          }`}>
+                            {Math.abs(g.realizedPnL) < 0.01 ? '—' : formatCurrency(g.realizedPnL)}
+                          </td>
+                          <td className={`p-3 text-right font-mono font-bold ${
+                            Math.abs(g.unrealizedPnL) < 0.01 ? 'text-slate-400' : g.unrealizedPnL >= 0 ? 'text-amber-600' : 'text-rose-600'
+                          }`}>
+                            {Math.abs(g.unrealizedPnL) < 0.01 ? '—' : formatCurrency(g.unrealizedPnL)}
+                          </td>
+                          <td className={`p-3 text-right font-mono font-black text-sm ${
+                            Math.abs(g.totalHedgingPnL) < 0.01 ? 'text-slate-400' : g.totalHedgingPnL >= 0 ? themeClasses.primaryText : 'text-rose-600'
+                          }`}>
+                            {Math.abs(g.totalHedgingPnL) < 0.01 ? '$0.00' : formatCurrency(g.totalHedgingPnL)}
+                          </td>
+                          <td className="p-3 text-right font-mono text-[11px] font-bold">
+                            <span className={
+                              Math.abs(g.pnlChange) < 0.01 ? 'text-slate-400' : g.pnlChange >= 0 ? 'text-emerald-600' : 'text-rose-600'
+                            }>
+                              {g.pnlChange > 0.01 ? '+' : ''}{Math.abs(g.pnlChange) < 0.01 ? '—' : formatCurrency(g.pnlChange)}
+                            </span>
+                          </td>
+                          <td className="p-3 text-center">
+                            <button 
+                              onClick={(e) => { e.stopPropagation(); onSelectGroup(g.groupName); }}
+                              className={`px-2.5 py-1 text-[11px] font-bold rounded-md transition-colors inline-flex items-center gap-1 ${themeClasses.buttonAccent}`}
+                            >
+                              <span>View SNs</span>
+                              <ChevronRight className="w-3 h-3" />
+                            </button>
+                          </td>
+                        </tr>
+                      );
+                    })
+                  )}
+                </tbody>
+              </table>
+            </div>
+          ) : (
+            /* ========================================================================= */
+            /* LEVEL 3: STRATEGY NAME (SN) BREAKDOWN & TRANSACTION EXPANSION             */
+            /* ========================================================================= */
+            <div>
+              <table className="w-full text-left text-xs border-collapse">
+                <thead className="bg-slate-50 text-slate-600 font-bold sticky top-0 z-10 border-b border-slate-200 shadow-2xs">
+                  <tr>
+                    <th className="p-2.5 pl-4 cursor-pointer hover:text-slate-900" onClick={() => onSort('strategyName')}>
+                      <div className="flex items-center gap-1">
+                        <span>Strategy Name (SN)</span>
+                        <ArrowUpDown className="w-3 h-3 text-slate-400" />
+                      </div>
+                    </th>
+                    <th className="p-2.5 cursor-pointer hover:text-slate-900" onClick={() => onSort('group')}>
+                      <div className="flex items-center gap-1">
+                        <span>Group</span>
+                        <ArrowUpDown className="w-3 h-3 text-slate-400" />
+                      </div>
+                    </th>
+                    <th className="p-2.5 text-center cursor-pointer hover:text-slate-900" onClick={() => onSort('physicalPnLStatus')}>
+                      <div className="flex items-center justify-center gap-1">
+                        <span>Status</span>
+                        <ArrowUpDown className="w-3 h-3 text-slate-400" />
+                      </div>
+                    </th>
+                    <th className="p-2.5">Buyer / Seller</th>
+                    <th className="p-2.5 text-center">Delivery Mo.</th>
+                    <th className="p-2.5 text-right cursor-pointer hover:text-slate-900" onClick={() => onSort('vol')}>
+                      <div className="flex items-center justify-end gap-1">
+                        <span>{currentConfig.code} Vol (MMBtu)</span>
+                        <ArrowUpDown className="w-3 h-3 text-slate-400" />
+                      </div>
+                    </th>
+                    <th className="p-2.5 text-right cursor-pointer hover:text-slate-900" onClick={() => onSort('realizedPnL')}>
+                      <div className="flex items-center justify-end gap-1">
+                        <span>Realized {currentConfig.code}</span>
+                        <ArrowUpDown className="w-3 h-3 text-slate-400" />
+                      </div>
+                    </th>
+                    <th className="p-2.5 text-right cursor-pointer hover:text-slate-900" onClick={() => onSort('unrealizedPnL')}>
+                      <div className="flex items-center justify-end gap-1">
+                        <span>Unrealized {currentConfig.code}</span>
+                        <ArrowUpDown className="w-3 h-3 text-slate-400" />
+                      </div>
+                    </th>
+                    <th className="p-2.5 text-right cursor-pointer hover:text-slate-900" onClick={() => onSort('totalHedgingPnL')}>
+                      <div className="flex items-center justify-end gap-1">
+                        <span>Total {currentConfig.code} P&amp;L</span>
+                        <ArrowUpDown className="w-3 h-3 text-slate-400" />
+                      </div>
+                    </th>
+                    <th className="p-2.5 text-right cursor-pointer hover:text-slate-900" onClick={() => onSort('hedgingPnLChange')}>
+                      <div className="flex items-center justify-end gap-1">
+                        <span>DoD Change</span>
+                        <ArrowUpDown className="w-3 h-3 text-slate-400" />
+                      </div>
+                    </th>
+                    <th className="p-2.5 pr-4 text-center">{currentConfig.code} Deals</th>
+                  </tr>
+                </thead>
+                <tbody className="divide-y divide-slate-100">
+                  {snData.length === 0 ? (
+                    <tr>
+                      <td colSpan={11} className="p-8 text-center text-slate-400 font-medium">
+                        No strategies match your filter criteria in this group.
+                      </td>
+                    </tr>
+                  ) : (
+                    snData.map((item) => {
+                      const isExpanded = expandedSN === item.strategyName;
+                      const hasDeals = item.hedgeRows && item.hedgeRows.length > 0;
+                      const isZero = Math.abs(item.totalHedgingPnL) < 0.001 && (!item.vol || item.vol === 0);
+
+                      return (
+                        <React.Fragment key={item.strategyName}>
+                          <tr className={`hover:bg-slate-50/90 transition-colors ${isExpanded ? themeClasses.activeRowBg : isZero ? 'opacity-55' : ''}`}>
+                            {/* Strategy Name */}
+                            <td className="p-2.5 pl-4 font-mono font-bold text-slate-800">
+                              <div className="flex items-center gap-1.5">
+                                <button
+                                  onClick={() => onToggleExpandSN(item.strategyName)}
+                                  className="p-1 text-slate-400 hover:text-slate-700 rounded transition-colors"
+                                  title={isExpanded ? "Collapse deal rows" : "Expand deal rows"}
+                                >
+                                  {isExpanded ? <ChevronDown className={`w-3.5 h-3.5 ${themeClasses.primaryText}`} /> : <ChevronRight className="w-3.5 h-3.5" />}
+                                </button>
+                                <span 
+                                  onClick={() => onCargoClick && onCargoClick(item.strategyName)}
+                                  className="hover:underline cursor-pointer flex items-center gap-1"
+                                >
+                                  {item.strategyName}
+                                  <ExternalLink className="w-2.5 h-2.5 opacity-0 group-hover:opacity-100 text-slate-400" />
+                                </span>
+                              </div>
+                            </td>
+
+                            {/* Group */}
+                            <td className="p-2.5">
+                              <span className="px-2 py-0.5 rounded bg-slate-100 text-slate-600 font-semibold text-[10px]">
+                                {item.group}
+                              </span>
+                            </td>
+
+                            {/* Status */}
+                            <td className="p-2.5 text-center">
+                              <span className={`px-2 py-0.5 rounded-full text-[10px] font-bold ${
+                                item.physicalPnLStatus === 'Realized' 
+                                  ? 'bg-blue-50 text-blue-700 border border-blue-200' 
+                                  : 'bg-amber-50 text-amber-700 border border-amber-200'
+                              }`}>
+                                {item.physicalPnLStatus}
+                              </span>
+                            </td>
+
+                            {/* Buyer / Seller */}
+                            <td className="p-2.5 text-[11px] text-slate-600">
+                              <div className="truncate max-w-[140px]" title={`Buyer: ${item.buyer || '—'} / Seller: ${item.seller || '—'}`}>
+                                <span className="font-bold text-slate-700">{item.buyer || '—'}</span>
+                                <span className="text-slate-400 mx-1">/</span>
+                                <span>{item.seller || '—'}</span>
+                              </div>
+                            </td>
+
+                            {/* Delivery Month */}
+                            <td className="p-2.5 text-center font-mono text-[11px] text-slate-600">
+                              {item.deliveryMonth || '—'}
+                            </td>
+
+                            {/* Volume */}
+                            <td className="p-2.5 text-right font-mono font-bold text-slate-700">
+                              {item.vol > 0 ? `${Math.round(item.vol).toLocaleString()}` : '—'}
+                            </td>
+
+                            {/* Realized PnL */}
+                            <td className={`p-2.5 text-right font-mono font-bold ${
+                              Math.abs(item.realizedPnL) < 0.01 ? 'text-slate-400' : item.realizedPnL >= 0 ? 'text-blue-600' : 'text-rose-600'
+                            }`}>
+                              {Math.abs(item.realizedPnL) < 0.01 ? '—' : formatCurrency(item.realizedPnL)}
+                            </td>
+
+                            {/* Unrealized PnL */}
+                            <td className={`p-2.5 text-right font-mono font-bold ${
+                              Math.abs(item.unrealizedPnL) < 0.01 ? 'text-slate-400' : item.unrealizedPnL >= 0 ? 'text-amber-600' : 'text-rose-600'
+                            }`}>
+                              {Math.abs(item.unrealizedPnL) < 0.01 ? '—' : formatCurrency(item.unrealizedPnL)}
+                            </td>
+
+                            {/* Total PnL */}
+                            <td className={`p-2.5 text-right font-mono font-black ${
+                              Math.abs(item.totalHedgingPnL) < 0.01 ? 'text-slate-400' : item.totalHedgingPnL >= 0 ? themeClasses.primaryText : 'text-rose-600'
+                            }`}>
+                              {Math.abs(item.totalHedgingPnL) < 0.01 ? '$0.00' : formatCurrency(item.totalHedgingPnL)}
+                            </td>
+
+                            {/* DoD Change */}
+                            <td className="p-2.5 text-right font-mono text-[11px] font-bold">
+                              <span className={
+                                Math.abs(item.hedgingPnLChange) < 0.01 ? 'text-slate-400' : item.hedgingPnLChange >= 0 ? 'text-emerald-600' : 'text-rose-600'
+                              }>
+                                {item.hedgingPnLChange > 0.01 ? '+' : ''}{Math.abs(item.hedgingPnLChange) < 0.01 ? '—' : formatCurrency(item.hedgingPnLChange)}
+                              </span>
+                            </td>
+
+                            {/* Deals Expand Button */}
+                            <td className="p-2.5 pr-4 text-center">
+                              <button
+                                onClick={() => onToggleExpandSN(item.strategyName)}
+                                className={`px-2 py-0.5 rounded text-[10px] font-bold transition-all ${
+                                  hasDeals 
+                                    ? `${themeClasses.buttonAccent}` 
+                                    : 'bg-slate-100 text-slate-500'
+                                }`}
+                              >
+                                {item.hedgeRows ? `${item.hedgeRows.length} deals` : '0 deals'}
+                              </button>
+                            </td>
+                          </tr>
+
+                          {/* Expanded Trade Details Sub-table */}
+                          {isExpanded && (
+                            <tr className="bg-slate-50/80">
+                              <td colSpan={11} className="p-3 pl-8 pr-6">
+                                <div className="bg-white rounded-xl border border-slate-200 p-3 shadow-inner">
+                                  <div className="flex items-center justify-between mb-2">
+                                    <h4 className="text-xs font-black text-slate-800 flex items-center gap-2">
+                                      <IconComponent className={`w-3.5 h-3.5 ${themeClasses.primaryText}`} />
+                                      Underlying TRMS {currentConfig.title} Transactions for <span className="font-mono text-slate-900 font-black">{item.strategyName}</span>
+                                    </h4>
+                                    <span className="text-[10px] font-bold text-slate-400">
+                                      {item.hedgeRows ? item.hedgeRows.length : 0} Matching Trade Lines
+                                    </span>
+                                  </div>
+
+                                  {item.hedgeRows && item.hedgeRows.length > 0 ? (
+                                    <div className="overflow-x-auto">
+                                      <table className="w-full text-left text-[11px] border-collapse">
+                                        <thead className="bg-slate-100 text-slate-600 font-bold border-b border-slate-200">
+                                          <tr>
+                                            <th className="p-2">Deal / Tracking #</th>
+                                            <th className="p-2">Internal Portfolio</th>
+                                            <th className="p-2">Cflow Type</th>
+                                            <th className="p-2 text-center">Buy/Sell</th>
+                                            <th className="p-2 text-right">Volume</th>
+                                            <th className="p-2 text-right">Price</th>
+                                            <th className="p-2 text-right">Base Total Value (USD)</th>
+                                            <th className="p-2 text-center">Start / End Date</th>
+                                          </tr>
+                                        </thead>
+                                        <tbody className="divide-y divide-slate-100 font-mono">
+                                          {item.hedgeRows.map((r: any, idx: number) => {
+                                            const val = Number(String(r['Base_Total_Value_USD'] || '').replace(/[^0-9.-]/g, '')) || 0;
+                                            const vol = Number(String(r['Volume'] || '').replace(/[^0-9.-]/g, '')) || 0;
+                                            const price = Number(String(r['Price'] || '').replace(/[^0-9.-]/g, '')) || 0;
+                                            const dealNum = r['Deal Tracking Num'] || r['Deal Num'] || r['Deal ID'] || `Row-${idx + 1}`;
+                                            const port = r['Internal Portfolio'] || r['Portfolio'] || '—';
+                                            const cflow = r['Cflow Type'] || '—';
+                                            const bs = r['Buy/Sell'] || r['Buy / Sell'] || '—';
+                                            const startDate = r['Start Date'] || '—';
+                                            const endDate = r['End Date'] || '—';
+
+                                            return (
+                                              <tr key={idx} className="hover:bg-slate-50">
+                                                <td className="p-2 font-bold text-slate-800">{dealNum}</td>
+                                                <td className="p-2 text-slate-600">{port}</td>
+                                                <td className="p-2 text-slate-600">{cflow}</td>
+                                                <td className="p-2 text-center">
+                                                  <span className={`px-1.5 py-0.5 rounded text-[9px] font-bold ${
+                                                    String(bs).toLowerCase().includes('buy') ? 'bg-rose-50 text-rose-600' : 'bg-emerald-50 text-emerald-600'
+                                                  }`}>
+                                                    {bs}
+                                                  </span>
+                                                </td>
+                                                <td className="p-2 text-right font-bold text-slate-700">
+                                                  {vol ? Math.round(vol).toLocaleString() : '—'}
+                                                </td>
+                                                <td className="p-2 text-right text-slate-600">
+                                                  {price ? `$${price.toFixed(4)}` : '—'}
+                                                </td>
+                                                <td className={`p-2 text-right font-black ${
+                                                  val >= 0 ? 'text-emerald-600' : 'text-rose-600'
+                                                }`}>
+                                                  {formatCurrency(val)}
+                                                </td>
+                                                <td className="p-2 text-center text-slate-500 text-[10px]">
+                                                  {startDate} ~ {endDate}
+                                                </td>
+                                              </tr>
+                                            );
+                                          })}
+                                        </tbody>
+                                      </table>
+                                    </div>
+                                  ) : (
+                                    <div className="p-4 text-center text-slate-400 text-xs italic">
+                                      No detailed transaction lines found under '{currentConfig.portfolioDesc}' portfolio for this strategy. P&amp;L is derived from strategy level summaries.
+                                    </div>
+                                  )}
+                                </div>
+                              </td>
+                            </tr>
+                          )}
+                        </React.Fragment>
+                      );
+                    })
+                  )}
+                </tbody>
+              </table>
+            </div>
+          )}
+        </div>
+
+        {/* Modal Footer Summary */}
+        <div className="p-3 sm:p-4 bg-slate-50 border-t border-slate-200 flex flex-col sm:flex-row items-center justify-between gap-2 shrink-0 text-xs text-slate-500 font-medium">
+          <div>
+            {!isSNLevel ? (
+              <span>Showing <strong className="text-slate-800">{groupsData.length}</strong> portfolio groups for <strong className="text-slate-900">{currentConfig.shortTitle}</strong>.</span>
+            ) : (
+              <span>Showing <strong className="text-slate-800">{snData.length}</strong> strategies in <strong className="text-slate-900">{selectedGroup}</strong>.</span>
+            )}
+          </div>
+          <div className="flex items-center gap-4 font-mono font-bold">
+            <span className="text-blue-600">
+              Realized: {formatCurrency(isSNLevel ? snData.reduce((acc, i) => acc + (i.realizedPnL || 0), 0) : groupsData.reduce((acc, g) => acc + g.realizedPnL, 0))}
+            </span>
+            <span className="text-amber-600">
+              Unrealized: {formatCurrency(isSNLevel ? snData.reduce((acc, i) => acc + (i.unrealizedPnL || 0), 0) : groupsData.reduce((acc, g) => acc + g.unrealizedPnL, 0))}
+            </span>
+            <span className={themeClasses.footerTotalText}>
+              Total {currentConfig.code} P&amp;L: {formatCurrency(isSNLevel ? snData.reduce((acc, i) => acc + (i.totalHedgingPnL || 0), 0) : groupsData.reduce((acc, g) => acc + g.totalHedgingPnL, 0))}
+            </span>
+          </div>
+        </div>
+      </motion.div>
     </div>
   );
 };
