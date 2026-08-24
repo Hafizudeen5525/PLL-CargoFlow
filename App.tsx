@@ -11,6 +11,7 @@ import { ExposureView } from './components/ExposureView';
 import { SettingsView } from './components/SettingsView';
 import { UserManagement } from './components/UserManagement';
 import { DiscrepancyCheck, ReconciliationData } from './components/DiscrepancyCheck';
+import { PriceTabHighlightTarget } from './components/PriceTab';
 import { CargoProfile, PnLBucket, ForwardCurveData, ForwardCurve, ForwardCurvePoint } from './types';
 import { getMarketData, getForwardCurve, recalculateProfile, getPortfolioYear, saveForwardCurve, normalizeMonthKey, normalizeStrategyName } from './services/calculationService';
 import { getFromDB, saveToDB } from './services/db';
@@ -57,6 +58,14 @@ const App: React.FC = () => {
   const [marketData, setMarketData] = useState<Record<string, number>>({});
   const [forwardCurve, setForwardCurve] = useState<any[]>([]);
   const [portfolioYear, setPortfolioYear] = useState<string>(new Date().getFullYear().toString());
+  const [priceTabHighlight, setPriceTabHighlight] = useState<PriceTabHighlightTarget | null>(null);
+  const [forwardCurveInitialTab, setForwardCurveInitialTab] = useState<'manage' | 'historical' | 'prices' | 'analyze' | 'evolution' | undefined>(undefined);
+
+  const handleInspectPrice = useCallback((target: PriceTabHighlightTarget) => {
+    setPriceTabHighlight(target);
+    setForwardCurveInitialTab('prices');
+    setIsForwardCurveOpen(true);
+  }, []);
   
   // Persisted TRMS Data for discrepancy check
   const [trmsData, setTrmsData] = useState<ReconciliationData>({
@@ -890,6 +899,7 @@ const App: React.FC = () => {
                             setEditingProfile(undefined);
                         }} 
                         existingSources={existingSources}
+                        onInspectPrice={handleInspectPrice}
                     />
                 </div>
             )}
@@ -909,9 +919,16 @@ const App: React.FC = () => {
                 </div>
             )}
             {isForwardCurveOpen && (
-                <div className="fixed inset-0 bg-slate-900/60 backdrop-blur-sm z-[400] flex items-center justify-center p-0 sm:p-4">
+                <div className="fixed inset-0 bg-slate-900/60 backdrop-blur-sm z-[500] flex items-center justify-center p-0 sm:p-4">
                     <ForwardCurveModal 
-                        onClose={() => setIsForwardCurveOpen(false)}
+                        initialTab={forwardCurveInitialTab}
+                        highlightTarget={priceTabHighlight}
+                        portfolioYear={portfolioYear}
+                        onClose={() => {
+                            setIsForwardCurveOpen(false);
+                            setPriceTabHighlight(null);
+                            setForwardCurveInitialTab(undefined);
+                        }}
                         onSave={() => {
                             handleMarketRefresh(); 
                         }}

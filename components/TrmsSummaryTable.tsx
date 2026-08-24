@@ -67,7 +67,7 @@ import {
 } from 'recharts';
 import { ReconciliationData, ColumnFilterPopover } from './DiscrepancyCheck';
 import { ExecutiveDashboard } from './ExecutiveDashboard';
-import { isUnallocatedBuyer, getEstimatedSellRows, extractRowIndexName } from '../utils/trmsEngine';
+import { isUnallocatedBuyer, getEstimatedSellRows, extractRowIndexName, isMiscFeeRow, isSrcRow } from '../utils/trmsEngine';
 import { toast } from 'react-hot-toast';
 import * as XLSX from 'xlsx';
 
@@ -454,8 +454,8 @@ export const TrmsSummaryTable: React.FC<TrmsSummaryTableProps> = ({ trmsData, vi
   const [expandedStrategies, setExpandedStrategies] = useState<Set<string>>(new Set());
   const [activeFilterMenu, setActiveFilterMenu] = useState<string | null>(null);
 
-  // Filter mode for expanded auditing details list per strategy: 'base_lng' | 'shipping_costs' | 'hedging' | 'all' | 'buy_commodity' | 'sell_commodity'
-  const [expandedFilters, setExpandedFilters] = useState<Record<string, 'base_lng' | 'shipping_costs' | 'hedging' | 'all' | 'buy_commodity' | 'sell_commodity'>>({});
+  // Filter mode for expanded auditing details list per strategy: 'base_lng' | 'shipping_costs' | 'other_costs' | 'misc_costs' | 'hedging' | 'all' | 'buy_commodity' | 'sell_commodity'
+  const [expandedFilters, setExpandedFilters] = useState<Record<string, 'base_lng' | 'shipping_costs' | 'other_costs' | 'misc_costs' | 'hedging' | 'all' | 'buy_commodity' | 'sell_commodity'>>({});
 
   // Sorting state
   const [sortConfig, setSortConfig] = useState<{ column: string; direction: 'asc' | 'desc' | null }>({
@@ -873,6 +873,7 @@ export const TrmsSummaryTable: React.FC<TrmsSummaryTableProps> = ({ trmsData, vi
 
       // Shipping related cost sum: Cflow Type is "SRC- Shipping Related Cost"
       let shippingRelatedCosts = 0;
+      let miscCost = 0;
 
       // Hedging P&L sum: Base Value USD of all items with portfolio "Hedging LNG"
       let hedgingPnL = 0;
@@ -1128,8 +1129,8 @@ export const TrmsSummaryTable: React.FC<TrmsSummaryTableProps> = ({ trmsData, vi
           }
         }
         if (!isNaN(val)) {
-          // Shipping Related Costs check
-          if (cflowType === 'src- shipping related cost' || cflowType.includes('shipping related cost')) {
+          // Shipping Related Costs check (SRC)
+          if (isSrcRow(r)) {
             if (hasOpt) {
               const isOptRow = internalPortfolio === 'optimization lng' || internalPortfolio.includes('optimization');
               if (isOptRow) {
@@ -1140,12 +1141,26 @@ export const TrmsSummaryTable: React.FC<TrmsSummaryTableProps> = ({ trmsData, vi
             }
           }
 
+          // Miscellaneous Fee check
+          if (isMiscFeeRow(r)) {
+            if (hasOpt) {
+              const isOptRow = internalPortfolio === 'optimization lng' || internalPortfolio.includes('optimization');
+              if (isOptRow) {
+                miscCost += val;
+              }
+            } else {
+              miscCost += val;
+            }
+          }
+
           // Hedging LNG P&L check (Sums of Base_Value_USD as specified)
           if (isHedgingLng) {
             hedgingPnL += val;
           }
         }
       });
+
+      const otherCosts = shippingRelatedCosts + miscCost;
 
       // Collect the correctly filtered line items that calculate "sum of value" and daily P&L movement (Change in P&L)
       const correctFilteredRows: any[] = [];
@@ -1154,17 +1169,18 @@ export const TrmsSummaryTable: React.FC<TrmsSummaryTableProps> = ({ trmsData, vi
       correctFilteredRows.push(...buyCalcRows);
       correctFilteredRows.push(...sellCalcRows);
       
-      // Add shipping related costs and hedging rows from underlyingRows
+      // Add shipping related costs, misc fees, and hedging rows from underlyingRows
       underlyingRows.forEach(r => {
-        const cflowType = String(r['Cflow Type'] || '').trim().toLowerCase();
         const internalPortfolio = String(r['Internal Portfolio'] || r['Portfolio'] || '').trim().toLowerCase();
         
-        const isShipping = cflowType === 'src- shipping related cost' || cflowType.includes('shipping related cost');
+        const isShipping = isSrcRow(r);
+        const isMisc = isMiscFeeRow(r);
+        const isOther = isShipping || isMisc;
         const isHedging = internalPortfolio === 'hedging lng';
         
-        if (isShipping || isHedging) {
+        if (isOther || isHedging) {
           if (!correctFilteredRows.includes(r)) {
-            if (isShipping && hasOpt) {
+            if (isOther && hasOpt) {
               const isOptRow = internalPortfolio === 'optimization lng' || internalPortfolio.includes('optimization');
               if (!isOptRow) return;
             }
@@ -1187,14 +1203,15 @@ export const TrmsSummaryTable: React.FC<TrmsSummaryTableProps> = ({ trmsData, vi
       });
 
       let shippingCostPnLChange = 0;
+      let miscCostPnLChange = 0;
       let hedgingPnLChange = 0;
 
       underlyingRows.forEach(r => {
-        const cflowType = String(r['Cflow Type'] || '').trim().toLowerCase();
         const internalPortfolio = String(r['Internal Portfolio'] || r['Portfolio'] || '').trim().toLowerCase();
         const pnl = Number(String(r['Change_in_Total_PnL'] || r['Change_in_PnL'] || '').replace(/[^0-9.-]/g, ''));
 
-        const isShipping = cflowType === 'src- shipping related cost' || cflowType.includes('shipping related cost');
+        const isShipping = isSrcRow(r);
+        const isMisc = isMiscFeeRow(r);
         const isHedging = internalPortfolio === 'hedging lng';
 
         if (isShipping) {
@@ -1206,10 +1223,21 @@ export const TrmsSummaryTable: React.FC<TrmsSummaryTableProps> = ({ trmsData, vi
           }
         }
 
+        if (isMisc) {
+          if (hasOpt) {
+            const isOptRow = internalPortfolio === 'optimization lng' || internalPortfolio.includes('optimization');
+            if (isOptRow && !isNaN(pnl)) miscCostPnLChange += pnl;
+          } else {
+            if (!isNaN(pnl)) miscCostPnLChange += pnl;
+          }
+        }
+
         if (isHedging) {
           if (!isNaN(pnl)) hedgingPnLChange += pnl;
         }
       });
+
+      const otherCostPnLChange = shippingCostPnLChange + miscCostPnLChange;
 
       // Sum up Base_Total_Value_USD and Change_in_Total_PnL for these correctly filtered line items
       correctFilteredRows.forEach(r => {
@@ -1758,6 +1786,11 @@ export const TrmsSummaryTable: React.FC<TrmsSummaryTableProps> = ({ trmsData, vi
         purchaseCostPnLChange,
         salesRevenuePnLChange,
         shippingCostPnLChange,
+        miscCostPnLChange,
+        otherCostPnLChange,
+        srcCost: shippingRelatedCosts,
+        miscCost,
+        otherCosts,
         hedgingPnLChange,
         dealCount: underlyingRows.length,
         buyTiers,
@@ -2483,6 +2516,8 @@ export const TrmsSummaryTable: React.FC<TrmsSummaryTableProps> = ({ trmsData, vi
 
     let aggregateShippingCosts = 0;
     let aggregateShippingCostPnLChange = 0;
+    let aggregateMiscCost = 0;
+    let aggregateMiscCostPnLChange = 0;
 
     let aggregateHedgingPnL = 0;
     let aggregateHedgingPnLChange = 0;
@@ -2515,8 +2550,11 @@ export const TrmsSummaryTable: React.FC<TrmsSummaryTableProps> = ({ trmsData, vi
       aggregateSalesRevenue += item.salesRevenue;
       aggregateSalesRevenuePnLChange += (item.salesRevenuePnLChange || 0);
 
-      aggregateShippingCosts += item.shippingRelatedCosts;
+      aggregateShippingCosts += (item.shippingRelatedCosts || item.srcCost || 0);
       aggregateShippingCostPnLChange += (item.shippingCostPnLChange || 0);
+
+      aggregateMiscCost += (item.miscCost || 0);
+      aggregateMiscCostPnLChange += (item.miscCostPnLChange || 0);
 
       aggregateHedgingPnL += item.hedgingPnL;
       aggregateHedgingPnLChange += (item.hedgingPnLChange || 0);
@@ -2529,12 +2567,15 @@ export const TrmsSummaryTable: React.FC<TrmsSummaryTableProps> = ({ trmsData, vi
       });
     });
 
-    // Physical P&L (Excl. Hedging): (Revenue - Cost) + SRC
-    const aggregatePhysicalPnL = (aggregateSalesRevenue - aggregatePurchaseCost) + aggregateShippingCosts;
-    const aggregatePhysicalPnLChange = aggregateSalesRevenuePnLChange + aggregatePurchaseCostPnLChange + aggregateShippingCostPnLChange;
+    const aggregateOtherCosts = aggregateShippingCosts + aggregateMiscCost;
+    const aggregateOtherCostPnLChange = aggregateShippingCostPnLChange + aggregateMiscCostPnLChange;
 
-    // Aggregate P&L tracks (Sales - Purchase) + Hedging + SRC
-    const aggregatePnL = aggregateSalesRevenue - aggregatePurchaseCost + aggregateShippingCosts + aggregateHedgingPnL;
+    // Physical P&L (Excl. Hedging): (Revenue - Cost) + Other Costs (SRC + Misc)
+    const aggregatePhysicalPnL = (aggregateSalesRevenue - aggregatePurchaseCost) + aggregateOtherCosts;
+    const aggregatePhysicalPnLChange = aggregateSalesRevenuePnLChange + aggregatePurchaseCostPnLChange + aggregateOtherCostPnLChange;
+
+    // Aggregate P&L tracks (Sales - Purchase) + Hedging + Other Costs
+    const aggregatePnL = aggregateSalesRevenue - aggregatePurchaseCost + aggregateOtherCosts + aggregateHedgingPnL;
 
     const maxAggPhysicalVol = Math.max(aggregatePurchaseVolume, aggregateSalesVolume) || aggregatePurchaseVolume || aggregateSalesVolume || 1;
 
@@ -2560,6 +2601,10 @@ export const TrmsSummaryTable: React.FC<TrmsSummaryTableProps> = ({ trmsData, vi
       aggregateSalesRevenuePnLChange,
       aggregateShippingCosts,
       aggregateShippingCostPnLChange,
+      aggregateMiscCost,
+      aggregateMiscCostPnLChange,
+      aggregateOtherCosts,
+      aggregateOtherCostPnLChange,
       aggregateHedgingPnL,
       aggregateHedgingPnLChange,
       aggregateHedgingVolume,
@@ -2638,9 +2683,9 @@ export const TrmsSummaryTable: React.FC<TrmsSummaryTableProps> = ({ trmsData, vi
     e.stopPropagation(); // Avoid collapsing parent if we double-click or navigate
 
     // Determine targeted filter mode
-    let targetMode: 'base_lng' | 'shipping_costs' | 'hedging' | 'all' | 'buy_commodity' | 'sell_commodity' = 'base_lng';
-    if (columnClicked === 'Shipping Related Costs') {
-      targetMode = 'shipping_costs';
+    let targetMode: 'base_lng' | 'shipping_costs' | 'other_costs' | 'misc_costs' | 'hedging' | 'all' | 'buy_commodity' | 'sell_commodity' = 'base_lng';
+    if (columnClicked === 'Shipping Related Costs' || columnClicked === 'Other Costs' || columnClicked === 'SRC') {
+      targetMode = 'other_costs';
     } else if (columnClicked === 'Hedging P&L') {
       targetMode = 'hedging';
     } else if (columnClicked === 'Lines Count') {
@@ -2689,7 +2734,7 @@ export const TrmsSummaryTable: React.FC<TrmsSummaryTableProps> = ({ trmsData, vi
   };
 
   // Filter underlying rows dynamically strictly based on active visual filter mode
-  const getFilteredUnderlyingRows = (rowsList: any[], mode: 'base_lng' | 'shipping_costs' | 'hedging' | 'all' | 'buy_commodity' | 'sell_commodity') => {
+  const getFilteredUnderlyingRows = (rowsList: any[], mode: 'base_lng' | 'shipping_costs' | 'other_costs' | 'misc_costs' | 'hedging' | 'all' | 'buy_commodity' | 'sell_commodity') => {
     const hasOpt = rowsList.some(r => {
       const port = String(r['Internal Portfolio'] || r['Portfolio'] || '').trim().toLowerCase();
       return port === 'optimization lng' || port.includes('optimization');
@@ -2704,15 +2749,32 @@ export const TrmsSummaryTable: React.FC<TrmsSummaryTableProps> = ({ trmsData, vi
           }
           return port === 'base lng' || port.includes('base');
         });
+      case 'other_costs':
+        return rowsList.filter(r => {
+          const port = String(r['Internal Portfolio'] || r['Portfolio'] || '').trim().toLowerCase();
+          const isOther = isSrcRow(r) || isMiscFeeRow(r);
+          if (hasOpt) {
+            return isOther && (port === 'optimization lng' || port.includes('optimization'));
+          }
+          return isOther;
+        });
       case 'shipping_costs':
         return rowsList.filter(r => {
-          const cflow = String(r['Cflow Type'] || '').trim().toLowerCase();
           const port = String(r['Internal Portfolio'] || r['Portfolio'] || '').trim().toLowerCase();
-          const isShipping = cflow === 'src- shipping related cost' || cflow.includes('shipping related cost');
+          const isShipping = isSrcRow(r);
           if (hasOpt) {
             return isShipping && (port === 'optimization lng' || port.includes('optimization'));
           }
           return isShipping;
+        });
+      case 'misc_costs':
+        return rowsList.filter(r => {
+          const port = String(r['Internal Portfolio'] || r['Portfolio'] || '').trim().toLowerCase();
+          const isMisc = isMiscFeeRow(r);
+          if (hasOpt) {
+            return isMisc && (port === 'optimization lng' || port.includes('optimization'));
+          }
+          return isMisc;
         });
       case 'hedging':
         return rowsList.filter(r => {
@@ -6142,24 +6204,34 @@ export const TrmsSummaryTable: React.FC<TrmsSummaryTableProps> = ({ trmsData, vi
           </div>
         </div>
 
-        {/* Shipping Cost */}
-        <div className="bg-slate-900 p-3 rounded-xl border border-slate-800 shadow-sm flex flex-col justify-between">
+        {/* Other Costs (SRC + Misc) */}
+        <div className="bg-slate-900 p-3 rounded-xl border border-slate-800 shadow-sm flex flex-col justify-between" title="Other Costs = Shipping Related Costs (SRC) + Miscellaneous Fee">
           <div>
-            <div className="text-[10px] uppercase text-slate-300 font-mono font-extrabold tracking-wider">Shipping Cost</div>
+            <div className="flex items-center justify-between">
+              <div className="text-[10px] uppercase text-slate-300 font-mono font-extrabold tracking-wider">Other Costs</div>
+              <span className="text-[9px] font-mono font-bold text-purple-300 bg-purple-950/60 px-1.5 py-0.2 rounded border border-purple-800/40">
+                SRC + Misc
+              </span>
+            </div>
             <div className="text-lg font-extrabold text-purple-400 mt-1 font-mono">
-              ${kpis.aggregateShippingCosts.toLocaleString(undefined, { maximumFractionDigits: 0 })}
+              ${kpis.aggregateOtherCosts.toLocaleString(undefined, { maximumFractionDigits: 0 })}
+            </div>
+            <div className="text-[9px] text-slate-400 font-mono mt-0.5 flex items-center gap-1.5">
+              <span>SRC: ${kpis.aggregateShippingCosts.toLocaleString(undefined, { maximumFractionDigits: 0 })}</span>
+              <span className="text-slate-600">•</span>
+              <span>Misc: ${kpis.aggregateMiscCost.toLocaleString(undefined, { maximumFractionDigits: 0 })}</span>
             </div>
           </div>
           <div className="mt-2 pt-1.5 border-t border-slate-800/80 flex items-center justify-end">
             <span className={`inline-flex items-center gap-0.5 text-[10px] font-mono font-extrabold px-1.5 py-0.5 rounded ${
-              kpis.aggregateShippingCostPnLChange > 0 
+              kpis.aggregateOtherCostPnLChange > 0 
                 ? 'text-emerald-400 bg-emerald-950/60 border border-emerald-800/40' 
-                : kpis.aggregateShippingCostPnLChange < 0 
+                : kpis.aggregateOtherCostPnLChange < 0 
                   ? 'text-rose-400 bg-rose-950/60 border border-rose-800/40' 
                   : 'text-slate-400 bg-slate-800/60'
             }`}>
-              {kpis.aggregateShippingCostPnLChange > 0 ? '▲ +' : kpis.aggregateShippingCostPnLChange < 0 ? '▼ -' : ''}
-              ${Math.abs(kpis.aggregateShippingCostPnLChange).toLocaleString(undefined, { maximumFractionDigits: 0 })}
+              {kpis.aggregateOtherCostPnLChange > 0 ? '▲ +' : kpis.aggregateOtherCostPnLChange < 0 ? '▼ -' : ''}
+              ${Math.abs(kpis.aggregateOtherCostPnLChange).toLocaleString(undefined, { maximumFractionDigits: 0 })}
             </span>
           </div>
         </div>
@@ -6167,7 +6239,7 @@ export const TrmsSummaryTable: React.FC<TrmsSummaryTableProps> = ({ trmsData, vi
         {/* Physical P&L (Excl. Hedging) */}
         <div className="bg-slate-900 p-3 rounded-xl border border-slate-800 shadow-sm flex flex-col justify-between">
           <div>
-            <div className="text-[10px] uppercase text-slate-300 font-mono font-extrabold tracking-wider" title="(Sales Revenue - Purchase Cost) + Shipping Costs">
+            <div className="text-[10px] uppercase text-slate-300 font-mono font-extrabold tracking-wider" title="(Sales Revenue - Purchase Cost) + Other Costs">
               Physical P&amp;L
             </div>
             <div className={`text-lg font-extrabold mt-1 font-mono ${kpis.aggregatePhysicalPnL >= 0 ? 'text-emerald-400' : 'text-rose-400'}`}>
@@ -6876,15 +6948,15 @@ export const TrmsSummaryTable: React.FC<TrmsSummaryTableProps> = ({ trmsData, vi
                                     </button>
                                     <button
                                       type="button"
-                                      onClick={() => setExpandedFilters(prev => ({ ...prev, [item.strategyName]: 'shipping_costs' }))}
+                                      onClick={() => setExpandedFilters(prev => ({ ...prev, [item.strategyName]: 'other_costs' }))}
                                       className={`px-2 py-0.5 rounded-md text-[10px] font-bold transition-all cursor-pointer ${
-                                        activeDetailFilter === 'shipping_costs'
+                                        activeDetailFilter === 'other_costs' || activeDetailFilter === 'shipping_costs'
                                           ? 'bg-purple-600 text-white shadow-sm'
                                           : 'text-slate-400 hover:text-slate-200 hover:bg-slate-800'
                                       }`}
-                                      title="Filter list to Shipping Related Costs (Cflow: SRC- Shipping Related Cost)"
+                                      title="Filter list to Other Costs (Shipping Related Costs + Misc Fees)"
                                     >
-                                      Shipping Cost (SRC)
+                                      Other Costs (SRC/Misc)
                                     </button>
                                     <button
                                       type="button"

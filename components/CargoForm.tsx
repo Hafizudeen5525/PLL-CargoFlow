@@ -6,6 +6,7 @@ import { apiClient } from '../services/apiClient';
 import { toast } from 'react-hot-toast';
 import { motion, AnimatePresence } from 'framer-motion';
 import { ReconciliationData } from './DiscrepancyCheck';
+import { PriceTabHighlightTarget } from './PriceTab';
 
 interface CargoFormProps {
   initialData?: CargoProfile;
@@ -15,6 +16,7 @@ interface CargoFormProps {
   onCancel: () => void;
   userRole?: 'admin' | 'trader' | 'viewer';
   existingSources?: string[];
+  onInspectPrice?: (target: PriceTabHighlightTarget) => void;
 }
 
 const INDEX_OPTIONS = ['HH', 'HH Last Day', 'TTF', 'JKM', 'Dated Brent', 'JCC', 'BRIPE', 'NBP', 'AECO', 'STN 2', 'Fix and Firm'];
@@ -124,7 +126,12 @@ const InputGroup: React.FC<{
     );
 });
 
-const FormulaIndicesDisplay: React.FC<{ formula: string, refDate: string }> = ({ formula, refDate }) => {
+const FormulaIndicesDisplay: React.FC<{ 
+    formula: string; 
+    refDate: string;
+    onInspectPrice?: (target: PriceTabHighlightTarget) => void;
+    labelPrefix?: string;
+}> = ({ formula, refDate, onInspectPrice, labelPrefix = '' }) => {
     const [indices, setIndices] = useState<{ name: string, mDef: string, price: number }[]>([]);
 
     useEffect(() => {
@@ -159,12 +166,39 @@ const FormulaIndicesDisplay: React.FC<{ formula: string, refDate: string }> = ({
     if (indices.length === 0) return null;
 
     return (
-        <div className="flex flex-wrap gap-2">
+        <div className="flex flex-wrap items-center gap-1.5 mt-1">
+            <span className="text-[9px] font-bold text-slate-400 uppercase mr-0.5">Indices:</span>
             {indices.map((idx, i) => (
-                <div key={i} className="flex items-center gap-1.5 bg-slate-100 px-2 py-1 rounded-md border border-slate-200">
-                    <span className="text-[9px] font-bold text-slate-500 uppercase">{idx.name} ({idx.mDef}):</span>
-                    <span className="text-[10px] font-black text-blue-600 font-mono">${idx.price.toFixed(3)}</span>
-                </div>
+                <button
+                    key={i}
+                    type="button"
+                    onClick={() => {
+                        if (onInspectPrice) {
+                            onInspectPrice({
+                                index: idx.name,
+                                monthDef: idx.mDef,
+                                refDate,
+                                sourceLabel: `${labelPrefix ? labelPrefix + ': ' : ''}${idx.name} (${idx.mDef})`
+                            });
+                        }
+                    }}
+                    className={`inline-flex items-center gap-1.5 px-2 py-0.5 rounded-md border text-left transition-all ${
+                        onInspectPrice 
+                            ? 'bg-blue-50/70 border-blue-200/80 hover:bg-amber-50 hover:border-amber-400 hover:shadow-xs cursor-pointer group active:scale-95' 
+                            : 'bg-slate-100 border-slate-200 cursor-default'
+                    }`}
+                    title={onInspectPrice ? `Click to locate ${idx.name} (${idx.mDef}) cell in Price Tab` : undefined}
+                >
+                    <span className="text-[9px] font-bold text-slate-600 group-hover:text-amber-900 uppercase">
+                        {idx.name} ({idx.mDef}):
+                    </span>
+                    <span className="text-[10px] font-black text-blue-700 group-hover:text-amber-700 font-mono inline-flex items-center gap-0.5">
+                        ${idx.price.toFixed(3)}
+                        {onInspectPrice && (
+                            <span className="text-[8px] text-amber-500 font-sans opacity-70 group-hover:opacity-100">↗</span>
+                        )}
+                    </span>
+                </button>
             ))}
         </div>
     );
@@ -240,7 +274,8 @@ const ComponentRow: React.FC<{
     onChange: (e: any) => void;
     readOnly?: boolean;
     onIssueChange?: (id: string, message: string | null) => void;
-}> = ({ type, idx, formData, onChange, readOnly = false, onIssueChange }) => {
+    onInspectPrice?: (target: PriceTabHighlightTarget) => void;
+}> = ({ type, idx, formData, onChange, readOnly = false, onIssueChange, onInspectPrice }) => {
     const [price, setPrice] = useState(0);
     const s = formData[`${type}Price${idx}Slope`];
     const index = formData[`${type}PriceIndex${idx}`];
@@ -303,14 +338,31 @@ const ComponentRow: React.FC<{
             </div>
             <div className="col-span-12 sm:col-span-2 text-right border-t sm:border-t-0 border-slate-200 mt-1 pt-1 sm:mt-0 sm:pt-0">
                 <div className="text-[9px] font-bold text-slate-400 uppercase">Result</div>
-                <div className="text-[9px] text-slate-400 font-mono mb-0.5">Base: ${price.toFixed(3)}</div>
+                {index && index !== 'Fix and Firm' && onInspectPrice ? (
+                    <button
+                        type="button"
+                        onClick={() => onInspectPrice({
+                            index,
+                            monthDef: mDef,
+                            refDate,
+                            sourceLabel: `${type.toUpperCase()} Component ${idx} [${index} (${mDef})]`
+                        })}
+                        className="group inline-flex items-center gap-0.5 text-[9px] text-blue-600 hover:text-amber-700 font-mono mb-0.5 hover:underline cursor-pointer"
+                        title="Click to view cell in Price Tab"
+                    >
+                        <span>Base: ${price.toFixed(3)}</span>
+                        <span className="text-[8px] text-amber-500">↗</span>
+                    </button>
+                ) : (
+                    <div className="text-[9px] text-slate-400 font-mono mb-0.5">Base: ${price.toFixed(3)}</div>
+                )}
                 <div className="text-xs font-bold text-blue-600 truncate">${componentValue.toFixed(3)}</div>
             </div>
         </div>
     );
 };
 
-export const CargoForm: React.FC<CargoFormProps> = ({ initialData, source = 'list', trmsData, onSave, onCancel, userRole, existingSources = [] }) => {
+export const CargoForm: React.FC<CargoFormProps> = ({ initialData, source = 'list', trmsData, onSave, onCancel, userRole, existingSources = [], onInspectPrice }) => {
   const [formData, setFormData] = useState<any>({ ...EmptyCargoProfile });
   const [history, setHistory] = useState<{ past: any[], future: any[] }>({ past: [], future: [] });
   const skipHistoryRef = React.useRef(false);
@@ -782,10 +834,36 @@ export const CargoForm: React.FC<CargoFormProps> = ({ initialData, source = 'lis
                         )}
                     />
                     {pricingMode === 'formula' ? (
-                        <InputGroup label="Formula" name="buyFormula" value={formData.buyFormula} onChange={handleChange} hint="e.g. JKM(n) - 0.50" readOnly={userRole === 'viewer'} footer={<FormulaIndicesDisplay formula={formData.buyFormula} refDate={formData.loadingDate} />} />
+                        <InputGroup 
+                            label="Formula" 
+                            name="buyFormula" 
+                            value={formData.buyFormula} 
+                            onChange={handleChange} 
+                            hint="e.g. JKM(n) - 0.50" 
+                            readOnly={userRole === 'viewer'} 
+                            footer={
+                                <FormulaIndicesDisplay 
+                                    formula={formData.buyFormula} 
+                                    refDate={formData.loadingDate} 
+                                    onInspectPrice={onInspectPrice}
+                                    labelPrefix="Purchase T1"
+                                />
+                            } 
+                        />
                     ) : (
                         <div className="space-y-3">
-                            {[1, 2, 3].map(i => <ComponentRow key={i} idx={i} type="buy" formData={formData} onChange={handleChange} readOnly={userRole === 'viewer'} onIssueChange={handleIssueChange} />)}
+                            {[1, 2, 3].map(i => (
+                                <ComponentRow 
+                                    key={i} 
+                                    idx={i} 
+                                    type="buy" 
+                                    formData={formData} 
+                                    onChange={handleChange} 
+                                    readOnly={userRole === 'viewer'} 
+                                    onIssueChange={handleIssueChange} 
+                                    onInspectPrice={onInspectPrice}
+                                />
+                            ))}
                             <InputGroup label="Overall Buy Constant" name="buyPriceOverallConstant" type="number" step="0.001" value={formData.buyPriceOverallConstant} onChange={handleChange} readOnly={userRole === 'viewer'} />
                         </div>
                     )}
@@ -843,10 +921,36 @@ export const CargoForm: React.FC<CargoFormProps> = ({ initialData, source = 'lis
                         )}
                     />
                     {pricingMode === 'formula' ? (
-                        <InputGroup label="Formula" name="sellFormula" value={formData.sellFormula} onChange={handleChange} hint="e.g. 115% HH(301) + 2.50" readOnly={userRole === 'viewer'} footer={<FormulaIndicesDisplay formula={formData.sellFormula} refDate={formData.deliveryDate} />} />
+                        <InputGroup 
+                            label="Formula" 
+                            name="sellFormula" 
+                            value={formData.sellFormula} 
+                            onChange={handleChange} 
+                            hint="e.g. 115% HH(301) + 2.50" 
+                            readOnly={userRole === 'viewer'} 
+                            footer={
+                                <FormulaIndicesDisplay 
+                                    formula={formData.sellFormula} 
+                                    refDate={formData.deliveryDate} 
+                                    onInspectPrice={onInspectPrice}
+                                    labelPrefix="Sales T1"
+                                />
+                            } 
+                        />
                     ) : (
                         <div className="space-y-3">
-                            {[1, 2, 3].map(i => <ComponentRow key={i} idx={i} type="sell" formData={formData} onChange={handleChange} readOnly={userRole === 'viewer'} onIssueChange={handleIssueChange} />)}
+                            {[1, 2, 3].map(i => (
+                                <ComponentRow 
+                                    key={i} 
+                                    idx={i} 
+                                    type="sell" 
+                                    formData={formData} 
+                                    onChange={handleChange} 
+                                    readOnly={userRole === 'viewer'} 
+                                    onIssueChange={handleIssueChange} 
+                                    onInspectPrice={onInspectPrice}
+                                />
+                            ))}
                             <InputGroup label="Overall Sell Constant" name="sellPriceOverallConstant" type="number" step="0.001" value={formData.sellPriceOverallConstant} onChange={handleChange} readOnly={userRole === 'viewer'} />
                         </div>
                     )}
@@ -915,10 +1019,34 @@ export const CargoForm: React.FC<CargoFormProps> = ({ initialData, source = 'lis
                     <div className="space-y-6 overflow-x-auto pb-2">
                         <h4 className="text-xs font-bold text-emerald-600 uppercase border-l-2 border-emerald-500 pl-2 min-w-[300px]">Purchase Tier 2</h4>
                         {pricingMode === 'formula' ? (
-                            <InputGroup label="Tier 2 Formula" name="tier2BuyFormula" value={formData.tier2BuyFormula} onChange={handleChange} readOnly={userRole === 'viewer'} footer={<FormulaIndicesDisplay formula={formData.tier2BuyFormula} refDate={formData.loadingDate} />} />
+                            <InputGroup 
+                                label="Tier 2 Formula" 
+                                name="tier2BuyFormula" 
+                                value={formData.tier2BuyFormula} 
+                                onChange={handleChange} 
+                                readOnly={userRole === 'viewer'} 
+                                footer={
+                                    <FormulaIndicesDisplay 
+                                        formula={formData.tier2BuyFormula} 
+                                        refDate={formData.loadingDate} 
+                                        onInspectPrice={onInspectPrice}
+                                        labelPrefix="Purchase T2"
+                                    />
+                                } 
+                            />
                         ) : (
                             <div className="space-y-3">
-                                {[1, 2, 3].map(i => <ComponentRow key={i} idx={i} type="tier2Buy" formData={formData} onChange={handleChange} readOnly={userRole === 'viewer'} />)}
+                                {[1, 2, 3].map(i => (
+                                    <ComponentRow 
+                                        key={i} 
+                                        idx={i} 
+                                        type="tier2Buy" 
+                                        formData={formData} 
+                                        onChange={handleChange} 
+                                        readOnly={userRole === 'viewer'} 
+                                        onInspectPrice={onInspectPrice}
+                                    />
+                                ))}
                                 <InputGroup label="Overall Constant" name="tier2BuyPriceOverallConstant" type="number" step="0.001" value={formData.tier2BuyPriceOverallConstant} onChange={handleChange} readOnly={userRole === 'viewer'} />
                             </div>
                         )}
@@ -944,10 +1072,34 @@ export const CargoForm: React.FC<CargoFormProps> = ({ initialData, source = 'lis
                     <div className="space-y-6 overflow-x-auto pb-2">
                         <h4 className="text-xs font-bold text-blue-600 uppercase border-l-2 border-blue-500 pl-2 min-w-[300px]">Sales Tier 2</h4>
                         {pricingMode === 'formula' ? (
-                            <InputGroup label="Tier 2 Formula" name="tier2SellFormula" value={formData.tier2SellFormula} onChange={handleChange} readOnly={userRole === 'viewer'} footer={<FormulaIndicesDisplay formula={formData.tier2SellFormula} refDate={formData.deliveryDate} />} />
+                            <InputGroup 
+                                label="Tier 2 Formula" 
+                                name="tier2SellFormula" 
+                                value={formData.tier2SellFormula} 
+                                onChange={handleChange} 
+                                readOnly={userRole === 'viewer'} 
+                                footer={
+                                    <FormulaIndicesDisplay 
+                                        formula={formData.tier2SellFormula} 
+                                        refDate={formData.deliveryDate} 
+                                        onInspectPrice={onInspectPrice}
+                                        labelPrefix="Sales T2"
+                                    />
+                                } 
+                            />
                         ) : (
                             <div className="space-y-3">
-                                {[1, 2, 3].map(i => <ComponentRow key={i} idx={i} type="tier2Sell" formData={formData} onChange={handleChange} readOnly={userRole === 'viewer'} />)}
+                                {[1, 2, 3].map(i => (
+                                    <ComponentRow 
+                                        key={i} 
+                                        idx={i} 
+                                        type="tier2Sell" 
+                                        formData={formData} 
+                                        onChange={handleChange} 
+                                        readOnly={userRole === 'viewer'} 
+                                        onInspectPrice={onInspectPrice}
+                                    />
+                                ))}
                                 <InputGroup label="Overall Constant" name="tier2SellPriceOverallConstant" type="number" step="0.001" value={formData.tier2SellPriceOverallConstant} onChange={handleChange} readOnly={userRole === 'viewer'} />
                             </div>
                         )}

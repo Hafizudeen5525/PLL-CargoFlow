@@ -250,6 +250,34 @@ const addUnitVolume = (acc: { [unit: string]: number }, vol: number, unit?: stri
   return acc;
 };
 
+export function isDerivativeRowRealized(row: any, fallbackEodDate?: string): boolean {
+  if (!row) return false;
+
+  const rawPayDate = row['Payment Date'] || row['Payment_Date'] || row['PaymentDate'] || row['Pay Date'] || row['Pay_Date'] || row['Settlement Date'] || row['Settlement_Date'];
+  const rawEodDate = row['EOD Date'] || row['EOD_Date'] || row['As At Date'] || row['Extract Date'] || row['Run Date'] || fallbackEodDate;
+
+  if (!rawPayDate) return false;
+
+  const parsedPay = parseFlexibleDate(rawPayDate);
+  const parsedEod = parseFlexibleDate(rawEodDate);
+
+  if (parsedPay && parsedEod) {
+    const payTime = Date.UTC(parsedPay.year, parsedPay.month, parsedPay.day);
+    const eodTime = Date.UTC(parsedEod.year, parsedEod.month, parsedEod.day);
+    return eodTime >= payTime;
+  }
+
+  if (rawPayDate && rawEodDate) {
+    const sEod = String(rawEodDate).trim();
+    const sPay = String(rawPayDate).trim();
+    if (sEod && sPay) {
+      return sEod >= sPay;
+    }
+  }
+
+  return false;
+}
+
 export interface TrmsStrategySummary {
   strategyName: string;
   physicalPnLStatus: 'Realized' | 'Unrealized';
@@ -273,13 +301,25 @@ export interface TrmsStrategySummary {
   purchaseCost: number;
   salesRevenue: number;
   shippingRelatedCosts: number;
+  srcCost: number;
+  miscCost: number;
+  otherCosts: number;
   hedgingPnL: number;
+  realizedHedgingPnL?: number;
+  unrealizedHedgingPnL?: number;
+  hedgingRealized?: boolean;
   hedgingVolume: number;
   hedgingVolumeByUnit: { [unit: string]: number };
   dhPnL: number;
+  realizedDhPnL?: number;
+  unrealizedDhPnL?: number;
+  dhRealized?: boolean;
   dhVolume: number;
   dhVolumeByUnit: { [unit: string]: number };
   dftPnL: number;
+  realizedDftPnL?: number;
+  unrealizedDftPnL?: number;
+  dftRealized?: boolean;
   dftVolume: number;
   dftVolumeByUnit: { [unit: string]: number };
   paperVolume: number;
@@ -289,6 +329,90 @@ export interface TrmsStrategySummary {
   buyCalcRows: any[];
   sellCalcRows: any[];
   underlyingRows: any[];
+}
+
+export function isMiscFeeRow(row: any): boolean {
+  if (!row) return false;
+  const insType = String(row['Ins Type'] || row['Instrument Type'] || '').trim().toUpperCase();
+  const rawCflow = String(row['Cflow Type'] || row['CflowType'] || '').trim();
+  const cflowUpper = rawCflow.toUpperCase();
+  const cflowNorm = cflowUpper.replace(/[\s\-_–—]+/g, ' ').trim();
+
+  if (insType === 'COMM-PHYS') {
+    // When "Ins Type" is "COMM-PHYS":
+    // AGENCY FEE, BACK-CHARGE, COOLDOWN – MOLECULE, Demurrage, LATE PAYMENT CHARGES, LC, LNG Payment, PENALTY, PNL TRANSFER NBS, PORT SRC- Shipping Related Cost
+    const exactMatches = [
+      'AGENCY FEE',
+      'BACK-CHARGE',
+      'BACK CHARGE',
+      'BACKCHARGE',
+      'COOLDOWN – MOLECULE',
+      'COOLDOWN - MOLECULE',
+      'COOLDOWN MOLECULE',
+      'DEMURRAGE',
+      'LATE PAYMENT CHARGES',
+      'LATE PAYMENT CHARGE',
+      'LC',
+      'LNG PAYMENT',
+      'PENALTY',
+      'PNL TRANSFER NBS',
+      'PORT SRC- SHIPPING RELATED COST',
+      'PORT SRC - SHIPPING RELATED COST',
+      'PORT SRC-SHIPPING RELATED COST',
+      'PORT SRC'
+    ];
+    if (exactMatches.some(m => cflowUpper === m || cflowNorm === m.replace(/[\s\-_–—]+/g, ' ').trim())) {
+      return true;
+    }
+    if (cflowUpper.startsWith('PORT SRC')) return true;
+    if (cflowUpper.includes('COOLDOWN') && cflowUpper.includes('MOLECULE')) return true;
+    if (cflowUpper.includes('PNL TRANSFER NBS')) return true;
+    if (cflowUpper.includes('LATE PAYMENT CHARGE')) return true;
+    if (cflowUpper.includes('BACK') && cflowUpper.includes('CHARGE')) return true;
+    return false;
+  } else if (insType === 'COMM-FEE') {
+    // When "Ins Type" is "COMM-FEE":
+    // AGENCY FEE, Demurrage, LATE PAYMENT CHARGES, LC, LNG Payment, PNL TRANSFER NBS, QUANTITY DIFFERENCE CLAIM, STORAGE
+    const exactMatches = [
+      'AGENCY FEE',
+      'DEMURRAGE',
+      'LATE PAYMENT CHARGES',
+      'LATE PAYMENT CHARGE',
+      'LC',
+      'LNG PAYMENT',
+      'PNL TRANSFER NBS',
+      'QUANTITY DIFFERENCE CLAIM',
+      'STORAGE'
+    ];
+    if (exactMatches.some(m => cflowUpper === m || cflowNorm === m.replace(/[\s\-_–—]+/g, ' ').trim())) {
+      return true;
+    }
+    if (cflowUpper.includes('PNL TRANSFER NBS')) return true;
+    if (cflowUpper.includes('LATE PAYMENT CHARGE')) return true;
+    if (cflowUpper.includes('QUANTITY DIFFERENCE CLAIM')) return true;
+    return false;
+  }
+
+  return false;
+}
+
+export function isSrcRow(row: any): boolean {
+  if (!row) return false;
+  const insType = String(row['Ins Type'] || row['Instrument Type'] || '').trim().toUpperCase();
+  const rawCflow = String(row['Cflow Type'] || row['CflowType'] || '').trim();
+  const cflowUpper = rawCflow.toUpperCase();
+  
+  // Exclude PORT SRC under COMM-PHYS as it is classified under Miscellaneous Fee
+  if (insType === 'COMM-PHYS' && (cflowUpper.startsWith('PORT SRC') || cflowUpper.includes('PORT SRC-') || cflowUpper.includes('PORT SRC -'))) {
+    return false;
+  }
+
+  return cflowUpper === 'SRC- SHIPPING RELATED COST' ||
+         cflowUpper === 'SRC - SHIPPING RELATED COST' ||
+         cflowUpper === 'SRC-SHIPPING RELATED COST' ||
+         cflowUpper === 'SRC' ||
+         cflowUpper.includes('SHIPPING RELATED COST') ||
+         cflowUpper.startsWith('SRC');
 }
 
 export function extractRowIndexName(row: any): string {
@@ -479,13 +603,26 @@ export function computeTrmsSummaryRows(
     let salesVolume = 0;
     const salesVolumeByUnit: { [unit: string]: number } = {};
     let shippingRelatedCosts = 0;
+    let miscCost = 0;
     let hedgingPnL = 0;
+    let realizedHedgingPnL = 0;
+    let unrealizedHedgingPnL = 0;
+    let hedgingRowsCount = 0;
+    let realizedHedgingRowsCount = 0;
     let hedgingVolume = 0;
     const hedgingVolumeByUnit: { [unit: string]: number } = {};
     let dhPnL = 0;
+    let realizedDhPnL = 0;
+    let unrealizedDhPnL = 0;
+    let dhRowsCount = 0;
+    let realizedDhRowsCount = 0;
     let dhVolume = 0;
     const dhVolumeByUnit: { [unit: string]: number } = {};
     let dftPnL = 0;
+    let realizedDftPnL = 0;
+    let unrealizedDftPnL = 0;
+    let dftRowsCount = 0;
+    let realizedDftRowsCount = 0;
     let dftVolume = 0;
     const dftVolumeByUnit: { [unit: string]: number } = {};
     let paperVolume = 0;
@@ -738,7 +875,7 @@ export function computeTrmsSummaryRows(
         }
       }
       if (!isNaN(val)) {
-        if (cflowType === 'src- shipping related cost' || cflowType.includes('shipping related cost')) {
+        if (isSrcRow(r)) {
           if (hasOpt) {
             const isOptRow = internalPortfolio === 'optimization lng' || internalPortfolio.includes('optimization');
             if (isOptRow) {
@@ -747,17 +884,53 @@ export function computeTrmsSummaryRows(
           } else {
             shippingRelatedCosts += val;
           }
+        } else if (isMiscFeeRow(r)) {
+          if (hasOpt) {
+            const isOptRow = internalPortfolio === 'optimization lng' || internalPortfolio.includes('optimization');
+            if (isOptRow) {
+              miscCost += val;
+            }
+          } else {
+            miscCost += val;
+          }
         }
+
+        const isRealizedRow = isDerivativeRowRealized(r, selectedEodDate !== 'all' ? selectedEodDate : undefined);
 
         if (isHedgingLng) {
           hedgingPnL += val;
+          hedgingRowsCount++;
+          if (isRealizedRow) {
+            realizedHedgingPnL += val;
+            realizedHedgingRowsCount++;
+          } else {
+            unrealizedHedgingPnL += val;
+          }
         } else if (isDhLng) {
           dhPnL += val;
+          dhRowsCount++;
+          if (isRealizedRow) {
+            realizedDhPnL += val;
+            realizedDhRowsCount++;
+          } else {
+            unrealizedDhPnL += val;
+          }
         } else if (isDftLng) {
           dftPnL += val;
+          dftRowsCount++;
+          if (isRealizedRow) {
+            realizedDftPnL += val;
+            realizedDftRowsCount++;
+          } else {
+            unrealizedDftPnL += val;
+          }
         }
       }
     });
+
+    const hedgingRealized = hedgingRowsCount > 0 ? (realizedHedgingRowsCount === hedgingRowsCount) : false;
+    const dhRealized = dhRowsCount > 0 ? (realizedDhRowsCount === dhRowsCount) : false;
+    const dftRealized = dftRowsCount > 0 ? (realizedDftRowsCount === dftRowsCount) : false;
 
     let buyTiers: Array<{ vol: number; unit: string; val: number; price: number; indexName?: string }> = [];
     if (buyCalcRows.length >= 2) {
@@ -1112,13 +1285,25 @@ export function computeTrmsSummaryRows(
       purchaseCost,
       salesRevenue,
       shippingRelatedCosts,
+      srcCost: shippingRelatedCosts,
+      miscCost,
+      otherCosts: shippingRelatedCosts + miscCost,
       hedgingPnL,
+      realizedHedgingPnL,
+      unrealizedHedgingPnL,
+      hedgingRealized,
       hedgingVolume,
       hedgingVolumeByUnit,
       dhPnL,
+      realizedDhPnL,
+      unrealizedDhPnL,
+      dhRealized,
       dhVolume,
       dhVolumeByUnit,
       dftPnL,
+      realizedDftPnL,
+      unrealizedDftPnL,
+      dftRealized,
       dftVolume,
       dftVolumeByUnit,
       paperVolume,

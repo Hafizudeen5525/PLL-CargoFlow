@@ -3,10 +3,14 @@ import React, { useState, useEffect, useMemo, useCallback, useRef } from 'react'
 import { saveForwardCurve, getForwardCurve, getForwardCurveSync, getAvailableCurveDates, getAvailableCurveDatesSync, deleteForwardCurve, ForwardCurveRow, getHistoricalCurve, getHistoricalCurveSync, saveHistoricalCurve } from '../services/calculationService';
 import { toast } from 'react-hot-toast';
 import { LineChart, Line, XAxis, YAxis, CartesianGrid, Tooltip, Legend, ResponsiveContainer } from 'recharts';
+import { PriceTab, PriceTabHighlightTarget } from './PriceTab';
 
 interface ForwardCurveModalProps {
   onClose: () => void;
   onSave: () => void;
+  initialTab?: 'manage' | 'historical' | 'prices' | 'analyze' | 'evolution';
+  highlightTarget?: PriceTabHighlightTarget | null;
+  portfolioYear?: number | string;
 }
 
 // Separate columns for different tabs
@@ -20,8 +24,30 @@ interface Selection {
     endCol: number;
 }
 
-export const ForwardCurveModal: React.FC<ForwardCurveModalProps> = ({ onClose, onSave }) => {
-  const [activeTab, setActiveTab] = useState<'manage' | 'analyze' | 'evolution' | 'historical'>('manage');
+export const ForwardCurveModal: React.FC<ForwardCurveModalProps> = ({ 
+  onClose, 
+  onSave, 
+  initialTab, 
+  highlightTarget, 
+  portfolioYear 
+}) => {
+  const [activeTab, setActiveTab] = useState<'manage' | 'historical' | 'prices' | 'analyze' | 'evolution'>(
+    initialTab || (highlightTarget ? 'prices' : 'manage')
+  );
+
+  useEffect(() => {
+    if (highlightTarget) {
+      // eslint-disable-next-line react-hooks/set-state-in-effect
+      setActiveTab('prices');
+    }
+  }, [highlightTarget]);
+
+  useEffect(() => {
+    if (initialTab) {
+      // eslint-disable-next-line react-hooks/set-state-in-effect
+      setActiveTab(initialTab);
+    }
+  }, [initialTab]);
   const availableDates = useMemo(() => {
       return getAvailableCurveDatesSync();
   }, []);
@@ -480,13 +506,19 @@ export const ForwardCurveModal: React.FC<ForwardCurveModalProps> = ({ onClose, o
                 </div>
             </div>
             <div className="flex px-6 gap-8">
-                {['manage', 'historical', 'analyze', 'evolution'].map((tab) => (
+                {[
+                    { id: 'manage', label: 'Forward Curves' },
+                    { id: 'historical', label: 'Historical Data' },
+                    { id: 'prices', label: 'Price Tab' },
+                    { id: 'analyze', label: 'Curve Comparison' },
+                    { id: 'evolution', label: 'Contract Evolution' }
+                ].map(({ id, label }) => (
                     <button 
-                        key={tab}
-                        onClick={() => setActiveTab(tab as any)}
-                        className={`pb-3 px-1 text-xs font-bold uppercase tracking-widest border-b-2 transition-all ${activeTab === tab ? 'border-blue-600 text-blue-600' : 'border-transparent text-slate-400 hover:text-slate-600'}`}
+                        key={id}
+                        onClick={() => setActiveTab(id as any)}
+                        className={`pb-3 px-1 text-xs font-bold uppercase tracking-widest border-b-2 transition-all ${activeTab === id ? 'border-blue-600 text-blue-600' : 'border-transparent text-slate-400 hover:text-slate-600'}`}
                     >
-                        {tab === 'manage' ? 'Forward Curves' : tab === 'historical' ? 'Historical Data' : tab === 'analyze' ? 'Curve Comparison' : 'Contract Evolution'}
+                        {label}
                     </button>
                 ))}
             </div>
@@ -602,6 +634,15 @@ export const ForwardCurveModal: React.FC<ForwardCurveModalProps> = ({ onClose, o
                         )}
                     </div>
                 </div>
+            )}
+
+            {activeTab === 'prices' && (
+                <PriceTab 
+                    curveDate={curveDate} 
+                    onCurveDateChange={setCurveDate} 
+                    highlightTarget={highlightTarget}
+                    initialPortfolioYear={portfolioYear}
+                />
             )}
 
             {activeTab === 'analyze' && (

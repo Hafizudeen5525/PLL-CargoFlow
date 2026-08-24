@@ -32,7 +32,7 @@ import {
 } from 'lucide-react';
 import { ReconciliationData } from './DiscrepancyCheck';
 import { getGroupName, GROUPS, formatCurrency } from '../services/calculationService';
-import { computeTrmsSummaryRows, TrmsStrategySummary } from '../utils/trmsEngine';
+import { computeTrmsSummaryRows, TrmsStrategySummary, isDerivativeRowRealized } from '../utils/trmsEngine';
 import { AutoScalingText } from './AutoScalingText';
 
 export interface ExecutiveDashboardProps {
@@ -230,11 +230,11 @@ export const ExecutiveDashboard: React.FC<ExecutiveDashboardProps> = ({ trmsData
       let rawVolSum = 0;
       dealRows.forEach((r: any) => {
         const val = Number(String(r['Base_Total_Value_USD'] || '').replace(/[^0-9.-]/g, '')) || 0;
-        const vType = String(r['Volume Type'] || r['Vol Type'] || '').trim().toLowerCase();
         const rVol = Math.abs(Number(String(r['Volume'] || '').replace(/[^0-9.-]/g, '')) || 0);
         rawVolSum += rVol;
 
-        if (vType === 'actual' || (vType === '' && s.physicalPnLStatus === 'Realized')) {
+        const isRealized = isDerivativeRowRealized(r, targetDate);
+        if (isRealized) {
           realizedPnL += val;
         } else {
           unrealizedPnL += val;
@@ -243,23 +243,23 @@ export const ExecutiveDashboard: React.FC<ExecutiveDashboardProps> = ({ trmsData
       vol = rawVolSum;
     } else {
       // Fallbacks from summary object if precomputed
-      if (cat === 'PHYSICAL_HEDGING' && s.hedgingPnL) {
-        if (s.physicalPnLStatus === 'Realized') realizedPnL = s.hedgingPnL;
-        else unrealizedPnL = s.hedgingPnL;
+      if (cat === 'PHYSICAL_HEDGING') {
+        realizedPnL = s.realizedHedgingPnL ?? (s.hedgingRealized ? (s.hedgingPnL || 0) : 0);
+        unrealizedPnL = s.unrealizedHedgingPnL ?? (!s.hedgingRealized ? (s.hedgingPnL || 0) : 0);
         vol = s.hedgingVolume || 0;
-      } else if (cat === 'DH' && s.dhPnL) {
-        if (s.physicalPnLStatus === 'Realized') realizedPnL = s.dhPnL;
-        else unrealizedPnL = s.dhPnL;
+      } else if (cat === 'DH') {
+        realizedPnL = s.realizedDhPnL ?? (s.dhRealized ? (s.dhPnL || 0) : 0);
+        unrealizedPnL = s.unrealizedDhPnL ?? (!s.dhRealized ? (s.dhPnL || 0) : 0);
         vol = s.dhVolume || 0;
-      } else if (cat === 'DFT' && s.dftPnL) {
-        if (s.physicalPnLStatus === 'Realized') realizedPnL = s.dftPnL;
-        else unrealizedPnL = s.dftPnL;
+      } else if (cat === 'DFT') {
+        realizedPnL = s.realizedDftPnL ?? (s.dftRealized ? (s.dftPnL || 0) : 0);
+        unrealizedPnL = s.unrealizedDftPnL ?? (!s.dftRealized ? (s.dftPnL || 0) : 0);
         vol = s.dftVolume || 0;
       }
     }
 
     const totalPnL = realizedPnL + unrealizedPnL;
-    const isRealized = realizedPnL !== 0 && unrealizedPnL === 0 ? true : (unrealizedPnL !== 0 ? false : s.physicalPnLStatus === 'Realized');
+    const isRealized = realizedPnL !== 0 && unrealizedPnL === 0 ? true : (unrealizedPnL !== 0 ? false : (dealRows.length > 0 ? dealRows.every(r => isDerivativeRowRealized(r, targetDate)) : false));
 
     return {
       dealRows,
@@ -270,13 +270,14 @@ export const ExecutiveDashboard: React.FC<ExecutiveDashboardProps> = ({ trmsData
       isRealized,
       hasTrades: Math.abs(totalPnL) > 0.001 || vol > 0 || dealRows.length > 0
     };
-  }, []);
+  }, [targetDate]);
 
   // Strategy PnL Map for Baseline Date to compute Day-over-Day movements
   const baselinePnlMap = useMemo(() => {
     const map = new Map<string, number>();
     baselineSummaries.forEach(s => {
-      const pnl = (Math.abs(s.salesRevenue || 0) - Math.abs(s.purchaseCost || 0)) + (s.shippingRelatedCosts || 0);
+      const other = s.otherCosts !== undefined ? s.otherCosts : ((s.shippingRelatedCosts || 0) + (s.miscCost || 0));
+      const pnl = (Math.abs(s.salesRevenue || 0) - Math.abs(s.purchaseCost || 0)) + other;
       map.set(s.strategyName, pnl);
     });
     return map;
@@ -529,7 +530,7 @@ export const ExecutiveDashboard: React.FC<ExecutiveDashboardProps> = ({ trmsData
     summaries.forEach(s => {
       const purchase = Math.abs(s.purchaseCost || 0);
       const revenue = Math.abs(s.salesRevenue || 0);
-      const other = s.shippingRelatedCosts || 0;
+      const other = s.otherCosts !== undefined ? s.otherCosts : ((s.shippingRelatedCosts || 0) + (s.miscCost || 0));
       const pnl = (revenue - purchase) + other;
       const vol = (s.salesVolume > 0 ? s.salesVolume : s.purchaseVolume) || 0;
       const isReal = s.physicalPnLStatus === 'Realized';
@@ -570,13 +571,15 @@ export const ExecutiveDashboard: React.FC<ExecutiveDashboardProps> = ({ trmsData
   const strategyMovements = useMemo(() => {
     if (!baselineDate || !targetDate || baselineDate === targetDate) {
       return targetSummaries.map(s => {
-        const pnl = (Math.abs(s.salesRevenue || 0) - Math.abs(s.purchaseCost || 0)) + (s.shippingRelatedCosts || 0);
+        const other = s.otherCosts !== undefined ? s.otherCosts : ((s.shippingRelatedCosts || 0) + (s.miscCost || 0));
+        const pnl = (Math.abs(s.salesRevenue || 0) - Math.abs(s.purchaseCost || 0)) + other;
         return { name: s.strategyName, delta: pnl };
       }).sort((a, b) => Math.abs(b.delta) - Math.abs(a.delta)).slice(0, 40);
     }
 
     return targetSummaries.map(s => {
-      const pnl = (Math.abs(s.salesRevenue || 0) - Math.abs(s.purchaseCost || 0)) + (s.shippingRelatedCosts || 0);
+      const other = s.otherCosts !== undefined ? s.otherCosts : ((s.shippingRelatedCosts || 0) + (s.miscCost || 0));
+      const pnl = (Math.abs(s.salesRevenue || 0) - Math.abs(s.purchaseCost || 0)) + other;
       const basePnl = baselinePnlMap.get(s.strategyName) || 0;
       const delta = pnl - basePnl;
       return { name: s.strategyName, delta };
