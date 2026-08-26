@@ -656,26 +656,6 @@ function getIndexPriceInternal(index: string, refDateStr: string, monthDef: stri
         p = getPriceForIndex(histRow?.prices, canonicalIndex);
         if (p === 0) p = getPriceForIndex(curveRow?.prices, canonicalIndex);
 
-        if (p === 0 && curve.length > 0) {
-            const sortedRows = [...curve].sort((a, b) => normalizeMonthKey(a.month).localeCompare(normalizeMonthKey(b.month)));
-            let closestRow: ForwardCurveRow | null = null;
-            let minDiff = Infinity;
-            const targetTime = new Date(`${normTarget}-15`).getTime();
-            for (const r of sortedRows) {
-                const rNorm = normalizeMonthKey(r.month);
-                if (!rNorm) continue;
-                const rTime = new Date(`${rNorm}-15`).getTime();
-                const diff = Math.abs(targetTime - rTime);
-                if (diff < minDiff) {
-                    minDiff = diff;
-                    closestRow = r;
-                }
-            }
-            if (closestRow) {
-                p = getPriceForIndex(closestRow.prices, canonicalIndex);
-            }
-        }
-
         if (p > 0) {
             total += p;
             foundCount++;
