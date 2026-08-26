@@ -1103,6 +1103,9 @@ export async function saveHistoricalCurve(curve: ForwardCurveRow[]) {
     } catch (e) {
         console.warn("Failed saving historical curve to localStorage", e);
     }
+    if (typeof window !== 'undefined') {
+        window.dispatchEvent(new CustomEvent('historicalCurveChanged', { detail: { curve } }));
+    }
     if (!auth.currentUser || !isFirebaseConfigured) return;
     try {
         const docRef = doc(db, 'users', auth.currentUser.uid, 'market_data', 'historical');
@@ -1143,6 +1146,9 @@ export async function saveForwardCurve(date: string, curve: ForwardCurveRow[], m
     }
     if (makeActive) {
         setActiveCurveDate(date);
+    }
+    if (typeof window !== 'undefined') {
+        window.dispatchEvent(new CustomEvent('forwardCurveSaved', { detail: { date, curve } }));
     }
     if (!auth.currentUser || !isFirebaseConfigured) return;
     try {

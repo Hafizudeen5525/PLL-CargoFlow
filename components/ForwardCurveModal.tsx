@@ -153,18 +153,54 @@ export const ForwardCurveModal: React.FC<ForwardCurveModalProps> = ({
 
   const lastLoadedRef = useRef<{ date: string } | null>(null);
 
-  // Listen for curve date change events from external imports or components
+  // Listen for curve date change and curve saved events from external imports or components
   useEffect(() => {
       const handleDateChange = (e: any) => {
           const newDate = e.detail?.date;
-          if (newDate && newDate !== curveDateRef.current) {
+          if (newDate) {
               setAvailableDates(getAvailableCurveDatesSync());
               lastLoadedRef.current = { date: newDate };
               loadCurveData(newDate);
           }
       };
+      const handleCurveSaved = (e: any) => {
+          const savedDate = e.detail?.date;
+          setAvailableDates(getAvailableCurveDatesSync());
+          if (savedDate && (savedDate === curveDateRef.current || !curveDateRef.current)) {
+              loadCurveData(savedDate);
+          }
+      };
+      const handleHistChange = (e: any) => {
+          const newCurve = e.detail?.curve || getHistoricalCurveSync();
+          if (newCurve) {
+              setHistoricalGrid(newCurve);
+          }
+      };
+
       window.addEventListener('forwardCurveDateChanged', handleDateChange);
-      return () => window.removeEventListener('forwardCurveDateChanged', handleDateChange);
+      window.addEventListener('forwardCurveSaved', handleCurveSaved);
+      window.addEventListener('historicalCurveChanged', handleHistChange);
+
+      return () => {
+          window.removeEventListener('forwardCurveDateChanged', handleDateChange);
+          window.removeEventListener('forwardCurveSaved', handleCurveSaved);
+          window.removeEventListener('historicalCurveChanged', handleHistChange);
+      };
+  }, [loadCurveData]);
+
+  const handleTabSwitch = useCallback((tabId: 'manage' | 'historical' | 'prices' | 'analyze' | 'evolution') => {
+    setActiveTab(tabId);
+    if (tabId === 'historical') {
+      const hist = getHistoricalCurveSync();
+      if (hist && hist.length > 0) {
+        setHistoricalGrid(hist);
+      }
+    } else if (tabId === 'manage') {
+      const active = getActiveCurveDate();
+      if (active && active !== curveDateRef.current) {
+        loadCurveData(active);
+      }
+    }
   }, [loadCurveData]);
 
   // Current active columns based on tab
@@ -542,7 +578,7 @@ export const ForwardCurveModal: React.FC<ForwardCurveModalProps> = ({
                 ].map(({ id, label }) => (
                     <button 
                         key={id}
-                        onClick={() => setActiveTab(id as any)}
+                        onClick={() => handleTabSwitch(id as any)}
                         className={`pb-3 px-1 text-xs font-bold uppercase tracking-widest border-b-2 transition-all ${activeTab === id ? 'border-blue-600 text-blue-600' : 'border-transparent text-slate-400 hover:text-slate-600'}`}
                     >
                         {label}

@@ -24,7 +24,7 @@ import { CargoProfile, PnLBucket, ForwardCurveData, ForwardCurve, ForwardCurvePo
 import { TrmsSummaryTable } from './TrmsSummaryTable';
 import { ExecutiveDashboard } from './ExecutiveDashboard';
 import { computeTrmsSummaryRows, TrmsStrategySummary, normalizeStrategyKey, parseFlexibleDate, isUnallocatedBuyer } from '../utils/trmsEngine';
-import { getGroupName, GROUPS, saveForwardCurve, ForwardCurveRow, formatCurrency } from '../services/calculationService';
+import { getGroupName, GROUPS, saveForwardCurve, saveHistoricalCurve, setActiveCurveDate, normalizeMonthKey, ForwardCurveRow, formatCurrency } from '../services/calculationService';
 
 export interface TRMSCommodityLeg {
     price: number;
@@ -582,7 +582,8 @@ export const DiscrepancyCheck: React.FC<DiscrepancyCheckProps> = ({
     syncReconciled: true,
     syncPrices: false,
     overwriteManual: false,
-    syncForwardCurves: false
+    syncForwardCurves: true,
+    syncHistoricalCurves: true
   });
   
   const [searchTerm, setSearchTerm] = useState('');
@@ -2139,11 +2140,13 @@ export const DiscrepancyCheck: React.FC<DiscrepancyCheckProps> = ({
     if (pendingData) {
       if (syncOptions.syncForwardCurves && pendingData.forwardCurves && pendingData.forwardCurves.length > 0) {
         for (const fc of pendingData.forwardCurves) {
+          if (!fc.asOfDate || fc.asOfDate === 'Unknown') continue;
           const monthToPrices: Record<string, Record<string, number>> = {};
           fc.curves.forEach(curve => {
             curve.points.forEach(point => {
-              if (!monthToPrices[point.month]) monthToPrices[point.month] = {};
-              monthToPrices[point.month][curve.index] = point.value;
+              const normMonth = normalizeMonthKey(point.month) || point.month;
+              if (!monthToPrices[normMonth]) monthToPrices[normMonth] = {};
+              monthToPrices[normMonth][curve.index] = point.value;
             });
           });
 
@@ -2153,8 +2156,33 @@ export const DiscrepancyCheck: React.FC<DiscrepancyCheckProps> = ({
           })).sort((a, b) => a.month.localeCompare(b.month));
 
           if (rows.length > 0) {
-            await saveForwardCurve(fc.asOfDate, rows);
-            toast.success(`Forward curve for ${fc.asOfDate} imported.`);
+            await saveForwardCurve(fc.asOfDate, rows, true);
+            setActiveCurveDate(fc.asOfDate);
+            toast.success(`Forward curve for ${fc.asOfDate} imported and set as active.`);
+            if (onForwardCurveUpdate) onForwardCurveUpdate();
+          }
+        }
+      }
+
+      if (syncOptions.syncHistoricalCurves && pendingData.historicalCurves && pendingData.historicalCurves.length > 0) {
+        for (const hc of pendingData.historicalCurves) {
+          const monthToPrices: Record<string, Record<string, number>> = {};
+          hc.curves.forEach(curve => {
+            curve.points.forEach(point => {
+              const normMonth = normalizeMonthKey(point.month) || point.month;
+              if (!monthToPrices[normMonth]) monthToPrices[normMonth] = {};
+              monthToPrices[normMonth][curve.index] = point.value;
+            });
+          });
+
+          const rows: ForwardCurveRow[] = Object.entries(monthToPrices).map(([month, prices]) => ({
+            month,
+            prices
+          })).sort((a, b) => a.month.localeCompare(b.month));
+
+          if (rows.length > 0) {
+            await saveHistoricalCurve(rows);
+            toast.success(`Historical settlement prices imported.`);
             if (onForwardCurveUpdate) onForwardCurveUpdate();
           }
         }
@@ -2256,6 +2284,25 @@ export const DiscrepancyCheck: React.FC<DiscrepancyCheckProps> = ({
                         </span>
                         <span className="block text-xs text-slate-500">
                           Extract and save forward curve data reflecting EOD date (cell A2) <strong>{pendingData.forwardCurves.map(fc => fc.asOfDate).filter(Boolean).join(', ')}</strong>.
+                        </span>
+                      </div>
+                    </label>
+                  )}
+
+                  {pendingData?.historicalCurves && pendingData.historicalCurves.length > 0 && (
+                    <label className="flex items-start gap-3 cursor-pointer group">
+                      <input 
+                        type="checkbox" 
+                        checked={syncOptions.syncHistoricalCurves}
+                        onChange={e => setSyncOptions(prev => ({ ...prev, syncHistoricalCurves: e.target.checked }))}
+                        className="mt-1 w-4 h-4 text-indigo-600 rounded border-slate-300 focus:ring-indigo-500"
+                      />
+                      <div>
+                        <span className="block text-sm font-bold text-slate-700 group-hover:text-indigo-600 transition-colors">
+                          Import Historical Data ({pendingData.historicalCurves.reduce((acc, hc) => acc + (hc.curves[0]?.points?.length || 0), 0)} months found)
+                        </span>
+                        <span className="block text-xs text-slate-500">
+                          Update Historical Data tab in Forward Curve Manager with historical settlement prices from Jarvis.
                         </span>
                       </div>
                     </label>
