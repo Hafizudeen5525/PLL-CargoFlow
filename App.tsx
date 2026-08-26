@@ -13,7 +13,7 @@ import { UserManagement } from './components/UserManagement';
 import { DiscrepancyCheck, ReconciliationData } from './components/DiscrepancyCheck';
 import { PriceTabHighlightTarget } from './components/PriceTab';
 import { CargoProfile, PnLBucket, ForwardCurveData, ForwardCurve, ForwardCurvePoint } from './types';
-import { getMarketData, getForwardCurve, recalculateProfile, getPortfolioYear, saveForwardCurve, saveHistoricalCurve, normalizeMonthKey, normalizeStrategyName } from './services/calculationService';
+import { getMarketData, getForwardCurve, recalculateProfile, getPortfolioYear, saveForwardCurve, saveHistoricalCurve, normalizeMonthKey, normalizeStrategyName, getActiveCurveDate, setActiveCurveDate } from './services/calculationService';
 import { getFromDB, saveToDB } from './services/db';
 import { auth, db, handleFirestoreError, FirestoreOperation, isFirebaseConfigured } from './firebase';
 import { onAuthStateChanged, User } from 'firebase/auth';
@@ -188,14 +188,15 @@ const App: React.FC = () => {
     toast.success('Session is persistently active in Sandbox Mode.');
   };
 
-  const handleMarketRefresh = useCallback(async () => {
-    const curve = await getForwardCurve();
+  const handleMarketRefresh = useCallback(async (targetCurveDate?: string) => {
+    const activeDate = targetCurveDate || getActiveCurveDate();
+    const curve = await getForwardCurve(activeDate);
     setForwardCurve(curve);
     if (curve.length > 0) {
       setMarketData(curve[0].prices);
     }
     updateProfiles((prev: CargoProfile[]) => prev.map((p: CargoProfile) => 
-      recalculateProfile(p, true) as CargoProfile
+      recalculateProfile(p, true, activeDate) as CargoProfile
     ));
   }, [updateProfiles]);
 
@@ -327,7 +328,9 @@ const App: React.FC = () => {
     if (trmsData.forwardCurves && trmsData.forwardCurves.length > 0) {
       let updated = false;
       const importedDates: string[] = [];
+      let latestImportedDate = '';
       trmsData.forwardCurves.forEach((fcData: ForwardCurveData) => {
+        if (!fcData.asOfDate || fcData.asOfDate === 'Unknown') return;
         const monthMap: Record<string, Record<string, number>> = {};
         fcData.curves.forEach((curve: ForwardCurve) => {
           curve.points.forEach((point: ForwardCurvePoint) => {
@@ -342,16 +345,18 @@ const App: React.FC = () => {
         })).sort((a, b) => a.month.localeCompare(b.month));
 
         if (rows.length > 0) {
-          saveForwardCurve(fcData.asOfDate, rows);
+          saveForwardCurve(fcData.asOfDate, rows, true);
+          setActiveCurveDate(fcData.asOfDate);
           importedDates.push(fcData.asOfDate);
+          latestImportedDate = fcData.asOfDate;
           updated = true;
         }
       });
       
       if (updated) {
-        handleMarketRefresh();
-        const dateStr = importedDates.filter(d => d && d !== 'Unknown').join(', ') || 'latest';
-        toast.success(`Forward Curve (${dateStr}) updated from Jarvis EOD date`, { icon: '📈' });
+        handleMarketRefresh(latestImportedDate);
+        const dateStr = importedDates.filter(d => d && d !== 'Unknown').join(', ') || latestImportedDate || 'latest';
+        toast.success(`Forward Curve (${dateStr}) active from Jarvis EOD date`, { icon: '📈' });
       }
     }
   }, [trmsData.forwardCurves, handleMarketRefresh]);
@@ -878,7 +883,7 @@ const App: React.FC = () => {
                             onBulkDelete={handleBulkDelete}
                             onBulkUpdate={handleBulkUpdate}
                             onBulkImport={handleBulkImport}
-                            onForwardCurveUpdate={async () => setForwardCurve(await getForwardCurve())}
+                            onForwardCurveUpdate={async () => handleMarketRefresh()}
                             trmsData={trmsData}
                             userRole={activeRole}
                         />
@@ -899,7 +904,7 @@ const App: React.FC = () => {
                             trmsData={trmsData}
                             onTrmsUpload={setTrmsData}
                             onEditProfile={(p: CargoProfile) => handleEdit(p, 'list')}
-                            onForwardCurveUpdate={async () => setForwardCurve(await getForwardCurve())}
+                            onForwardCurveUpdate={async () => handleMarketRefresh()}
                         />
                     </motion.div>
                 ) : view === 'settings' ? (

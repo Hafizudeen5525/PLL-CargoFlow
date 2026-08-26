@@ -1,5 +1,5 @@
 import React, { useState, useMemo, useEffect, useRef } from 'react';
-import { getIndexPrice, getAvailableCurveDatesSync, normalizeMonthKey } from '../services/calculationService';
+import { getIndexPrice, getAvailableCurveDatesSync, getActiveCurveDate, setActiveCurveDate, normalizeMonthKey } from '../services/calculationService';
 import * as XLSX from 'xlsx';
 import { toast } from 'react-hot-toast';
 import { Copy, Download, Search, Info, Calendar, Sparkles, X, Target, AlertTriangle, AlertCircle, Eye, EyeOff } from 'lucide-react';
@@ -189,12 +189,32 @@ export const PriceTab: React.FC<PriceTabProps> = ({
   onCurveDateChange,
   highlightTarget,
 }) => {
-  const availableDates = useMemo(() => getAvailableCurveDatesSync(), []);
+  const [availableDates, setAvailableDates] = useState<string[]>(() => getAvailableCurveDatesSync());
   const [internalCurveDate, setInternalCurveDate] = useState<string>(() => {
-    return externalCurveDate || (availableDates.length > 0 ? availableDates[0] : new Date().toISOString().split('T')[0]);
+    return externalCurveDate || getActiveCurveDate() || (availableDates.length > 0 ? availableDates[0] : new Date().toISOString().split('T')[0]);
   });
 
   const activeCurveDate = externalCurveDate || internalCurveDate;
+
+  useEffect(() => {
+    if (externalCurveDate) {
+      setInternalCurveDate(externalCurveDate);
+    }
+  }, [externalCurveDate]);
+
+  useEffect(() => {
+    const handleDateChange = (e: any) => {
+      const newDate = e.detail?.date;
+      if (newDate) {
+        setAvailableDates(getAvailableCurveDatesSync());
+        if (!externalCurveDate) {
+          setInternalCurveDate(newDate);
+        }
+      }
+    };
+    window.addEventListener('forwardCurveDateChanged', handleDateChange);
+    return () => window.removeEventListener('forwardCurveDateChanged', handleDateChange);
+  }, [externalCurveDate]);
 
   const [selectedYear, setSelectedYear] = useState<number>(() => {
     if (highlightTarget?.portfolioYear) {

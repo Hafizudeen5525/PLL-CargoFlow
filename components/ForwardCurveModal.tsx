@@ -1,6 +1,19 @@
 
 import React, { useState, useEffect, useMemo, useCallback, useRef } from 'react';
-import { saveForwardCurve, getForwardCurve, getForwardCurveSync, getAvailableCurveDates, getAvailableCurveDatesSync, deleteForwardCurve, ForwardCurveRow, getHistoricalCurve, getHistoricalCurveSync, saveHistoricalCurve } from '../services/calculationService';
+import { 
+  saveForwardCurve, 
+  getForwardCurve, 
+  getForwardCurveSync, 
+  getAvailableCurveDates, 
+  getAvailableCurveDatesSync, 
+  deleteForwardCurve, 
+  ForwardCurveRow, 
+  getHistoricalCurve, 
+  getHistoricalCurveSync, 
+  saveHistoricalCurve,
+  getActiveCurveDate,
+  setActiveCurveDate
+} from '../services/calculationService';
 import { toast } from 'react-hot-toast';
 import { LineChart, Line, XAxis, YAxis, CartesianGrid, Tooltip, Legend, ResponsiveContainer } from 'recharts';
 import { PriceTab, PriceTabHighlightTarget } from './PriceTab';
@@ -48,13 +61,19 @@ export const ForwardCurveModal: React.FC<ForwardCurveModalProps> = ({
       setActiveTab(initialTab);
     }
   }, [initialTab]);
-  const availableDates = useMemo(() => {
+
+  const [availableDates, setAvailableDates] = useState<string[]>(() => {
       return getAvailableCurveDatesSync();
-  }, []);
+  });
+
   const [curveDate, setCurveDate] = useState<string>(() => {
+      const active = getActiveCurveDate();
       const dates = getAvailableCurveDatesSync();
+      if (active && dates.includes(active)) return active;
+      if (active) return active;
       return dates.length > 0 ? dates[0] : new Date().toISOString().split('T')[0];
   });
+
   const [compareDateA, setCompareDateA] = useState<string>(() => {
       const dates = getAvailableCurveDatesSync();
       return dates.length >= 1 ? dates[0] : '';
@@ -71,13 +90,11 @@ export const ForwardCurveModal: React.FC<ForwardCurveModalProps> = ({
 
   // Grid State
   const [manageGrid, setManageGrid] = useState<ForwardCurveRow[]>(() => {
-      const dates = getAvailableCurveDatesSync();
-      const today = new Date().toISOString().split('T')[0];
-      const latest = dates.length > 0 ? dates[0] : today;
-      const data = getForwardCurveSync(latest);
+      const initialDate = getActiveCurveDate();
+      const data = getForwardCurveSync(initialDate);
       if (data.length === 0) {
           const skeleton: ForwardCurveRow[] = [];
-          const start = new Date(latest);
+          const start = new Date(initialDate);
           for (let i = 0; i < 12; i++) {
               const d = new Date(start.getFullYear(), start.getMonth() + i, 1);
               const mKey = `${d.getFullYear()}-${String(d.getMonth() + 1).padStart(2, '0')}`;
@@ -116,6 +133,7 @@ export const ForwardCurveModal: React.FC<ForwardCurveModalProps> = ({
       }
       setManageGrid(targetGrid);
       setCurveDate(date);
+      setActiveCurveDate(date);
       setSelection(null);
       setEditingCell(null);
       setHistoryPast([]);
@@ -123,22 +141,35 @@ export const ForwardCurveModal: React.FC<ForwardCurveModalProps> = ({
   }, []);
 
   const refreshDates = useCallback(() => {
-      // availableDates is synced
+      setAvailableDates(getAvailableCurveDatesSync());
   }, []);
 
   const lastLoadedRef = useRef<{ date: string } | null>(null);
 
   useEffect(() => {
-      const initialDate = availableDates.length > 0 ? availableDates[0] : new Date().toISOString().split('T')[0];
-      if (lastLoadedRef.current?.date !== initialDate) {
-          // Defer state update to next tick to avoid cascading render warning
+      const targetDate = getActiveCurveDate();
+      if (lastLoadedRef.current?.date !== targetDate) {
           const timer = setTimeout(() => {
-              loadCurveData(initialDate);
-              lastLoadedRef.current = { date: initialDate };
+              loadCurveData(targetDate);
+              lastLoadedRef.current = { date: targetDate };
           }, 0);
           return () => clearTimeout(timer);
       }
-  }, [availableDates, loadCurveData]);
+  }, [loadCurveData]);
+
+  // Listen for curve date change events from external imports or components
+  useEffect(() => {
+      const handleDateChange = (e: any) => {
+          const newDate = e.detail?.date;
+          if (newDate) {
+              setAvailableDates(getAvailableCurveDatesSync());
+              setCurveDate(newDate);
+              loadCurveData(newDate);
+          }
+      };
+      window.addEventListener('forwardCurveDateChanged', handleDateChange);
+      return () => window.removeEventListener('forwardCurveDateChanged', handleDateChange);
+  }, [loadCurveData]);
 
   // Current active columns based on tab
   const activeColumns = useMemo(() => {

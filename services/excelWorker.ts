@@ -101,24 +101,32 @@ function parseCurveAsOfDate(
   defaultAsOfDate: string = 'Unknown',
   fileName?: string
 ): string {
+  const monthNames: Record<string, string> = {
+    jan: '01', feb: '02', mar: '03', apr: '04', may: '05', jun: '06',
+    jul: '07', aug: '08', sep: '09', oct: '10', nov: '11', dec: '12',
+    january: '01', february: '02', march: '03', april: '04', may_: '05', june: '06',
+    july: '07', august: '08', september: '09', october: '10', november: '11', december: '12'
+  };
+
   const tryParseValue = (val: any, cellObj?: any): string | null => {
-    if (!val && !cellObj) return null;
+    if (val === undefined && cellObj === undefined) return null;
+    if (val === null && cellObj === null) return null;
 
     // 1. Check Date object
     if (cellObj && cellObj.t === 'd' && cellObj.v instanceof Date) {
       const d = cellObj.v;
       if (!isNaN(d.getTime())) {
-        const y = d.getFullYear();
-        const m = String(d.getMonth() + 1).padStart(2, '0');
-        const day = String(d.getDate()).padStart(2, '0');
+        const y = d.getUTCFullYear();
+        const m = String(d.getUTCMonth() + 1).padStart(2, '0');
+        const day = String(d.getUTCDate()).padStart(2, '0');
         return `${y}-${m}-${day}`;
       }
     }
     if (val instanceof Date) {
       if (!isNaN(val.getTime())) {
-        const y = val.getFullYear();
-        const m = String(val.getMonth() + 1).padStart(2, '0');
-        const day = String(val.getDate()).padStart(2, '0');
+        const y = val.getUTCFullYear();
+        const m = String(val.getUTCMonth() + 1).padStart(2, '0');
+        const day = String(val.getUTCDate()).padStart(2, '0');
         return `${y}-${m}-${day}`;
       }
     }
@@ -138,64 +146,74 @@ function parseCurveAsOfDate(
       }
     }
 
-    // 3. String representation (w: formatted, v: value, or raw val)
-    const str = String(cellObj?.w || cellObj?.v || val || '').trim();
-    if (!str || str === 'undefined' || str === 'null' || str === 'Unknown') return null;
+    // 3. String representations: formatted text (cellObj.w) or raw value (cellObj.v or val)
+    const rawCandidates = [cellObj?.w, cellObj?.v, val];
+    for (const raw of rawCandidates) {
+      if (!raw) continue;
+      const str = String(raw).trim();
+      if (!str || str === 'undefined' || str === 'null' || str === 'Unknown') continue;
 
-    // ISO format: YYYY-MM-DD or YYYY/MM/DD
-    const isoMatch = str.match(/\b(20\d{2})[-/](0[1-9]|1[0-2])[-/](0[1-9]|[12]\d|3[01])\b/);
-    if (isoMatch) {
-      return `${isoMatch[1]}-${isoMatch[2]}-${isoMatch[3]}`;
-    }
-
-    // DD-MMM-YYYY or DD MMM YYYY or DD-MMM-YY (e.g. 19-Aug-2026, 19-Aug-26, 19 Aug 2026, 31-May-2024)
-    const monthNames: Record<string, string> = {
-      jan: '01', feb: '02', mar: '03', apr: '04', may: '05', jun: '06',
-      jul: '07', aug: '08', sep: '09', oct: '10', nov: '11', dec: '12'
-    };
-    const dMmmYMatch = str.match(/\b(0?[1-9]|[12]\d|3[01])[-/\s.]([a-zA-Z]{3,})[-/\s.](\d{2,4})\b/);
-    if (dMmmYMatch) {
-      const day = dMmmYMatch[1].padStart(2, '0');
-      const mStr = dMmmYMatch[2].toLowerCase().slice(0, 3);
-      let y = parseInt(dMmmYMatch[3], 10);
-      if (y < 100) y += 2000;
-      if (monthNames[mStr]) {
-        return `${y}-${monthNames[mStr]}-${day}`;
+      // ISO format: YYYY-MM-DD or YYYY/MM/DD or YYYY.MM.DD
+      const isoMatch = str.match(/\b(20\d{2})[-/.](0?[1-9]|1[0-2])[-/.](0?[1-9]|[12]\d|3[01])\b/);
+      if (isoMatch) {
+        return `${isoMatch[1]}-${isoMatch[2].padStart(2, '0')}-${isoMatch[3].padStart(2, '0')}`;
       }
-    }
 
-    // MMM-DD-YYYY or MMM DD, YYYY (e.g. Aug 19, 2026)
-    const mmmDYMatch = str.match(/\b([a-zA-Z]{3,})[-/\s.](0?[1-9]|[12]\d|3[01])(?:,)?[-/\s.](\d{2,4})\b/);
-    if (mmmDYMatch) {
-      const mStr = mmmDYMatch[1].toLowerCase().slice(0, 3);
-      const day = mmmDYMatch[2].padStart(2, '0');
-      let y = parseInt(mmmDYMatch[3], 10);
-      if (y < 100) y += 2000;
-      if (monthNames[mStr]) {
-        return `${y}-${monthNames[mStr]}-${day}`;
+      // DD-MMM-YYYY or DD MMM YYYY or DD-MMM-YY or DD/MMM/YYYY (e.g. 19-Aug-2026, 19-Aug-26, 19 Aug 2026, 31-May-2024)
+      const dMmmYMatch = str.match(/\b(0?[1-9]|[12]\d|3[01])[-/\s.]([a-zA-Z]{3,})[-/\s.](\d{2,4})\b/);
+      if (dMmmYMatch) {
+        const day = dMmmYMatch[1].padStart(2, '0');
+        const mStr = dMmmYMatch[2].toLowerCase().slice(0, 3);
+        let y = parseInt(dMmmYMatch[3], 10);
+        if (y < 100) y += 2000;
+        if (monthNames[mStr]) {
+          return `${y}-${monthNames[mStr]}-${day}`;
+        }
       }
-    }
 
-    // DD/MM/YYYY or DD-MM-YYYY or DD.MM.YYYY (e.g. 19/08/2026, 31/05/2024, 19.08.2026)
-    const dmyMatch = str.match(/\b(0?[1-9]|[12]\d|3[01])[-/.](0?[1-9]|1[0-2])[-/.](20\d{2}|\d{2})\b/);
-    if (dmyMatch) {
-      const day = dmyMatch[1].padStart(2, '0');
-      const month = dmyMatch[2].padStart(2, '0');
-      let y = parseInt(dmyMatch[3], 10);
-      if (y < 100) y += 2000;
-      return `${y}-${month}-${day}`;
-    }
+      // MMM-DD-YYYY or MMM DD, YYYY (e.g. Aug 19, 2026, August 19 2026)
+      const mmmDYMatch = str.match(/\b([a-zA-Z]{3,})[-/\s.](0?[1-9]|[12]\d|3[01])(?:,)?[-/\s.](\d{2,4})\b/);
+      if (mmmDYMatch) {
+        const mStr = mmmDYMatch[1].toLowerCase().slice(0, 3);
+        const day = mmmDYMatch[2].padStart(2, '0');
+        let y = parseInt(mmmDYMatch[3], 10);
+        if (y < 100) y += 2000;
+        if (monthNames[mStr]) {
+          return `${y}-${monthNames[mStr]}-${day}`;
+        }
+      }
 
-    // 8-digit date string DDMMYYYY (e.g. 19082026 -> 2026-08-19)
-    const ddmmyyyy = str.match(/\b(0[1-9]|[12]\d|3[01])(0[1-9]|1[0-2])(20\d{2})\b/);
-    if (ddmmyyyy) {
-      return `${ddmmyyyy[3]}-${ddmmyyyy[2]}-${ddmmyyyy[1]}`;
-    }
+      // Slash/dash/dot date with year at end: e.g. 19/08/2026 or 08/19/2026 or 19/8/26
+      const genericDmyMatch = str.match(/\b(0?[1-9]|[12]\d|3[01])[-/.](0?[1-9]|[12]\d|3[01])[-/.](20\d{2}|\d{2})\b/);
+      if (genericDmyMatch) {
+        const p1 = parseInt(genericDmyMatch[1], 10);
+        const p2 = parseInt(genericDmyMatch[2], 10);
+        let y = parseInt(genericDmyMatch[3], 10);
+        if (y < 100) y += 2000;
 
-    // 8-digit date string YYYYMMDD (e.g. 20260819 -> 2026-08-19)
-    const yyyymmdd = str.match(/\b(20\d{2})(0[1-9]|1[0-2])(0[1-9]|[12]\d|3[01])\b/);
-    if (yyyymmdd) {
-      return `${yyyymmdd[1]}-${yyyymmdd[2]}-${yyyymmdd[3]}`;
+        if (p1 > 12 && p2 <= 12) {
+          // Definitely DD/MM/YYYY
+          return `${y}-${String(p2).padStart(2, '0')}-${String(p1).padStart(2, '0')}`;
+        } else if (p1 <= 12 && p2 > 12) {
+          // Definitely MM/DD/YYYY
+          return `${y}-${String(p1).padStart(2, '0')}-${String(p2).padStart(2, '0')}`;
+        } else if (p1 <= 12 && p2 <= 12) {
+          // Default to DD/MM/YYYY for commodities TRMS standard, or check if day/month
+          return `${y}-${String(p2).padStart(2, '0')}-${String(p1).padStart(2, '0')}`;
+        }
+      }
+
+      // 8-digit date string DDMMYYYY (e.g. 19082026 -> 2026-08-19)
+      const ddmmyyyy = str.match(/\b(0[1-9]|[12]\d|3[01])(0[1-9]|1[0-2])(20\d{2})\b/);
+      if (ddmmyyyy) {
+        return `${ddmmyyyy[3]}-${ddmmyyyy[2]}-${ddmmyyyy[1]}`;
+      }
+
+      // 8-digit date string YYYYMMDD (e.g. 20260819 -> 2026-08-19)
+      const yyyymmdd = str.match(/\b(20\d{2})(0[1-9]|1[0-2])(0[1-9]|[12]\d|3[01])\b/);
+      if (yyyymmdd) {
+        return `${yyyymmdd[1]}-${yyyymmdd[2]}-${yyyymmdd[3]}`;
+      }
     }
 
     return null;
@@ -217,8 +235,14 @@ function parseCurveAsOfDate(
   const b1Val = tryParseValue(rows[0]?.[1], sheet['B1']);
   if (b1Val) return b1Val;
 
-  // Priority 5: Scan first 3 rows for any date
-  for (let r = 0; r < Math.min(rows.length, 3); r++) {
+  // Priority 5: Cell C2 or C1
+  const c2Val = tryParseValue(rows[1]?.[2], sheet['C2']);
+  if (c2Val) return c2Val;
+  const c1Val = tryParseValue(rows[0]?.[2], sheet['C1']);
+  if (c1Val) return c1Val;
+
+  // Priority 6: Scan first 5 rows for any cell containing an EOD date
+  for (let r = 0; r < Math.min(rows.length, 5); r++) {
     for (let c = 0; c < (rows[r]?.length || 0); c++) {
       const cellAddress = XLSX.utils.encode_cell({ r, c });
       const cellVal = tryParseValue(rows[r][c], sheet[cellAddress]);
@@ -226,7 +250,7 @@ function parseCurveAsOfDate(
     }
   }
 
-  // Priority 6: Filename date (e.g. 2026_JARVISv3_CarvedOut_19082026)
+  // Priority 7: Filename date (e.g. 2026_JARVISv3_CarvedOut_19082026.xlsx)
   if (fileName) {
     const fnVal = tryParseValue(fileName);
     if (fnVal) return fnVal;

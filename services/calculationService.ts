@@ -974,6 +974,8 @@ export function findDataGaps(profiles: CargoProfile[], curveDate?: string): Data
     return Object.values(gaps).sort((a: DataGap, b: DataGap) => a.month.localeCompare(b.month));
 }
 
+const STORAGE_KEY_ACTIVE_CURVE = 'active_forward_curve_date';
+
 const curveCache: Record<string, ForwardCurveRow[]> = (() => {
     try {
         const saved = localStorage.getItem(STORAGE_KEY_CURVES);
@@ -982,6 +984,48 @@ const curveCache: Record<string, ForwardCurveRow[]> = (() => {
         return {};
     }
 })();
+
+let activeCurveDate: string | null = (() => {
+    try {
+        return localStorage.getItem(STORAGE_KEY_ACTIVE_CURVE) || null;
+    } catch {
+        return null;
+    }
+})();
+
+export function getActiveCurveDate(): string {
+    if (activeCurveDate && (curveCache[activeCurveDate] || Object.keys(curveCache).length === 0)) {
+        return activeCurveDate;
+    }
+    // Find the latest date with non-empty curve rows
+    const keysWithData = Object.entries(curveCache)
+        .filter(([_, rows]) => Array.isArray(rows) && rows.length > 0 && rows.some(r => Object.keys(r.prices || {}).length > 0))
+        .map(([k]) => k)
+        .sort((a, b) => b.localeCompare(a));
+    
+    if (keysWithData.length > 0) {
+        return keysWithData[0];
+    }
+
+    const allKeys = Object.keys(curveCache).sort((a, b) => b.localeCompare(a));
+    if (allKeys.length > 0) {
+        return allKeys[0];
+    }
+    return new Date().toISOString().split('T')[0];
+}
+
+export function setActiveCurveDate(date: string) {
+    if (!date) return;
+    activeCurveDate = date;
+    try {
+        localStorage.setItem(STORAGE_KEY_ACTIVE_CURVE, date);
+    } catch (e) {
+        console.warn("Failed saving active curve date to localStorage", e);
+    }
+    if (typeof window !== 'undefined') {
+        window.dispatchEvent(new CustomEvent('forwardCurveDateChanged', { detail: { date } }));
+    }
+}
 
 let historicalCache: ForwardCurveRow[] | null = (() => {
     try {
@@ -993,37 +1037,40 @@ let historicalCache: ForwardCurveRow[] | null = (() => {
 })();
 
 export async function getForwardCurve(dateStr?: string): Promise<ForwardCurveRow[]> {
+    const targetDate = dateStr || getActiveCurveDate();
     if (!auth.currentUser || !isFirebaseConfigured) {
-        if (dateStr && curveCache[dateStr]) return curveCache[dateStr];
+        if (targetDate && curveCache[targetDate]) return curveCache[targetDate];
         const keys = Object.keys(curveCache).sort((a, b) => b.localeCompare(a));
         return keys.length > 0 ? curveCache[keys[0]] : [];
     }
     try {
         const userId = auth.currentUser.uid;
-        if (dateStr) {
-            if (curveCache[dateStr]) return curveCache[dateStr];
-            const docRef = doc(db, 'users', userId, 'forward_curves', dateStr);
+        if (targetDate) {
+            if (curveCache[targetDate]) return curveCache[targetDate];
+            const docRef = doc(db, 'users', userId, 'forward_curves', targetDate);
             const snap = await getDoc(docRef);
             if (snap.exists()) {
                 const data = (snap.data().rows || []) as ForwardCurveRow[];
-                curveCache[dateStr] = data;
+                curveCache[targetDate] = data;
                 return data;
             }
-            return [];
-        } else {
-            const q = query(collection(db, 'users', userId, 'forward_curves'), orderBy('asOfDate', 'desc'), limit(1));
-            const snap = await getDocs(q);
-            if (!snap.empty) {
-                const data = (snap.docs[0].data().rows || []) as ForwardCurveRow[];
-                const date = snap.docs[0].id;
-                curveCache[date] = data;
-                return data;
-            }
-            const fallbackKeys = Object.keys(curveCache).sort((a, b) => b.localeCompare(a));
-            return fallbackKeys.length > 0 ? curveCache[fallbackKeys[0]] : [];
+            // If specific target date wasn't found in DB, fallback to memory cache
+            if (curveCache[targetDate]) return curveCache[targetDate];
         }
+
+        const q = query(collection(db, 'users', userId, 'forward_curves'), orderBy('asOfDate', 'desc'), limit(1));
+        const snap = await getDocs(q);
+        if (!snap.empty) {
+            const data = (snap.docs[0].data().rows || []) as ForwardCurveRow[];
+            const date = snap.docs[0].id;
+            curveCache[date] = data;
+            return data;
+        }
+        const fallbackKeys = Object.keys(curveCache).sort((a, b) => b.localeCompare(a));
+        return fallbackKeys.length > 0 ? curveCache[fallbackKeys[0]] : [];
     } catch (err) {
         handleFirestoreError(err, FirestoreOperation.GET, 'forward_curves');
+        if (targetDate && curveCache[targetDate]) return curveCache[targetDate];
         const fallbackKeys = Object.keys(curveCache).sort((a, b) => b.localeCompare(a));
         return fallbackKeys.length > 0 ? curveCache[fallbackKeys[0]] : [];
     }
@@ -1084,13 +1131,17 @@ export async function getAvailableCurveDates(): Promise<string[]> {
     return Array.from(new Set(dates)).sort((a, b) => b.localeCompare(a));
 }
 
-export async function saveForwardCurve(date: string, curve: ForwardCurveRow[]) {
+export async function saveForwardCurve(date: string, curve: ForwardCurveRow[], makeActive: boolean = true) {
+    if (!date || date === 'Unknown') return;
     curveCache[date] = curve;
     priceLookupCache.clear();
     try {
         localStorage.setItem(STORAGE_KEY_CURVES, JSON.stringify(curveCache));
     } catch (e) {
         console.warn("Failed saving forward curve to localStorage", e);
+    }
+    if (makeActive) {
+        setActiveCurveDate(date);
     }
     if (!auth.currentUser || !isFirebaseConfigured) return;
     try {
@@ -1103,6 +1154,10 @@ export async function saveForwardCurve(date: string, curve: ForwardCurveRow[]) {
 
 export async function deleteForwardCurve(date: string) {
     delete curveCache[date];
+    if (activeCurveDate === date) {
+        const remaining = Object.keys(curveCache).sort((a, b) => b.localeCompare(a));
+        setActiveCurveDate(remaining.length > 0 ? remaining[0] : '');
+    }
     if (!auth.currentUser || !isFirebaseConfigured) return;
     try {
         const docRef = doc(db, 'users', auth.currentUser.uid, 'forward_curves', date);
@@ -1117,7 +1172,8 @@ export function getAvailableCurveDatesSync(): string[] {
 }
 
 export function getForwardCurveSync(dateStr?: string): ForwardCurveRow[] {
-    if (dateStr) return curveCache[dateStr] || [];
+    const target = dateStr || getActiveCurveDate();
+    if (target && curveCache[target]) return curveCache[target];
     const keys = Object.keys(curveCache).sort((a, b) => b.localeCompare(a));
     return keys.length > 0 ? curveCache[keys[0]] : [];
 }
