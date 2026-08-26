@@ -326,6 +326,7 @@ const App: React.FC = () => {
   useEffect(() => {
     if (trmsData.forwardCurves && trmsData.forwardCurves.length > 0) {
       let updated = false;
+      const importedDates: string[] = [];
       trmsData.forwardCurves.forEach((fcData: ForwardCurveData) => {
         const monthMap: Record<string, Record<string, number>> = {};
         fcData.curves.forEach((curve: ForwardCurve) => {
@@ -342,13 +343,15 @@ const App: React.FC = () => {
 
         if (rows.length > 0) {
           saveForwardCurve(fcData.asOfDate, rows);
+          importedDates.push(fcData.asOfDate);
           updated = true;
         }
       });
       
       if (updated) {
         handleMarketRefresh();
-        toast.success('Forward Curves populated from Jarvis data', { icon: '📈' });
+        const dateStr = importedDates.filter(d => d && d !== 'Unknown').join(', ') || 'latest';
+        toast.success(`Forward Curve (${dateStr}) updated from Jarvis EOD date`, { icon: '📈' });
       }
     }
   }, [trmsData.forwardCurves, handleMarketRefresh]);

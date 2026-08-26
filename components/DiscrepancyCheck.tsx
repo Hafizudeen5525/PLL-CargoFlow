@@ -879,6 +879,7 @@ export const DiscrepancyCheck: React.FC<DiscrepancyCheckProps> = ({
 
         worker.postMessage({ 
           data: arrayBuffer, 
+          fileName: file.name,
           whitelistColumns: WHITELIST_COLUMNS,
           priorityColumns: PRIORITY_COLUMNS
         });
@@ -2251,9 +2252,11 @@ export const DiscrepancyCheck: React.FC<DiscrepancyCheckProps> = ({
                       />
                       <div>
                         <span className="block text-sm font-bold text-slate-700 group-hover:text-indigo-600 transition-colors">
-                          Import Forward Curves ({pendingData.forwardCurves.length})
+                          Import Forward Curves ({pendingData.forwardCurves.map(fc => fc.asOfDate).filter(d => d && d !== 'Unknown').join(', ') || `${pendingData.forwardCurves.length} found`})
                         </span>
-                        <span className="block text-xs text-slate-500">Extract and save forward curve data from the "Forward Curve" sheet in Jarvis files.</span>
+                        <span className="block text-xs text-slate-500">
+                          Extract and save forward curve data reflecting EOD date (cell A2) <strong>{pendingData.forwardCurves.map(fc => fc.asOfDate).filter(Boolean).join(', ')}</strong>.
+                        </span>
                       </div>
                     </label>
                   )}
