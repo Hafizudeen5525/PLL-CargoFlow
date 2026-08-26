@@ -129,7 +129,9 @@ const INDEX_ALIASES: Record<string, string> = {
     'AECO': 'AECO',
     'WTI': 'WTI',
     'STATION 2': 'STN 2',
+    'STATION2': 'STN 2',
     'STN 2': 'STN 2',
+    'STN2': 'STN 2',
     'HH LAST DAY': 'HH Last Day',
     'HENRY HUB LAST DAY': 'HH Last Day',
     'FIX AND FIRM': 'Fix and Firm'
@@ -653,8 +655,11 @@ function getIndexPriceInternal(index: string, refDateStr: string, monthDef: stri
         const histRow = historical.find((r: ForwardCurveRow) => normalizeMonthKey(r.month) === normTarget);
         const curveRow = curve.find((r: ForwardCurveRow) => normalizeMonthKey(r.month) === normTarget);
         
-        p = getPriceForIndex(histRow?.prices, canonicalIndex);
-        if (p === 0) p = getPriceForIndex(curveRow?.prices, canonicalIndex);
+        // Prioritize Forward Curve over Historical Curve:
+        // If forward curve has a value (> 0), use forward curve.
+        // If forward curve is 0 or empty, then use historical curve.
+        p = getPriceForIndex(curveRow?.prices, canonicalIndex);
+        if (p === 0) p = getPriceForIndex(histRow?.prices, canonicalIndex);
 
         if (p > 0) {
             total += p;

@@ -36,6 +36,172 @@ function shiftEodDatePlusOne(val: any): string {
   return strVal;
 }
 
+function normalizeIndexNameForImport(raw: string): string {
+  if (!raw) return '';
+  const clean = raw.trim();
+  const upper = clean.toUpperCase();
+  if (upper.includes('BRIPE') || upper.includes('BRENT INDEX')) return 'BRIPE';
+  if (upper.includes('DATED BRENT') || upper === 'BRENT') return 'Dated Brent';
+  if (upper.includes('JCC') || upper.includes('JAPAN CRUDE')) return 'JCC';
+  if (upper.includes('JKM')) return 'JKM';
+  if (upper.includes('TTF') || upper.includes('DUTCH')) return 'TTF';
+  if (upper.includes('NBP')) return 'NBP';
+  if (upper.includes('HH LAST DAY') || upper.includes('HENRY HUB LAST DAY')) return 'HH Last Day';
+  if (upper.includes('HH') || upper.includes('HENRY HUB')) return 'HH';
+  if (upper.includes('AECO')) return 'AECO';
+  if (upper.includes('STATION 2') || upper.includes('STATION2') || upper.includes('STN 2') || upper.includes('STN2')) return 'STN 2';
+  return clean;
+}
+
+function parseContractMonth(val: any): string | null {
+  if (val === undefined || val === null || val === '') return null;
+  if (val instanceof Date) {
+    if (isNaN(val.getTime())) return null;
+    const y = val.getUTCFullYear();
+    const m = String(val.getUTCMonth() + 1).padStart(2, '0');
+    return `${y}-${m}`;
+  }
+  if (typeof val === 'number') {
+    if (val > 20000 && val < 90000) {
+      const date = new Date(Math.round((val - 25569) * 86400 * 1000));
+      const y = date.getUTCFullYear();
+      const m = String(date.getUTCMonth() + 1).padStart(2, '0');
+      return `${y}-${m}`;
+    }
+    return null;
+  }
+  const raw = String(val).trim();
+  if (!raw) return null;
+
+  const isoMatch = raw.match(/^(\d{4})[-/.](\d{1,2})/);
+  if (isoMatch) {
+    return `${isoMatch[1]}-${String(parseInt(isoMatch[2], 10)).padStart(2, '0')}`;
+  }
+
+  const monthsMap: Record<string, string> = {
+    jan: '01', feb: '02', mar: '03', apr: '04', may: '05', jun: '06',
+    jul: '07', aug: '08', sep: '09', oct: '10', nov: '11', dec: '12'
+  };
+  const mMatch = raw.match(/([a-zA-Z]{3,})[-/.\s,'`]+(\d{2,4})|(\d{2,4})[-/.\s,'`]+([a-zA-Z]{3,})/);
+  if (mMatch) {
+    const mStr = (mMatch[1] || mMatch[4] || '').toLowerCase().slice(0, 3);
+    const yStr = mMatch[2] || mMatch[3] || '';
+    if (monthsMap[mStr] && yStr) {
+      let y = parseInt(yStr, 10);
+      if (y < 100) y += 2000;
+      return `${y}-${monthsMap[mStr]}`;
+    }
+  }
+  return null;
+}
+
+function extractCurveSheet(sheet: XLSX.WorkSheet | null | undefined, defaultAsOfDate: string = 'Unknown'): { asOfDate: string; curves: any[] } | null {
+  if (!sheet) return null;
+  const rows = XLSX.utils.sheet_to_json(sheet, { header: 1 }) as any[][];
+  if (!rows || rows.length === 0) return null;
+
+  let asOfDate = defaultAsOfDate;
+  const a2 = sheet['A2'] || sheet['A1'];
+  if (a2) {
+    if (a2.t === 'd' || (a2.t === 'n' && a2.v > 20000 && a2.v < 90000)) {
+      const d = a2.v instanceof Date ? a2.v : new Date(Math.round((a2.v - 25569) * 86400 * 1000));
+      asOfDate = d.toISOString().split('T')[0];
+    } else if (a2.v) {
+      asOfDate = a2.w || String(a2.v);
+    }
+  }
+
+  // Step 1: Detect header row containing indices
+  let headerRowIdx = -1;
+  let indexColMap: Array<{ colIdx: number; indexName: string }> = [];
+
+  for (let r = 0; r < Math.min(rows.length, 10); r++) {
+    const row = rows[r];
+    if (!row || !Array.isArray(row)) continue;
+    const potential: Array<{ colIdx: number; indexName: string }> = [];
+    
+    for (let c = 0; c < row.length; c++) {
+      const cellVal = String(row[c] || '').trim();
+      if (!cellVal) continue;
+      const norm = normalizeIndexNameForImport(cellVal);
+      if (['BRIPE', 'JCC', 'Dated Brent', 'HH', 'HH Last Day', 'NBP', 'JKM', 'TTF', 'AECO', 'STN 2'].includes(norm)) {
+        potential.push({ colIdx: c, indexName: norm });
+      }
+    }
+
+    if (potential.length >= 2) {
+      headerRowIdx = r;
+      indexColMap = potential;
+      break;
+    }
+  }
+
+  // Fallback: If no recognized header row, check row 1 (0-indexed) with fallback names
+  if (headerRowIdx === -1) {
+    headerRowIdx = 1;
+    const fallback = ['BRIPE', 'JCC', 'Dated Brent', 'HH', 'NBP', 'JKM', 'TTF', 'AECO', 'STN 2'];
+    for (let c = 2; c <= 10; c++) {
+      const cellVal = rows[1]?.[c];
+      const raw = cellVal ? String(cellVal).trim() : '';
+      const norm = raw ? normalizeIndexNameForImport(raw) : fallback[c - 2];
+      indexColMap.push({ colIdx: c, indexName: norm || `Index ${c - 1}` });
+    }
+  }
+
+  // Step 2: Determine Contract Month column (column B / index 1 or column A / index 0)
+  let monthColIdx = 1;
+  for (let r = headerRowIdx + 1; r < Math.min(rows.length, headerRowIdx + 10); r++) {
+    const row = rows[r];
+    if (!row) continue;
+    if (parseContractMonth(row[1])) {
+      monthColIdx = 1;
+      break;
+    } else if (parseContractMonth(row[0])) {
+      monthColIdx = 0;
+      break;
+    }
+  }
+
+  const curves: Record<string, { index: string; points: Array<{ month: string; value: number }> }> = {};
+  indexColMap.forEach(({ indexName }) => {
+    if (!curves[indexName]) {
+      curves[indexName] = { index: indexName, points: [] };
+    }
+  });
+
+  // Step 3: Dynamically scan from row immediately following header (headerRowIdx + 1)
+  for (let r = headerRowIdx + 1; r < rows.length; r++) {
+    const row = rows[r];
+    if (!row || !Array.isArray(row)) continue;
+
+    const monthVal = row[monthColIdx];
+    const monthStr = parseContractMonth(monthVal);
+    if (!monthStr) continue;
+
+    indexColMap.forEach(({ colIdx, indexName }) => {
+      const val = row[colIdx];
+      if (val === undefined || val === null || val === '') return;
+      const numVal = typeof val === 'number' ? val : parseFloat(String(val).replace(/[$,]/g, ''));
+      if (!isNaN(numVal) && numVal !== 0) {
+        const existing = curves[indexName].points.find(p => p.month === monthStr);
+        if (existing) {
+          existing.value = numVal;
+        } else {
+          curves[indexName].points.push({ month: monthStr, value: numVal });
+        }
+      }
+    });
+  }
+
+  const curveList = Object.values(curves);
+  if (curveList.every(c => c.points.length === 0)) return null;
+
+  return {
+    asOfDate,
+    curves: curveList
+  };
+}
+
 self.onmessage = (e: MessageEvent) => {
   const { data, whitelistColumns, priorityColumns } = e.data;
   
@@ -403,87 +569,18 @@ self.onmessage = (e: MessageEvent) => {
     });
     const fcSheet = fcSheetName ? wb.Sheets[fcSheetName] : null;
     if (fcSheet) {
-        let asOfDate = 'Unknown';
-        const a2 = fcSheet['A2'];
-        if (a2) {
-            if (a2.t === 'd' || (a2.t === 'n' && a2.v > 20000)) {
-                const d = a2.v instanceof Date ? a2.v : new Date(Math.round((a2.v - 25569) * 86400 * 1000));
-                asOfDate = d.toISOString().split('T')[0];
-            } else {
-                asOfDate = a2.w || String(a2.v);
-            }
-        }
-        
-        // Read indexes from C2:K2
-        const indexes: string[] = [];
-        for (let i = 2; i <= 10; i++) {
-            const cell = fcSheet[XLSX.utils.encode_cell({ r: 1, c: i })];
-            if (cell) indexes.push(String(cell.v).trim());
-            else {
-                // Fallback to expected sequence if cell is empty
-                const fallback = ['BRIPE', 'JCC', 'Dated Brent', 'HH', 'NBP', 'JKM', 'TTF', 'AECO', 'Station 2'];
-                indexes.push(fallback[i-2] || `Index ${i-1}`);
-            }
-        }
+        forwardCurveData = extractCurveSheet(fcSheet, 'Unknown');
+    }
 
-        const curves: any[] = indexes.map((idx) => ({
-            index: idx,
-            points: []
-        }));
-
-        const fcRows = XLSX.utils.sheet_to_json(fcSheet, { header: 1 }) as any[][];
-        
-        for (let r = 3; r < fcRows.length; r++) {
-            const row = fcRows[r];
-            const monthVal = row[1]; // Column B
-            if (monthVal === undefined || monthVal === null) continue;
-            
-            let monthStr = '';
-            if (monthVal instanceof Date) {
-                const y = monthVal.getUTCFullYear();
-                const m = String(monthVal.getUTCMonth() + 1).padStart(2, '0');
-                monthStr = `${y}-${m}`;
-            } else if (typeof monthVal === 'number') {
-                const date = new Date(Math.round((monthVal - 25569) * 86400 * 1000));
-                const y = date.getUTCFullYear();
-                const m = String(date.getUTCMonth() + 1).padStart(2, '0');
-                monthStr = `${y}-${m}`;
-            } else {
-                const raw = String(monthVal).trim();
-                const isoMatch = raw.match(/^(\d{4})[-/.](\d{1,2})/);
-                if (isoMatch) {
-                    monthStr = `${isoMatch[1]}-${String(parseInt(isoMatch[2], 10)).padStart(2, '0')}`;
-                } else {
-                    const monthsMap: Record<string, string> = {
-                        jan: '01', feb: '02', mar: '03', apr: '04', may: '05', jun: '06',
-                        jul: '07', aug: '08', sep: '09', oct: '10', nov: '11', dec: '12'
-                    };
-                    const mMatch = raw.match(/([a-zA-Z]{3,})[-/.\s,]+(\d{2,4})|(\d{2,4})[-/.\s,]+([a-zA-Z]{3,})/);
-                    if (mMatch) {
-                        const mStr = (mMatch[1] || mMatch[4] || '').toLowerCase().slice(0, 3);
-                        const yStr = mMatch[2] || mMatch[3] || '';
-                        if (monthsMap[mStr] && yStr) {
-                            let y = parseInt(yStr, 10);
-                            if (y < 100) y += 2000;
-                            monthStr = `${y}-${monthsMap[mStr]}`;
-                        } else {
-                            monthStr = raw;
-                        }
-                    } else {
-                        monthStr = raw;
-                    }
-                }
-            }
-
-            for (let i = 0; i < indexes.length; i++) {
-                const val = row[i + 2]; // Columns C to K
-                const numVal = typeof val === 'number' ? val : parseFloat(String(val || '').replace(/[$,]/g, ''));
-                if (!isNaN(numVal) && numVal !== 0) {
-                    curves[i].points.push({ month: monthStr, value: numVal });
-                }
-            }
-        }
-        forwardCurveData = { asOfDate, curves };
+    // Extract Historical Curve if exists
+    let historicalCurveData = null;
+    const histSheetName = wb.SheetNames.find(n => {
+        const lower = n.trim().toLowerCase();
+        return lower === "historical curve" || lower === "historical" || lower === "historical prices" || lower === "hist curve" || lower === "historical data" || (lower.includes("hist") && lower.includes("curve"));
+    });
+    const histSheet = histSheetName ? wb.Sheets[histSheetName] : null;
+    if (histSheet) {
+        historicalCurveData = extractCurveSheet(histSheet, 'Historical');
     }
 
     self.postMessage({
@@ -494,9 +591,11 @@ self.onmessage = (e: MessageEvent) => {
       trmsAgg,
       extractedRows,
       forwardCurve: forwardCurveData,
+      historicalCurve: historicalCurveData,
       debugInfo: {
         sheetNames: wb.SheetNames,
-        foundFcSheet: fcSheetName || 'None'
+        foundFcSheet: fcSheetName || 'None',
+        foundHistSheet: histSheetName || 'None'
       },
       summary: {
         total: rawData.length,

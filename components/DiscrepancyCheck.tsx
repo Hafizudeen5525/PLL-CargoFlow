@@ -212,6 +212,7 @@ export interface ReconciliationData {
     paper: any[];
     trmsAgg: TRMSAggregation;
     forwardCurves: ForwardCurveData[];
+    historicalCurves?: ForwardCurveData[];
     uniqueValues: Record<string, Record<string, any[]>>;
     portfolioName?: string;
     portfolioYear?: string;
@@ -774,6 +775,7 @@ export const DiscrepancyCheck: React.FC<DiscrepancyCheckProps> = ({
       paper: [],
       trmsAgg: {},
       forwardCurves: [],
+      historicalCurves: [],
       uniqueValues: {},
       portfolioName: 'Unknown',
       portfolioYear: 'Unknown',
@@ -836,6 +838,14 @@ export const DiscrepancyCheck: React.FC<DiscrepancyCheckProps> = ({
             if (result.forwardCurve) {
               aggregatedData.forwardCurves.push({
                 ...result.forwardCurve,
+                fileName: file.name
+              });
+            }
+
+            if (result.historicalCurve) {
+              if (!aggregatedData.historicalCurves) aggregatedData.historicalCurves = [];
+              aggregatedData.historicalCurves.push({
+                ...result.historicalCurve,
                 fileName: file.name
               });
             }

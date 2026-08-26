@@ -13,7 +13,7 @@ import { UserManagement } from './components/UserManagement';
 import { DiscrepancyCheck, ReconciliationData } from './components/DiscrepancyCheck';
 import { PriceTabHighlightTarget } from './components/PriceTab';
 import { CargoProfile, PnLBucket, ForwardCurveData, ForwardCurve, ForwardCurvePoint } from './types';
-import { getMarketData, getForwardCurve, recalculateProfile, getPortfolioYear, saveForwardCurve, normalizeMonthKey, normalizeStrategyName } from './services/calculationService';
+import { getMarketData, getForwardCurve, recalculateProfile, getPortfolioYear, saveForwardCurve, saveHistoricalCurve, normalizeMonthKey, normalizeStrategyName } from './services/calculationService';
 import { getFromDB, saveToDB } from './services/db';
 import { auth, db, handleFirestoreError, FirestoreOperation, isFirebaseConfigured } from './firebase';
 import { onAuthStateChanged, User } from 'firebase/auth';
@@ -352,6 +352,37 @@ const App: React.FC = () => {
       }
     }
   }, [trmsData.forwardCurves, handleMarketRefresh]);
+
+  // Populate Historical Curves from Jarvis/Excel data
+  useEffect(() => {
+    if (trmsData.historicalCurves && trmsData.historicalCurves.length > 0) {
+      let updated = false;
+      trmsData.historicalCurves.forEach((hcData: ForwardCurveData) => {
+        const monthMap: Record<string, Record<string, number>> = {};
+        hcData.curves.forEach((curve: ForwardCurve) => {
+          curve.points.forEach((point: ForwardCurvePoint) => {
+            const normMonth = normalizeMonthKey(point.month) || point.month;
+            if (!monthMap[normMonth]) monthMap[normMonth] = {};
+            monthMap[normMonth][curve.index] = point.value;
+          });
+        });
+        const rows = Object.entries(monthMap).map(([month, prices]) => ({
+          month,
+          prices
+        })).sort((a, b) => a.month.localeCompare(b.month));
+
+        if (rows.length > 0) {
+          saveHistoricalCurve(rows);
+          updated = true;
+        }
+      });
+      
+      if (updated) {
+        handleMarketRefresh();
+        toast.success('Historical Curves populated from Jarvis/Excel data', { icon: '📊' });
+      }
+    }
+  }, [trmsData.historicalCurves, handleMarketRefresh]);
 
   // Auto-sync from Jarvis based on options
   useEffect(() => {

@@ -2,7 +2,7 @@ import React, { useState, useMemo, useEffect, useRef } from 'react';
 import { getIndexPrice, getAvailableCurveDatesSync, normalizeMonthKey } from '../services/calculationService';
 import * as XLSX from 'xlsx';
 import { toast } from 'react-hot-toast';
-import { Copy, Download, Search, Info, Calendar, Sparkles, X, Target } from 'lucide-react';
+import { Copy, Download, Search, Info, Calendar, Sparkles, X, Target, AlertTriangle, AlertCircle, Eye, EyeOff } from 'lucide-react';
 
 export interface PriceTabHighlightTarget {
   index: string;
@@ -75,8 +75,8 @@ const PRICE_TAB_ROWS: PriceTableRowDef[] = [
   // AECO
   { index: 'AECO', monthDef: 'n', category: 'Canadian Gas' },
 
-  // Station 2
-  { index: 'Station 2', monthDef: 'n', category: 'Canadian Gas' },
+  // STN 2 (Station 2)
+  { index: 'STN 2', monthDef: 'n', category: 'Canadian Gas' },
 ];
 
 function normalizeIndexForPriceTab(rawIndex: string): string {
@@ -92,7 +92,7 @@ function normalizeIndexForPriceTab(rawIndex: string): string {
   if (upper.includes('HH LAST DAY') || upper.includes('HENRY HUB LAST DAY')) return 'HH Last Day';
   if (upper.includes('HH') || upper.includes('HENRY HUB')) return 'HH';
   if (upper.includes('AECO')) return 'AECO';
-  if (upper.includes('STATION 2') || upper.includes('STN 2') || upper.includes('STN2')) return 'Station 2';
+  if (upper.includes('STATION 2') || upper.includes('STATION2') || upper.includes('STN 2') || upper.includes('STN2')) return 'STN 2';
   return clean;
 }
 
@@ -215,14 +215,15 @@ export const PriceTab: React.FC<PriceTabProps> = ({
   const [activeHighlight, setActiveHighlight] = useState<PriceTabHighlightTarget | null>(highlightTarget || null);
   const [searchTerm, setSearchTerm] = useState('');
   const [selectedCategory, setSelectedCategory] = useState<string>('All');
-  const [hoveredCell, setHoveredCell] = useState<{ rowIdx: number; colKey: string; details: string; monthUsed: string } | null>(null);
+  const [highlightIncomplete, setHighlightIncomplete] = useState<boolean>(true);
+  const [showIncompleteOnly, setShowIncompleteOnly] = useState<boolean>(false);
+  const [hoveredCell, setHoveredCell] = useState<{ rowIdx: number; colKey: string; details: string; monthUsed: string; isMissing?: boolean } | null>(null);
 
   const scrollContainerRef = useRef<HTMLDivElement>(null);
 
   // Sync highlight target if changed from props
   useEffect(() => {
     if (highlightTarget) {
-      // eslint-disable-next-line react-hooks/set-state-in-effect
       setActiveHighlight(highlightTarget);
 
       if (highlightTarget.portfolioYear) {
@@ -266,20 +267,6 @@ export const PriceTab: React.FC<PriceTabProps> = ({
     return { targetIndex, targetDef, targetMonthKey };
   }, [activeHighlight]);
 
-  const filteredRows = useMemo(() => {
-    return PRICE_TAB_ROWS.filter(r => {
-      const matchesSearch = searchTerm.trim() === '' || 
-        r.index.toLowerCase().includes(searchTerm.toLowerCase()) || 
-        r.monthDef.toLowerCase().includes(searchTerm.toLowerCase());
-      
-      const matchesCategory = selectedCategory === 'All' || 
-        (selectedCategory === 'Oil & Condensate' && (r.index.includes('Brent') || r.index.includes('BRIPE') || r.index.includes('JCC'))) ||
-        (selectedCategory === 'LNG / Gas' && !r.index.includes('Brent') && !r.index.includes('BRIPE') && !r.index.includes('JCC'));
-      
-      return matchesSearch && matchesCategory;
-    });
-  }, [searchTerm, selectedCategory]);
-
   // Compute price grid data
   const gridData = useMemo(() => {
     const matrix: Array<{
@@ -298,6 +285,51 @@ export const PriceTab: React.FC<PriceTabProps> = ({
 
     return matrix;
   }, [monthColumns, activeCurveDate]);
+
+  // Incomplete stats calculation
+  const incompleteStats = useMemo(() => {
+    let totalMissing = 0;
+    let portfolioYearMissing = 0;
+    const rowsWithMissing = new Set<string>();
+
+    gridData.forEach(item => {
+      let rowHasMissing = false;
+      monthColumns.forEach(col => {
+        const p = item.prices[col.key]?.price;
+        if (p === undefined || p === null || p <= 0) {
+          totalMissing++;
+          if (col.isPortfolioYear) portfolioYearMissing++;
+          rowHasMissing = true;
+        }
+      });
+      if (rowHasMissing) {
+        rowsWithMissing.add(`${item.row.index}___${item.row.monthDef}`);
+      }
+    });
+
+    return {
+      totalMissing,
+      portfolioYearMissing,
+      rowsWithMissingCount: rowsWithMissing.size,
+      isRowIncomplete: (index: string, monthDef: string) => rowsWithMissing.has(`${index}___${monthDef}`)
+    };
+  }, [gridData, monthColumns]);
+
+  const filteredRows = useMemo(() => {
+    return PRICE_TAB_ROWS.filter(r => {
+      const matchesSearch = searchTerm.trim() === '' || 
+        r.index.toLowerCase().includes(searchTerm.toLowerCase()) || 
+        r.monthDef.toLowerCase().includes(searchTerm.toLowerCase());
+      
+      const matchesCategory = selectedCategory === 'All' || 
+        (selectedCategory === 'Oil & Condensate' && (r.index.includes('Brent') || r.index.includes('BRIPE') || r.index.includes('JCC'))) ||
+        (selectedCategory === 'LNG / Gas' && !r.index.includes('Brent') && !r.index.includes('BRIPE') && !r.index.includes('JCC'));
+      
+      const matchesIncompleteOnly = !showIncompleteOnly || incompleteStats.isRowIncomplete(r.index, r.monthDef);
+
+      return matchesSearch && matchesCategory && matchesIncompleteOnly;
+    });
+  }, [searchTerm, selectedCategory, showIncompleteOnly, incompleteStats]);
 
   // Find info about the highlighted cell for the header banner
   const highlightedPriceInfo = useMemo(() => {
@@ -447,10 +479,47 @@ export const PriceTab: React.FC<PriceTabProps> = ({
               </button>
             ))}
           </div>
+
+          {/* Incomplete Highlight & Filter Controls */}
+          <div className="flex items-center gap-2 pl-2 border-l border-slate-200">
+            <button
+              onClick={() => setHighlightIncomplete(!highlightIncomplete)}
+              className={`flex items-center gap-1.5 px-2.5 py-1 text-xs font-bold rounded-lg border transition-all ${
+                highlightIncomplete
+                  ? 'bg-amber-100 text-amber-900 border-amber-300 shadow-xs'
+                  : 'bg-white text-slate-500 border-slate-200 hover:bg-slate-50'
+              }`}
+              title="Highlight cells with missing or incomplete forward/historical curve data"
+            >
+              <AlertTriangle className={`w-3.5 h-3.5 ${highlightIncomplete ? 'text-amber-600' : 'text-slate-400'}`} />
+              <span>Highlight Incomplete</span>
+            </button>
+
+            {incompleteStats.rowsWithMissingCount > 0 && (
+              <button
+                onClick={() => setShowIncompleteOnly(!showIncompleteOnly)}
+                className={`flex items-center gap-1 px-2.5 py-1 text-xs font-bold rounded-lg border transition-all ${
+                  showIncompleteOnly
+                    ? 'bg-rose-600 text-white border-rose-700 shadow-xs'
+                    : 'bg-white text-rose-700 border-rose-200 hover:bg-rose-50'
+                }`}
+                title="Filter table to only show rows with incomplete price points"
+              >
+                {showIncompleteOnly ? <EyeOff className="w-3.5 h-3.5" /> : <Eye className="w-3.5 h-3.5" />}
+                <span>Incomplete Only ({incompleteStats.rowsWithMissingCount})</span>
+              </button>
+            )}
+          </div>
         </div>
 
         {/* Action Buttons */}
         <div className="flex items-center gap-2">
+          {incompleteStats.portfolioYearMissing > 0 && (
+            <span className="hidden lg:inline-flex items-center gap-1 px-2.5 py-1 text-[11px] font-bold bg-amber-50 text-amber-800 border border-amber-200 rounded-lg">
+              <AlertCircle className="w-3.5 h-3.5 text-amber-600" />
+              <span>{incompleteStats.portfolioYearMissing} Missing in {selectedYear}</span>
+            </span>
+          )}
           <button
             onClick={handleCopyTSV}
             className="flex items-center gap-1.5 px-3 py-1.5 text-xs font-bold text-slate-700 bg-white border border-slate-200 rounded-lg hover:bg-slate-50 shadow-sm transition-all"
@@ -469,6 +538,23 @@ export const PriceTab: React.FC<PriceTabProps> = ({
           </button>
         </div>
       </div>
+
+      {/* Incomplete Warning Bar */}
+      {highlightIncomplete && incompleteStats.totalMissing > 0 && (
+        <div className="bg-amber-50/90 border-b border-amber-200 px-6 py-2 flex items-center justify-between text-xs text-amber-900 shrink-0">
+          <div className="flex items-center gap-2">
+            <AlertTriangle className="w-4 h-4 text-amber-600 shrink-0" />
+            <span>
+              <strong>Incomplete Price Points Detected:</strong> {incompleteStats.totalMissing} contract months across {incompleteStats.rowsWithMissingCount} configurations lack valid forward or historical curve prices (highlighted below with amber dashed boxes).
+            </span>
+          </div>
+          <div className="flex items-center gap-3">
+            <span className="text-[11px] text-amber-700 font-medium">
+              Priority order: <strong>Forward Curve</strong> → <strong>Historical Curve</strong>
+            </span>
+          </div>
+        </div>
+      )}
 
       {/* Target Cell Highlighting Inspection Banner */}
       {activeHighlight && (
@@ -668,25 +754,28 @@ export const PriceTab: React.FC<PriceTabProps> = ({
                         const priceObj = item?.prices[col.key];
                         const price = priceObj?.price;
                         const hasPrice = price !== undefined && price !== null && price > 0;
+                        const isIncomplete = !hasPrice;
+                        const showMissingHighlight = isIncomplete && highlightIncomplete;
 
                         return (
                           <td
                             key={col.key}
                             id={isExactTargetCell ? 'price-tab-target-cell' : undefined}
                             onMouseEnter={() => {
-                              if (priceObj) {
-                                setHoveredCell({
-                                  rowIdx: rIdx,
-                                  colKey: col.key,
-                                  details: priceObj.details,
-                                  monthUsed: priceObj.monthUsed,
-                                });
-                              }
+                              setHoveredCell({
+                                rowIdx: rIdx,
+                                colKey: col.key,
+                                details: priceObj?.details || (isIncomplete ? `Missing price: No Forward or Historical curve point for ${rowDef.index} (${col.label})` : ''),
+                                monthUsed: priceObj?.monthUsed || col.label,
+                                isMissing: isIncomplete
+                              });
                             }}
                             onMouseLeave={() => setHoveredCell(null)}
                             className={`px-3 py-2 text-xs font-mono text-right whitespace-nowrap border-l border-slate-200 transition-all ${
                               isExactTargetCell
                                 ? 'bg-gradient-to-r from-amber-200 via-yellow-200 to-amber-200 text-amber-950 font-black ring-4 ring-amber-500/80 shadow-lg scale-105 z-20'
+                                : showMissingHighlight
+                                ? 'bg-amber-50/50 hover:bg-amber-100/60'
                                 : isTargetRow
                                 ? 'bg-amber-50/60'
                                 : isTargetCol
@@ -694,8 +783,8 @@ export const PriceTab: React.FC<PriceTabProps> = ({
                                 : col.isPortfolioYear
                                 ? 'bg-blue-50/20'
                                 : ''
-                            } ${hasPrice ? 'text-slate-800' : 'text-slate-300'}`}
-                            title={priceObj?.details || ''}
+                            } ${hasPrice ? 'text-slate-800' : 'text-slate-400'}`}
+                            title={priceObj?.details || (isIncomplete ? `Missing price for ${rowDef.index} (${col.label})` : '')}
                           >
                             {hasPrice ? (
                               <div className="flex items-center justify-end gap-1.5">
@@ -707,6 +796,13 @@ export const PriceTab: React.FC<PriceTabProps> = ({
                                     🎯 RETRIEVED
                                   </span>
                                 )}
+                              </div>
+                            ) : showMissingHighlight ? (
+                              <div className="flex items-center justify-end gap-1">
+                                <span className="px-1.5 py-0.5 text-[10px] font-bold text-amber-700 bg-amber-100/90 border border-dashed border-amber-300 rounded shadow-2xs inline-flex items-center gap-0.5" title={`Incomplete: No curve data for ${col.label}`}>
+                                  <AlertTriangle className="w-2.5 h-2.5 text-amber-600 shrink-0" />
+                                  <span>Missing</span>
+                                </span>
                               </div>
                             ) : (
                               <span className="text-slate-300">-</span>
@@ -731,8 +827,8 @@ export const PriceTab: React.FC<PriceTabProps> = ({
             Pricing Formula Engine:
           </span>
           {hoveredCell ? (
-            <span className="text-[11px] font-mono text-blue-200 truncate max-w-2xl">
-              {hoveredCell.details} (Months: {hoveredCell.monthUsed})
+            <span className={`text-[11px] font-mono truncate max-w-2xl ${hoveredCell.isMissing ? 'text-amber-300 font-semibold' : 'text-blue-200'}`}>
+              {hoveredCell.details} {hoveredCell.monthUsed ? `(Months: ${hoveredCell.monthUsed})` : ''}
             </span>
           ) : (
             <span className="text-[11px] text-slate-400 italic">
@@ -745,6 +841,12 @@ export const PriceTab: React.FC<PriceTabProps> = ({
           <span>Active Curve: <strong className="text-white">{activeCurveDate || 'Latest'}</strong></span>
           <span className="text-slate-500">•</span>
           <span>Portfolio: <strong className="text-blue-300">{selectedYear}</strong></span>
+          {incompleteStats.totalMissing > 0 && (
+            <>
+              <span className="text-slate-500">•</span>
+              <span className="text-amber-300 font-bold">⚠️ {incompleteStats.totalMissing} Incomplete</span>
+            </>
+          )}
         </div>
       </div>
     </div>
