@@ -114,14 +114,8 @@ function parseContractMonth(val: any): string | null {
 
 function parseAnyDateString(rawStr: string): string | null {
   if (!rawStr) return null;
-  let str = String(rawStr).trim();
+  const str = String(rawStr).trim();
   if (!str) return null;
-
-  // Clean out common prefixes
-  str = str.replace(/^(?:EOD(?:\s*Date)?|As\s*of(?:\s*Date)?|Curve(?:\s*Date)?|Date|Forward\s*Curve(?:\s*as\s*of)?|Market\s*Data\s*(?:as\s*of)?)[:\s-]*/i, '').trim();
-
-  // Strip ordinals like 21st, 22nd, 23rd, 1st, 2nd, 3rd, 4th -> 21, 22, 23, 1, 2, 3, 4
-  const normalizedStr = str.replace(/\b(\d{1,2})(?:st|nd|rd|th)\b/gi, '$1');
 
   const monthNames: Record<string, string> = {
     jan: '01', feb: '02', mar: '03', apr: '04', may: '05', jun: '06',
@@ -131,14 +125,14 @@ function parseAnyDateString(rawStr: string): string | null {
     sept: '09'
   };
 
-  // 1. ISO format: YYYY-MM-DD or YYYY/MM/DD or YYYY.MM.DD or YYYY_MM_DD
-  const isoMatch = normalizedStr.match(/\b(20\d{2})[-/._](0?[1-9]|1[0-2])[-/._](0?[1-9]|[12]\d|3[01])\b/);
+  // 1. ISO format: YYYY-MM-DD or YYYY/MM/DD or YYYY.MM.DD
+  const isoMatch = str.match(/\b(20\d{2})[-/.](0?[1-9]|1[0-2])[-/.](0?[1-9]|[12]\d|3[01])\b/);
   if (isoMatch) {
     return `${isoMatch[1]}-${isoMatch[2].padStart(2, '0')}-${isoMatch[3].padStart(2, '0')}`;
   }
 
-  // 2. DD-MMM-YYYY or DD MMM YYYY or DD-MMM-YY or DD/MMM/YYYY or DD.MMM.YYYY (e.g. 21-Aug-2026, 21-Aug-26, 21 Aug 2026, 31-May-2024, 21-August-2026)
-  const dMmmYMatch = normalizedStr.match(/\b(0?[1-9]|[12]\d|3[01])[-/\s._]([a-zA-Z]{3,})[-/\s._](\d{2,4})\b/);
+  // 2. DD-MMM-YYYY or DD MMM YYYY or DD-MMM-YY or DD/MMM/YYYY or DD.MMM.YYYY (e.g. 19-Aug-2026, 19-Aug-26, 19 Aug 2026, 31-May-2024, 19-August-2026)
+  const dMmmYMatch = str.match(/\b(0?[1-9]|[12]\d|3[01])[-/\s.]([a-zA-Z]{3,})[-/\s.](\d{2,4})\b/);
   if (dMmmYMatch) {
     const day = dMmmYMatch[1].padStart(2, '0');
     const mStr = dMmmYMatch[2].toLowerCase().slice(0, 3);
@@ -149,8 +143,8 @@ function parseAnyDateString(rawStr: string): string | null {
     }
   }
 
-  // 3. MMM-DD-YYYY or MMM DD, YYYY or MMM DD YYYY (e.g. Aug 21, 2026, August 21 2026)
-  const mmmDYMatch = normalizedStr.match(/\b([a-zA-Z]{3,})[-/\s._](0?[1-9]|[12]\d|3[01])(?:,)?[-/\s._](\d{2,4})\b/);
+  // 3. MMM-DD-YYYY or MMM DD, YYYY or MMM DD YYYY (e.g. Aug 19, 2026, August 19 2026)
+  const mmmDYMatch = str.match(/\b([a-zA-Z]{3,})[-/\s.](0?[1-9]|[12]\d|3[01])(?:,)?[-/\s.](\d{2,4})\b/);
   if (mmmDYMatch) {
     const mStr = mmmDYMatch[1].toLowerCase().slice(0, 3);
     const day = mmmDYMatch[2].padStart(2, '0');
@@ -161,8 +155,8 @@ function parseAnyDateString(rawStr: string): string | null {
     }
   }
 
-  // 4. Slash/dash/dot date with year at end: e.g. 21/08/2026 or 08/21/2026 or 21/8/26 or 21-08-2026 or 21.08.2026
-  const genericDmyMatch = normalizedStr.match(/\b(0?[1-9]|[12]\d|3[01])[-/._](0?[1-9]|[12]\d|3[01])[-/._](20\d{2}|\d{2})\b/);
+  // 4. Slash/dash/dot date with year at end: e.g. 19/08/2026 or 08/19/2026 or 19/8/26 or 19-08-2026 or 19.08.2026
+  const genericDmyMatch = str.match(/\b(0?[1-9]|[12]\d|3[01])[-/.](0?[1-9]|[12]\d|3[01])[-/.](20\d{2}|\d{2})\b/);
   if (genericDmyMatch) {
     const p1 = parseInt(genericDmyMatch[1], 10);
     const p2 = parseInt(genericDmyMatch[2], 10);
@@ -181,33 +175,28 @@ function parseAnyDateString(rawStr: string): string | null {
     }
   }
 
-  // 5. 8-digit date string DDMMYYYY (e.g. 21082026 -> 2026-08-21)
-  const ddmmyyyy = normalizedStr.match(/\b(0[1-9]|[12]\d|3[01])(0[1-9]|1[0-2])(20\d{2})\b/);
+  // 5. 8-digit date string DDMMYYYY (e.g. 19082026 -> 2026-08-19)
+  const ddmmyyyy = str.match(/\b(0[1-9]|[12]\d|3[01])(0[1-9]|1[0-2])(20\d{2})\b/);
   if (ddmmyyyy) {
     return `${ddmmyyyy[3]}-${ddmmyyyy[2]}-${ddmmyyyy[1]}`;
   }
 
-  // 6. 8-digit date string YYYYMMDD (e.g. 20260821 -> 2026-08-21)
-  const yyyymmdd = normalizedStr.match(/\b(20\d{2})(0[1-9]|1[0-2])(0[1-9]|[12]\d|3[01])\b/);
+  // 6. 8-digit date string YYYYMMDD (e.g. 20260819 -> 2026-08-19)
+  const yyyymmdd = str.match(/\b(20\d{2})(0[1-9]|1[0-2])(0[1-9]|[12]\d|3[01])\b/);
   if (yyyymmdd) {
     return `${yyyymmdd[1]}-${yyyymmdd[2]}-${yyyymmdd[3]}`;
   }
 
-  // 7. Standard Date.parse fallback
-  const parsed = Date.parse(normalizedStr);
+  // 7. Try standard Date.parse after cleaning common prefixes
+  const cleanForParse = str.replace(/^(?:EOD|As\s*of|Curve|Date|Forward\s*Curve)[:\s]*/i, '').trim();
+  const parsed = Date.parse(cleanForParse);
   if (!isNaN(parsed)) {
     const d = new Date(parsed);
-    const uy = d.getUTCFullYear();
-    const um = String(d.getUTCMonth() + 1).padStart(2, '0');
-    const uday = String(d.getUTCDate()).padStart(2, '0');
-    if (uy >= 2000 && uy <= 2050) {
-      return `${uy}-${um}-${uday}`;
-    }
-    const ly = d.getFullYear();
-    const lm = String(d.getMonth() + 1).padStart(2, '0');
-    const lday = String(d.getDate()).padStart(2, '0');
-    if (ly >= 2000 && ly <= 2050) {
-      return `${ly}-${lm}-${lday}`;
+    const y = d.getFullYear();
+    const m = String(d.getMonth() + 1).padStart(2, '0');
+    const day = String(d.getDate()).padStart(2, '0');
+    if (y >= 2000 && y <= 2050) {
+      return `${y}-${m}-${day}`;
     }
   }
 
@@ -261,7 +250,7 @@ function tryExtractDateString(val: any, cellObj?: any): string | null {
   }
 
   // 4. Raw string candidates
-  const strCandidates = [cellObj?.v, val, cellObj?.f];
+  const strCandidates = [cellObj?.v, val];
   for (const raw of strCandidates) {
     if (!raw) continue;
     const str = String(raw).trim();
@@ -280,29 +269,19 @@ function parseCurveAsOfDate(
   fileName?: string
 ): string {
   // Priority 1: Cell A2 (EOD date in Jarvis Forward Curve cell A2)
-  const a2Val = tryExtractDateString(rows[1]?.[0], sheet['A2'] || sheet['a2']);
+  const a2Val = tryExtractDateString(rows[1]?.[0], sheet['A2']);
   if (a2Val) return a2Val;
 
-  if (sheet['A2']) {
-    const directA2 = tryExtractDateString(sheet['A2'].v, sheet['A2']);
-    if (directA2) return directA2;
-  }
-
   // Priority 2: Cell A1
-  const a1Val = tryExtractDateString(rows[0]?.[0], sheet['A1'] || sheet['a1']);
+  const a1Val = tryExtractDateString(rows[0]?.[0], sheet['A1']);
   if (a1Val) return a1Val;
 
-  if (sheet['A1']) {
-    const directA1 = tryExtractDateString(sheet['A1'].v, sheet['A1']);
-    if (directA1) return directA1;
-  }
-
   // Priority 3: Cell B2
-  const b2Val = tryExtractDateString(rows[1]?.[1], sheet['B2'] || sheet['b2']);
+  const b2Val = tryExtractDateString(rows[1]?.[1], sheet['B2']);
   if (b2Val) return b2Val;
 
   // Priority 4: Cell B1
-  const b1Val = tryExtractDateString(rows[0]?.[1], sheet['B1'] || sheet['b1']);
+  const b1Val = tryExtractDateString(rows[0]?.[1], sheet['B1']);
   if (b1Val) return b1Val;
 
   // Priority 5: Cell C2, C1, D2, D1, A3, B3
@@ -315,21 +294,16 @@ function parseCurveAsOfDate(
   const b3Val = tryExtractDateString(rows[2]?.[1], sheet['B3']);
   if (b3Val) return b3Val;
 
-  // Priority 6: Scan first 15 rows and first 10 cols for any cell containing an EOD date
-  for (let r = 0; r < Math.min(rows.length, 15); r++) {
+  // Priority 6: Scan first 10 rows and first 10 cols for any cell containing an EOD date
+  for (let r = 0; r < Math.min(rows.length, 10); r++) {
     for (let c = 0; c < Math.min(rows[r]?.length || 0, 10); c++) {
       const cellAddress = XLSX.utils.encode_cell({ r, c });
-      const cellVal = tryExtractDateString(rows[r]?.[c], sheet[cellAddress]);
+      const cellVal = tryExtractDateString(rows[r][c], sheet[cellAddress]);
       if (cellVal) return cellVal;
     }
   }
 
-  // Priority 7: Master Sheet EOD Date if available
-  if (defaultAsOfDate && defaultAsOfDate !== 'Unknown' && defaultAsOfDate !== 'Historical') {
-    return defaultAsOfDate;
-  }
-
-  // Priority 8: Filename date (e.g. 2026_JARVISv3_CarvedOut_21082026.xlsx)
+  // Priority 7: Filename date (e.g. 2026_JARVISv3_CarvedOut_19082026.xlsx)
   if (fileName) {
     const fnVal = parseAnyDateString(fileName);
     if (fnVal) return fnVal;
@@ -451,7 +425,7 @@ self.onmessage = (e: MessageEvent) => {
   const { data, fileName, whitelistColumns, priorityColumns } = e.data;
   
   try {
-    const wb = XLSX.read(data, { type: 'array', cellDates: true, cellNF: true, cellText: true });
+    const wb = XLSX.read(data, { type: 'array', cellDates: true });
     
     // Robust sheet selection
     const sheetNames = wb.SheetNames;
@@ -806,19 +780,6 @@ self.onmessage = (e: MessageEvent) => {
         }
     });
 
-    // Determine EOD date from Master Sheet if available
-    let masterEodDate = 'Unknown';
-    for (const r of extractedRows) {
-        if (r['EOD Date'] && r['EOD Date'] !== 'Unknown') {
-            masterEodDate = r['EOD Date'];
-            break;
-        }
-        if (r['EOD_Date'] && r['EOD_Date'] !== 'Unknown') {
-            masterEodDate = r['EOD_Date'];
-            break;
-        }
-    }
-
     // Extract Forward Curve if exists
     let forwardCurveData = null;
     const fcSheetName = wb.SheetNames.find(n => {
@@ -828,7 +789,7 @@ self.onmessage = (e: MessageEvent) => {
     });
     const fcSheet = fcSheetName ? wb.Sheets[fcSheetName] : null;
     if (fcSheet) {
-        forwardCurveData = extractCurveSheet(fcSheet, masterEodDate, fileName);
+        forwardCurveData = extractCurveSheet(fcSheet, 'Unknown', fileName);
     }
 
     // Extract Historical Curve if exists

@@ -226,11 +226,8 @@ export interface ReconciliationData {
     fileNames?: string[];
     syncOptions?: {
         syncReconciled: boolean;
-        syncVolumes?: boolean;
         syncPrices: boolean;
         overwriteManual: boolean;
-        syncForwardCurves?: boolean;
-        syncHistoricalCurves?: boolean;
     };
 }
 
@@ -583,7 +580,6 @@ export const DiscrepancyCheck: React.FC<DiscrepancyCheckProps> = ({
   const [pendingData, setPendingData] = useState<ReconciliationData | null>(null);
   const [syncOptions, setSyncOptions] = useState({
     syncReconciled: true,
-    syncVolumes: true,
     syncPrices: false,
     overwriteManual: false,
     syncForwardCurves: true,
@@ -2239,19 +2235,6 @@ export const DiscrepancyCheck: React.FC<DiscrepancyCheckProps> = ({
                     <div>
                       <span className="block text-sm font-bold text-slate-700 group-hover:text-indigo-600 transition-colors">Sync Reconciled Values</span>
                       <span className="block text-xs text-slate-500">Import official Finance Revenue and Cost from Master Sheet. This will override market calculations.</span>
-                    </div>
-                  </label>
-
-                  <label className="flex items-start gap-3 cursor-pointer group">
-                    <input 
-                      type="checkbox" 
-                      checked={syncOptions.syncVolumes}
-                      onChange={e => setSyncOptions(prev => ({ ...prev, syncVolumes: e.target.checked }))}
-                      className="mt-1 w-4 h-4 text-indigo-600 rounded border-slate-300 focus:ring-indigo-500"
-                    />
-                    <div>
-                      <span className="block text-sm font-bold text-slate-700 group-hover:text-indigo-600 transition-colors">Sync Purchase & Sales Volumes</span>
-                      <span className="block text-xs text-slate-500">Update loaded & delivered volumes from Jarvis for all matching cargoes, regardless of whether realized or unrealized.</span>
                     </div>
                   </label>
 
