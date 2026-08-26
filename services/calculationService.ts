@@ -1015,7 +1015,8 @@ export function getActiveCurveDate(): string {
 }
 
 export function setActiveCurveDate(date: string) {
-    if (!date) return;
+    if (!date || date === 'Unknown') return;
+    if (activeCurveDate === date) return;
     activeCurveDate = date;
     try {
         localStorage.setItem(STORAGE_KEY_ACTIVE_CURVE, date);

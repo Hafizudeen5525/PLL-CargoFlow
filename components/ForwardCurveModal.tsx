@@ -74,6 +74,11 @@ export const ForwardCurveModal: React.FC<ForwardCurveModalProps> = ({
       return dates.length > 0 ? dates[0] : new Date().toISOString().split('T')[0];
   });
 
+  const curveDateRef = useRef<string>(curveDate);
+  useEffect(() => {
+      curveDateRef.current = curveDate;
+  }, [curveDate]);
+
   const [compareDateA, setCompareDateA] = useState<string>(() => {
       const dates = getAvailableCurveDatesSync();
       return dates.length >= 1 ? dates[0] : '';
@@ -94,7 +99,8 @@ export const ForwardCurveModal: React.FC<ForwardCurveModalProps> = ({
       const data = getForwardCurveSync(initialDate);
       if (data.length === 0) {
           const skeleton: ForwardCurveRow[] = [];
-          const start = new Date(initialDate);
+          const rawStart = new Date(initialDate);
+          const start = isNaN(rawStart.getTime()) ? new Date() : rawStart;
           for (let i = 0; i < 12; i++) {
               const d = new Date(start.getFullYear(), start.getMonth() + i, 1);
               const mKey = `${d.getFullYear()}-${String(d.getMonth() + 1).padStart(2, '0')}`;
@@ -117,11 +123,13 @@ export const ForwardCurveModal: React.FC<ForwardCurveModalProps> = ({
   const containerRef = useRef<HTMLDivElement>(null);
 
   const loadCurveData = useCallback(async (date: string) => {
+      if (!date) return;
       const data = await getForwardCurve(date);
       let targetGrid: ForwardCurveRow[];
       if (data.length === 0) {
           const skeleton: ForwardCurveRow[] = [];
-          const start = new Date(date);
+          const rawStart = new Date(date);
+          const start = isNaN(rawStart.getTime()) ? new Date() : rawStart;
           for (let i = 0; i < 12; i++) {
               const d = new Date(start.getFullYear(), start.getMonth() + i, 1);
               const mKey = `${d.getFullYear()}-${String(d.getMonth() + 1).padStart(2, '0')}`;
@@ -133,7 +141,6 @@ export const ForwardCurveModal: React.FC<ForwardCurveModalProps> = ({
       }
       setManageGrid(targetGrid);
       setCurveDate(date);
-      setActiveCurveDate(date);
       setSelection(null);
       setEditingCell(null);
       setHistoryPast([]);
@@ -146,24 +153,13 @@ export const ForwardCurveModal: React.FC<ForwardCurveModalProps> = ({
 
   const lastLoadedRef = useRef<{ date: string } | null>(null);
 
-  useEffect(() => {
-      const targetDate = getActiveCurveDate();
-      if (lastLoadedRef.current?.date !== targetDate) {
-          const timer = setTimeout(() => {
-              loadCurveData(targetDate);
-              lastLoadedRef.current = { date: targetDate };
-          }, 0);
-          return () => clearTimeout(timer);
-      }
-  }, [loadCurveData]);
-
   // Listen for curve date change events from external imports or components
   useEffect(() => {
       const handleDateChange = (e: any) => {
           const newDate = e.detail?.date;
-          if (newDate) {
+          if (newDate && newDate !== curveDateRef.current) {
               setAvailableDates(getAvailableCurveDatesSync());
-              setCurveDate(newDate);
+              lastLoadedRef.current = { date: newDate };
               loadCurveData(newDate);
           }
       };
@@ -504,13 +500,13 @@ export const ForwardCurveModal: React.FC<ForwardCurveModalProps> = ({
   };
 
   const analysisChartData = useMemo(() => {
-      const curveA = getForwardCurveSync(compareDateA);
-      const curveB = getForwardCurveSync(compareDateB);
+      const curveA = compareDateA ? getForwardCurveSync(compareDateA) : [];
+      const curveB = compareDateB ? getForwardCurveSync(compareDateB) : [];
       const allMonths = Array.from(new Set([...curveA.map(r => r.month), ...curveB.map(r => r.month)])).sort();
       return allMonths.map(month => ({
           month,
-          [`A (${compareDateA})`]: curveA.find(r => r.month === month)?.prices[selectedAnalysisIndex] || null,
-          [`B (${compareDateB})`]: curveB.find(r => r.month === month)?.prices[selectedAnalysisIndex] || null,
+          [`A (${compareDateA || 'A'})`]: curveA.find(r => r.month === month)?.prices[selectedAnalysisIndex] || null,
+          [`B (${compareDateB || 'B'})`]: curveB.find(r => r.month === month)?.prices[selectedAnalysisIndex] || null,
       }));
   }, [compareDateA, compareDateB, selectedAnalysisIndex]);
 
