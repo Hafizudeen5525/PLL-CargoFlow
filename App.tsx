@@ -395,7 +395,7 @@ const App: React.FC = () => {
   // Auto-sync from Jarvis based on options
   useEffect(() => {
     if (Object.keys(trmsData.trmsAgg).length > 0) {
-      const options = trmsData.syncOptions || { syncReconciled: true, syncPrices: false, overwriteManual: false };
+      const options = trmsData.syncOptions || { syncReconciled: true, syncVolumes: true, syncPrices: false, overwriteManual: false };
       let syncCount = 0;
       
       updateProfiles((prev: CargoProfile[]) => {
@@ -419,17 +419,74 @@ const App: React.FC = () => {
             }
           }
 
-          // 2. Sync Absolute Prices
+          // 2. Sync Purchase and Sales Volumes (for ALL cargoes, realized or unrealized)
+          if (options.syncVolumes !== false) {
+            const buyLegs = trms.commodityLegs ? trms.commodityLegs.filter((l: any) => l.buySell === 'Buy') : [];
+            const sellLegs = trms.commodityLegs ? trms.commodityLegs.filter((l: any) => l.buySell === 'Sell') : [];
+            const totalBuyVol = buyLegs.reduce((acc: number, l: any) => acc + (l.vol || 0), 0);
+            const totalSellVol = sellLegs.reduce((acc: number, l: any) => acc + (l.vol || 0), 0);
+
+            if (totalBuyVol > 0) {
+              if (p.isTieredPricing && buyLegs.length > 1) {
+                const t1 = buyLegs[0]?.vol || 0;
+                const t2 = buyLegs.slice(1).reduce((acc: number, l: any) => acc + (l.vol || 0), 0);
+                if (Math.abs((updated.loadedVolume || 0) - t1) > 0.001 || 
+                    Math.abs((updated.tier2LoadedVolume || 0) - t2) > 0.001 || 
+                    Math.abs((updated.totalLoadedVolume || 0) - totalBuyVol) > 0.001) {
+                  updated.loadedVolume = t1;
+                  updated.tier2LoadedVolume = t2;
+                  updated.totalLoadedVolume = totalBuyVol;
+                  changed = true;
+                }
+              } else {
+                if (Math.abs((updated.loadedVolume || 0) - totalBuyVol) > 0.001 || 
+                    Math.abs((updated.totalLoadedVolume || 0) - totalBuyVol) > 0.001) {
+                  updated.loadedVolume = totalBuyVol;
+                  updated.totalLoadedVolume = totalBuyVol;
+                  changed = true;
+                }
+              }
+            }
+
+            if (totalSellVol > 0) {
+              if (p.isTieredPricing && sellLegs.length > 1) {
+                const t1 = sellLegs[0]?.vol || 0;
+                const t2 = sellLegs.slice(1).reduce((acc: number, l: any) => acc + (l.vol || 0), 0);
+                if (Math.abs((updated.deliveredVolume || 0) - t1) > 0.001 || 
+                    Math.abs((updated.tier2DeliveredVolume || 0) - t2) > 0.001 || 
+                    Math.abs((updated.totalDeliveredVolume || 0) - totalSellVol) > 0.001) {
+                  updated.deliveredVolume = t1;
+                  updated.tier2DeliveredVolume = t2;
+                  updated.totalDeliveredVolume = totalSellVol;
+                  changed = true;
+                }
+              } else {
+                if (Math.abs((updated.deliveredVolume || 0) - totalSellVol) > 0.001 || 
+                    Math.abs((updated.totalDeliveredVolume || 0) - totalSellVol) > 0.001) {
+                  updated.deliveredVolume = totalSellVol;
+                  updated.totalDeliveredVolume = totalSellVol;
+                  changed = true;
+                }
+              }
+            }
+
+            if (trms.volumeType && trms.volumeType !== updated.volumeType) {
+              updated.volumeType = trms.volumeType;
+              changed = true;
+            }
+          }
+
+          // 3. Sync Absolute Prices
           if (options.syncPrices) {
-            const buyLegs = trms.commodityLegs.filter(l => l.buySell === 'Buy');
-            const sellLegs = trms.commodityLegs.filter(l => l.buySell === 'Sell');
+            const buyLegs = trms.commodityLegs ? trms.commodityLegs.filter((l: any) => l.buySell === 'Buy') : [];
+            const sellLegs = trms.commodityLegs ? trms.commodityLegs.filter((l: any) => l.buySell === 'Sell') : [];
 
             if (buyLegs.length > 0) {
               // Use weighted average if volume is available, otherwise simple average
-              const totalVol = buyLegs.reduce((acc, l) => acc + l.vol, 0);
+              const totalVol = buyLegs.reduce((acc: number, l: any) => acc + (l.vol || 0), 0);
               const avgBuyPrice = totalVol > 0 
-                ? buyLegs.reduce((acc, l) => acc + (l.price * l.vol), 0) / totalVol
-                : buyLegs.reduce((acc, l) => acc + l.price, 0) / buyLegs.length;
+                ? buyLegs.reduce((acc: number, l: any) => acc + (l.price * l.vol), 0) / totalVol
+                : buyLegs.reduce((acc: number, l: any) => acc + l.price, 0) / buyLegs.length;
 
               if ((!p.isBuyPriceManual || options.overwriteManual) && Math.abs(avgBuyPrice - (p.absoluteBuyPrice || 0)) > 0.001) {
                 updated.absoluteBuyPrice = avgBuyPrice;
@@ -440,10 +497,10 @@ const App: React.FC = () => {
             }
 
             if (sellLegs.length > 0) {
-              const totalVol = sellLegs.reduce((acc, l) => acc + l.vol, 0);
+              const totalVol = sellLegs.reduce((acc: number, l: any) => acc + (l.vol || 0), 0);
               const avgSellPrice = totalVol > 0 
-                ? sellLegs.reduce((acc, l) => acc + (l.price * l.vol), 0) / totalVol
-                : sellLegs.reduce((acc, l) => acc + l.price, 0) / sellLegs.length;
+                ? sellLegs.reduce((acc: number, l: any) => acc + (l.price * l.vol), 0) / totalVol
+                : sellLegs.reduce((acc: number, l: any) => acc + l.price, 0) / sellLegs.length;
 
               if ((!p.isSellPriceManual || options.overwriteManual) && Math.abs(avgSellPrice - (p.absoluteSellPrice || 0)) > 0.001) {
                 updated.absoluteSellPrice = avgSellPrice;
@@ -462,7 +519,9 @@ const App: React.FC = () => {
       });
       
       if (syncCount > 0) {
-        const msg = options.syncPrices ? `Synced reconciliation & prices for ${syncCount} cargo(es)` : `Synced reconciled values for ${syncCount} cargo(es)`;
+        const msg = options.syncPrices 
+          ? `Synced reconciliation, volumes & prices for ${syncCount} cargo(es)` 
+          : `Synced values & volumes for ${syncCount} cargo(es)`;
         toast.success(msg, { icon: '💰' });
       }
     }
