@@ -1,5 +1,5 @@
 import React, { useMemo, useState, useEffect, useCallback } from 'react';
-import { CargoProfile, PnLBucket } from '../types';
+import { CargoProfile, PnLBucket, DashboardFilterState, createInitialDashboardFilterState } from '../types';
 import { ForwardCurveRow, detectUnit, getExposureChartData, getPortfolioYear, recalculateProfile, getAvailableCurveDates, getPricesSnapshot, getForwardCurve, explainPricing, analyzeFormulaStructure, evaluateFormula, findDataGaps, DataGap, getGroupName, GROUPS, getPricingMonths, formatCurrency, formatPrice } from '../services/calculationService';
 import { BarChart, Bar, XAxis, YAxis, CartesianGrid, Tooltip, ResponsiveContainer, Cell, PieChart, Pie, LineChart, Line, Legend } from 'recharts';
 import { motion, AnimatePresence } from 'framer-motion';
@@ -8,7 +8,8 @@ import { PnLVarianceExplainer } from './PnLVarianceExplainer';
 import { IndexWeightedPrices } from './IndexWeightedPrices';
 import { AutoScalingText } from './AutoScalingText';
 import { PortfolioSummaryExportModal } from './PortfolioSummaryExportModal';
-import { Download } from 'lucide-react';
+import { DashboardFilters } from './DashboardFilters';
+import { Download, Filter, ChevronDown } from 'lucide-react';
 import { toast } from 'react-hot-toast';
 
 interface DashboardProps {
@@ -73,6 +74,8 @@ export const Dashboard: React.FC<DashboardProps> = ({
 }) => {
   const [curveView, setCurveView] = useState<'gas' | 'oil'>('gas');
   const [groupFilter, setGroupFilter] = useState<string>('All');
+  const [filters, setFilters] = useState<DashboardFilterState>(createInitialDashboardFilterState);
+  const [isFilterDrawerOpen, setIsFilterDrawerOpen] = useState(false);
   
   const [targetDate, setTargetDate] = useState<string>('');
   const [baselineDate, setBaselineDate] = useState<string>('');
@@ -119,16 +122,57 @@ export const Dashboard: React.FC<DashboardProps> = ({
       return ['All', 'CarvedOut', ...GROUPS, 'Others'];
   }, []);
 
+  const totalActiveFilterCount = useMemo(() => {
+    let count = 0;
+    if (filters.deliveryDates.size > 0) count += filters.deliveryDates.size;
+    if (filters.loadingDates.size > 0) count += filters.loadingDates.size;
+    if (filters.strategies.size > 0) count += filters.strategies.size;
+    if (filters.strategyGroups.size > 0) count += filters.strategyGroups.size;
+    if (filters.buyers.size > 0) count += filters.buyers.size;
+    if (filters.sources.size > 0) count += filters.sources.size;
+    if (filters.pnlBuckets.size > 0) count += filters.pnlBuckets.size;
+    return count;
+  }, [filters]);
+
   const viewProfiles = useMemo(() => {
       let filtered = profiles;
+
       if (groupFilter !== 'All') {
           filtered = profiles.filter((p: CargoProfile) => getGroupName(p.strategyName, p.strategyGroup) === groupFilter);
+      }
+
+      if (filters.deliveryDates.size > 0) {
+          filtered = filtered.filter((p: CargoProfile) => p.deliveryDate && filters.deliveryDates.has(p.deliveryDate.trim()));
+      }
+
+      if (filters.loadingDates.size > 0) {
+          filtered = filtered.filter((p: CargoProfile) => p.loadingDate && filters.loadingDates.has(p.loadingDate.trim()));
+      }
+
+      if (filters.strategies.size > 0) {
+          filtered = filtered.filter((p: CargoProfile) => filters.strategies.has(p.strategyName));
+      }
+
+      if (filters.strategyGroups.size > 0) {
+          filtered = filtered.filter((p: CargoProfile) => filters.strategyGroups.has(getGroupName(p.strategyName, p.strategyGroup)));
+      }
+
+      if (filters.buyers.size > 0) {
+          filtered = filtered.filter((p: CargoProfile) => p.buyer && filters.buyers.has(p.buyer));
+      }
+
+      if (filters.sources.size > 0) {
+          filtered = filtered.filter((p: CargoProfile) => p.source && filters.sources.has(p.source));
+      }
+
+      if (filters.pnlBuckets.size > 0) {
+          filtered = filtered.filter((p: CargoProfile) => filters.pnlBuckets.has(p.pnlBucket));
       }
 
       return filtered.map((p: CargoProfile) => {
           return recalculateProfile(p, true, targetDate) as CargoProfile;
       });
-  }, [profiles, groupFilter, targetDate]);
+  }, [profiles, groupFilter, filters, targetDate]);
 
   const dataGaps = useMemo(() => findDataGaps(viewProfiles, targetDate), [viewProfiles, targetDate]);
 
@@ -187,7 +231,7 @@ export const Dashboard: React.FC<DashboardProps> = ({
       viewProfiles.forEach((p: CargoProfile) => {
           const pnl = p.finalTotalPnL || 0;
           const revenue = p.finalSalesRevenue || 0;
-          const vol = p.deliveredVolume || 0;
+          const vol = (p.deliveredVolume || 0) + (p.isTieredPricing ? (p.tier2DeliveredVolume || 0) : 0);
           
           const totalPurchaseT1 = (p.loadedVolume || 0) * (p.absoluteBuyPrice || 0);
           const totalPurchaseT2 = p.isTieredPricing ? (p.tier2LoadedVolume || 0) * (p.absoluteTier2BuyPrice || 0) : 0;
@@ -248,7 +292,28 @@ export const Dashboard: React.FC<DashboardProps> = ({
 
     let filtered = profiles;
     if (groupFilter !== 'All') {
-        filtered = profiles.filter((p: CargoProfile) => getGroupName(p.strategyName, p.strategyGroup) === groupFilter);
+        filtered = filtered.filter((p: CargoProfile) => getGroupName(p.strategyName, p.strategyGroup) === groupFilter);
+    }
+    if (filters.deliveryDates.size > 0) {
+        filtered = filtered.filter((p: CargoProfile) => p.deliveryDate && filters.deliveryDates.has(p.deliveryDate.trim()));
+    }
+    if (filters.loadingDates.size > 0) {
+        filtered = filtered.filter((p: CargoProfile) => p.loadingDate && filters.loadingDates.has(p.loadingDate.trim()));
+    }
+    if (filters.strategies.size > 0) {
+        filtered = filtered.filter((p: CargoProfile) => filters.strategies.has(p.strategyName));
+    }
+    if (filters.strategyGroups.size > 0) {
+        filtered = filtered.filter((p: CargoProfile) => filters.strategyGroups.has(getGroupName(p.strategyName, p.strategyGroup)));
+    }
+    if (filters.buyers.size > 0) {
+        filtered = filtered.filter((p: CargoProfile) => p.buyer && filters.buyers.has(p.buyer));
+    }
+    if (filters.sources.size > 0) {
+        filtered = filtered.filter((p: CargoProfile) => p.source && filters.sources.has(p.source));
+    }
+    if (filters.pnlBuckets.size > 0) {
+        filtered = filtered.filter((p: CargoProfile) => filters.pnlBuckets.has(p.pnlBucket));
     }
 
     filtered.forEach((p: CargoProfile) => {
@@ -259,7 +324,7 @@ export const Dashboard: React.FC<DashboardProps> = ({
         
         const pnl = cp.finalTotalPnL || 0;
         const revenue = cp.finalSalesRevenue || 0;
-        const vol = cp.deliveredVolume || 0;
+        const vol = (cp.deliveredVolume || 0) + (cp.isTieredPricing ? (cp.tier2DeliveredVolume || 0) : 0);
         
         const totalPurchaseT1 = (cp.loadedVolume || 0) * (cp.absoluteBuyPrice || 0);
         const totalPurchaseT2 = cp.isTieredPricing ? (cp.tier2LoadedVolume || 0) * (cp.absoluteTier2BuyPrice || 0) : 0;
@@ -305,7 +370,7 @@ export const Dashboard: React.FC<DashboardProps> = ({
     });
 
     return acc;
-  }, [profiles, groupFilter]);
+  }, [profiles, groupFilter, filters]);
 
   const baselineStats = useMemo(() => getStatsSnapshot(baselineDate), [getStatsSnapshot, baselineDate]);
 
@@ -366,6 +431,28 @@ export const Dashboard: React.FC<DashboardProps> = ({
                       {availableGroups.map((g: string) => <option key={g} value={g}>{g === 'All' ? 'All (Auto-mapped)' : g}</option>)}
                   </select>
               </div>
+
+              <button
+                type="button"
+                onClick={() => setIsFilterDrawerOpen(!isFilterDrawerOpen)}
+                className={`flex items-center gap-1.5 px-3 py-2 rounded-lg text-xs font-bold transition-all border shadow-xs ${
+                  totalActiveFilterCount > 0
+                    ? 'bg-indigo-50 border-indigo-300 text-indigo-700'
+                    : isFilterDrawerOpen
+                    ? 'bg-slate-100 border-slate-300 text-slate-800'
+                    : 'bg-white border-slate-200 text-slate-600 hover:bg-slate-50'
+                }`}
+                title="Toggle Portfolio Filters (Delivery & Loading Dates, Strategy, Buyer, etc.)"
+              >
+                <Filter className="w-3.5 h-3.5 text-indigo-600" />
+                <span>Filters</span>
+                {totalActiveFilterCount > 0 && (
+                  <span className="bg-indigo-600 text-white text-[10px] font-extrabold px-1.5 py-0.5 rounded-full leading-none">
+                    {totalActiveFilterCount}
+                  </span>
+                )}
+                <ChevronDown className={`w-3.5 h-3.5 transition-transform duration-200 ${isFilterDrawerOpen ? 'rotate-180' : ''}`} />
+              </button>
               {dataGaps.length > 0 && (
                   <button 
                     onClick={() => {
@@ -437,6 +524,16 @@ export const Dashboard: React.FC<DashboardProps> = ({
               </button>
           </div>
       </div>
+
+      <DashboardFilters
+        profiles={profiles}
+        filters={filters}
+        onFilterChange={setFilters}
+        isOpen={isFilterDrawerOpen}
+        onToggleOpen={() => setIsFilterDrawerOpen(!isFilterDrawerOpen)}
+        matchingCount={viewProfiles.length}
+        totalCount={profiles.length}
+      />
 
       <div className="space-y-4">
         <div className="grid grid-cols-1 md:grid-cols-2 gap-4">
@@ -607,7 +704,7 @@ export const Dashboard: React.FC<DashboardProps> = ({
               <p className="text-[9px] sm:text-[10px] font-bold text-slate-400 uppercase px-1">Snap: {baselineSnapshot?.date || 'N/A'} vs Now</p>
           </div>
           <PnLVarianceExplainer 
-            currentProfiles={profiles}
+            currentProfiles={viewProfiles}
             baselineProfiles={baselineSnapshot?.profiles || profiles} 
             currentCurveDate={targetDate}
             baselineCurveDate={baselineDate}
