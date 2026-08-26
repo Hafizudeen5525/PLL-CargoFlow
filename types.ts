@@ -248,24 +248,3 @@ export interface YearlyReportData {
   cvar: number;
   cvarLimit: number;
 }
-
-export interface DashboardFilterState {
-  deliveryDates: Set<string>;
-  loadingDates: Set<string>;
-  strategies: Set<string>;
-  strategyGroups: Set<string>;
-  buyers: Set<string>;
-  sources: Set<string>;
-  pnlBuckets: Set<string>;
-}
-
-export const createInitialDashboardFilterState = (): DashboardFilterState => ({
-  deliveryDates: new Set(),
-  loadingDates: new Set(),
-  strategies: new Set(),
-  strategyGroups: new Set(),
-  buyers: new Set(),
-  sources: new Set(),
-  pnlBuckets: new Set()
-});
-

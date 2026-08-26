@@ -138,33 +138,10 @@ const App: React.FC = () => {
     };
   }, [user]);
 
-  // Combine for aggregated dashboard with strict deduplication
+  // Combine for aggregated dashboard
   const allProfiles = useMemo(() => {
-    const map = new Map<string, CargoProfile>();
-    
-    // Process private profiles first, then shared profiles
-    [...profiles, ...sharedProfiles].forEach((p: CargoProfile) => {
-      if (!p || p.deleted) return;
-      // Stable unique key by ID or normalized Strategy Name
-      const stratKey = p.strategyName ? normalizeStrategyName(p.strategyName) : '';
-      const uniqueKey = p.id || stratKey;
-      if (!uniqueKey) return;
-
-      const existing = map.get(uniqueKey) || (stratKey ? map.get(stratKey) : undefined);
-      if (!existing) {
-        map.set(uniqueKey, p);
-        if (stratKey) map.set(stratKey, p);
-      } else {
-        // If one is shared and the other is private, prefer the shared one
-        if (p.isShared && !existing.isShared) {
-          map.set(uniqueKey, p);
-          if (stratKey) map.set(stratKey, p);
-        }
-      }
-    });
-
-    // Return unique profile instances
-    return Array.from(new Set(map.values()));
+    // Deduplicate if needed, but here we just merge
+    return [...profiles, ...sharedProfiles].filter(p => !p.deleted);
   }, [profiles, sharedProfiles]);
 
   // Firestore Sync: User Settings (Portfolio Year)
