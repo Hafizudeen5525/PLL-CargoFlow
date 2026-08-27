@@ -679,6 +679,29 @@ function getIndexPriceInternal(index: string, refDateStr: string, monthDef: stri
 export function calculateLegPrice(p: CargoProfile, type: 'buy' | 'sell' | 'tier2Sell' | 'tier2Buy', curveDate?: string): number {
     const refDate = (type === 'buy' || type === 'tier2Buy') ? p.loadingDate : p.deliveryDate;
     const prefix = type;
+    const hasComponents = (p as any)[`${prefix}PriceIndex1`] || (p as any)[`${prefix}Price1Weightage`] || (p as any)[`${prefix}PriceOverallConstant`];
+
+    if (hasComponents) {
+        let totalPrice = 0;
+        for (let i = 1; i <= 3; i++) {
+            const w = Number((p as any)[`${prefix}Price${i}Weightage`] ?? 0);
+            const s = Number((p as any)[`${prefix}Price${i}Slope`] ?? 0);
+            const idx = String((p as any)[`${prefix}PriceIndex${i}`] ?? '').trim();
+            const mDef = String((p as any)[`${prefix}Price${i}MonthDef`] ?? 'n');
+            const c = Number((p as any)[`${prefix}Price${i}Constant`] ?? 0);
+
+            if (idx) {
+                const { price } = getIndexPrice(idx, refDate, mDef, curveDate);
+                const componentPrice = (s * price) + c;
+                totalPrice += w * componentPrice;
+            } else if (w > 0 && c !== 0) {
+                totalPrice += w * c;
+            }
+        }
+        const overallC = Number((p as any)[`${prefix}PriceOverallConstant`] ?? 0);
+        totalPrice += overallC;
+        return totalPrice;
+    }
 
     const formulaMap: Record<string, string> = {
         buy: p.buyFormula || '',
@@ -693,69 +716,14 @@ export function calculateLegPrice(p: CargoProfile, type: 'buy' | 'sell' | 'tier2
         tier2Buy: p.tier2LoadedVolume || 0
     };
 
-    const hasFormula = Boolean(formulaMap[type] && formulaMap[type].trim().length > 0);
-    const hasComponents = Boolean(
-        (p as any)[`${prefix}PriceIndex1`] || 
-        ((p as any)[`${prefix}Price1Weightage`] && Number((p as any)[`${prefix}Price1Weightage`]) > 0) || 
-        ((p as any)[`${prefix}PriceOverallConstant`] && Number((p as any)[`${prefix}PriceOverallConstant`]) !== 0)
-    );
-
-    // If pricing mode is explicitly 'formula', or if formula exists and pricingMode is not 'component'
-    if ((p.pricingMode === 'formula' && hasFormula) || (hasFormula && p.pricingMode !== 'component' && !hasComponents)) {
-        const evalResult = evaluateFormula(formulaMap[type] || '', refDate, curveDate, volMap[type] || 0);
-        if (evalResult !== null && !isNaN(evalResult)) {
-            return evalResult;
-        }
-    }
-
-    if (hasComponents || p.pricingMode === 'component') {
-        let totalPrice = 0;
-        let anyComponentCalculated = false;
-        for (let i = 1; i <= 3; i++) {
-            const w = Number((p as any)[`${prefix}Price${i}Weightage`] ?? 0);
-            const s = Number((p as any)[`${prefix}Price${i}Slope`] ?? 0);
-            const idx = String((p as any)[`${prefix}PriceIndex${i}`] ?? '').trim();
-            const mDef = String((p as any)[`${prefix}Price${i}MonthDef`] ?? 'n');
-            const c = Number((p as any)[`${prefix}Price${i}Constant`] ?? 0);
-
-            if (idx) {
-                const { price } = getIndexPrice(idx, refDate, mDef, curveDate);
-                const componentPrice = (s * price) + c;
-                totalPrice += w * componentPrice;
-                anyComponentCalculated = true;
-            } else if (w > 0 && c !== 0) {
-                totalPrice += w * c;
-                anyComponentCalculated = true;
-            }
-        }
-        const overallC = Number((p as any)[`${prefix}PriceOverallConstant`] ?? 0);
-        totalPrice += overallC;
-        if (anyComponentCalculated || overallC !== 0 || !hasFormula) {
-            return totalPrice;
-        }
-    }
-
-    if (hasFormula) {
-        return evaluateFormula(formulaMap[type] || '', refDate, curveDate, volMap[type] || 0) || 0;
-    }
-
-    return 0;
+    return evaluateFormula(formulaMap[type] || '', refDate, curveDate, volMap[type] || 0) || 0;
 }
 
 export function evaluateFormula(formula: string, dateStr?: string, curveDate?: string, volume: number = 0, unit?: string): number | null {
-    if (!formula || typeof formula !== 'string') return null;
-    const cleanFormula = formula.trim();
-    if (!cleanFormula) return null;
-
-    // Direct numeric literal check: e.g. "12.50" or "$12.50"
-    const directNum = parseFloat(cleanFormula.replace(/^\$/, ''));
-    if (!isNaN(directNum) && !/[a-zA-Z%]/.test(cleanFormula)) {
-        return directNum;
-    }
-
+    if (!formula) return null;
     const effectiveDate = dateStr || curveDate || new Date().toISOString().split('T')[0];
 
-    let expression = cleanFormula
+    let expression = formula
         .replace(/\[/g, '(').replace(/\]/g, ')')
         .replace(/\$/g, '')
         .replace(/(\d+(?:\.\d+)?)\s*%/g, (_, num) => (parseFloat(num) / 100).toString());
@@ -770,25 +738,17 @@ export function evaluateFormula(formula: string, dateStr?: string, curveDate?: s
         });
     }
 
-    expression = expression
-        .replace(/(\d+(?:\.\d+)?)\s+(\d+(?:\.\d+)?)/g, '$1 * $2')
-        .replace(/\)\s*\(/g, ') * (')
-        .replace(/(\d+(?:\.\d+)?)\s*\(/g, '$1 * (')
-        .replace(/\)\s*(\d+(?:\.\d+)?)/g, ') * $1')
-        .replace(/[a-zA-Z]+/g, '0');
-
+    expression = expression.replace(/(\d+(?:\.\d+)?)\s+(\d+(?:\.\d+)?)/g, '$1 * $2').replace(/[a-zA-Z]+/g, '0');
     try {
         const result = new Function(`return ${expression}`)();
-        return isNaN(result) ? null : Number(result);
+        return isNaN(result) ? null : result;
     } catch { return null; }
 }
 
-export function applyRounding(val: number, decimals: number | undefined): number {
-    if (val === undefined || val === null || isNaN(val)) return 0;
-    if (decimals === undefined || decimals === null || isNaN(Number(decimals))) return val;
-    const dec = Math.max(0, Math.min(8, parseInt(String(decimals), 10)));
-    const factor = Math.pow(10, dec);
-    return Math.round((val + Number.EPSILON) * factor) / factor;
+function applyRounding(val: number, decimals: number | undefined): number {
+    if (decimals === undefined || decimals === null || isNaN(decimals)) return val;
+    const factor = Math.pow(10, decimals);
+    return Math.round(val * factor) / factor;
 }
 
 function formatMonthStr(dateStr: string): string {
@@ -893,47 +853,21 @@ export function recalculateProfile(p: Partial<CargoProfile>, useMarket: boolean 
     if (useMarket) {
         if (!up.isBuyPriceManual) {
             const rawBuyPrice = calculateLegPrice(up, 'buy', curveDate);
-            if (rawBuyPrice > 0 || (up.buyFormula && up.buyFormula.trim() !== '') || (up as any).buyPriceIndex1) {
-                up.absoluteBuyPrice = applyRounding(rawBuyPrice, up.buyPriceRounding);
-            } else if (up.absoluteBuyPrice !== undefined && up.absoluteBuyPrice !== null) {
-                up.absoluteBuyPrice = applyRounding(up.absoluteBuyPrice, up.buyPriceRounding);
-            }
-        } else if (up.absoluteBuyPrice !== undefined && up.absoluteBuyPrice !== null) {
-            up.absoluteBuyPrice = applyRounding(up.absoluteBuyPrice, up.buyPriceRounding);
+            up.absoluteBuyPrice = applyRounding(rawBuyPrice, up.buyPriceRounding);
         }
-
         if (!up.isSellPriceManual) {
             const rawSellPrice = calculateLegPrice(up, 'sell', curveDate);
-            if (rawSellPrice > 0 || (up.sellFormula && up.sellFormula.trim() !== '') || (up as any).sellPriceIndex1) {
-                up.absoluteSellPrice = applyRounding(rawSellPrice, up.sellPriceRounding);
-            } else if (up.absoluteSellPrice !== undefined && up.absoluteSellPrice !== null) {
-                up.absoluteSellPrice = applyRounding(up.absoluteSellPrice, up.sellPriceRounding);
-            }
-        } else if (up.absoluteSellPrice !== undefined && up.absoluteSellPrice !== null) {
-            up.absoluteSellPrice = applyRounding(up.absoluteSellPrice, up.sellPriceRounding);
+            up.absoluteSellPrice = applyRounding(rawSellPrice, up.sellPriceRounding);
         }
         
         if (up.isTieredPricing) {
             if (!up.isTier2SellPriceManual) {
                 const rawTier2Sell = calculateLegPrice(up, 'tier2Sell', curveDate);
-                if (rawTier2Sell > 0 || (up.tier2SellFormula && up.tier2SellFormula.trim() !== '') || (up as any).tier2SellPriceIndex1) {
-                    up.absoluteTier2SellPrice = applyRounding(rawTier2Sell, up.tier2SellPriceRounding);
-                } else if (up.absoluteTier2SellPrice !== undefined && up.absoluteTier2SellPrice !== null) {
-                    up.absoluteTier2SellPrice = applyRounding(up.absoluteTier2SellPrice, up.tier2SellPriceRounding);
-                }
-            } else if (up.absoluteTier2SellPrice !== undefined && up.absoluteTier2SellPrice !== null) {
-                up.absoluteTier2SellPrice = applyRounding(up.absoluteTier2SellPrice, up.tier2SellPriceRounding);
+                up.absoluteTier2SellPrice = applyRounding(rawTier2Sell, up.tier2SellPriceRounding);
             }
-
             if (!up.isTier2BuyPriceManual) {
                 const rawTier2Buy = calculateLegPrice(up, 'tier2Buy', curveDate);
-                if (rawTier2Buy > 0 || (up.tier2BuyFormula && up.tier2BuyFormula.trim() !== '') || (up as any).tier2BuyPriceIndex1) {
-                    up.absoluteTier2BuyPrice = applyRounding(rawTier2Buy, up.tier2BuyPriceRounding);
-                } else if (up.absoluteTier2BuyPrice !== undefined && up.absoluteTier2BuyPrice !== null) {
-                    up.absoluteTier2BuyPrice = applyRounding(up.absoluteTier2BuyPrice, up.tier2BuyPriceRounding);
-                }
-            } else if (up.absoluteTier2BuyPrice !== undefined && up.absoluteTier2BuyPrice !== null) {
-                up.absoluteTier2BuyPrice = applyRounding(up.absoluteTier2BuyPrice, up.tier2BuyPriceRounding);
+                up.absoluteTier2BuyPrice = applyRounding(rawTier2Buy, up.tier2BuyPriceRounding);
             }
         }
     }
@@ -964,17 +898,10 @@ export function recalculateProfile(p: Partial<CargoProfile>, useMarket: boolean 
     const totalNonCommodityCosts = finalSrcCost + finalOtherCost;
 
     const hasRecSales = up.reconciledSalesRevenue !== undefined && up.reconciledSalesRevenue !== null && up.reconciledSalesRevenue !== 0 && !isNaN(Number(up.reconciledSalesRevenue));
+    up.finalSalesRevenue = hasRecSales ? Number(up.reconciledSalesRevenue) : up.salesRevenue;
+
     const hasRecPurchase = up.reconciledPurchaseCost !== undefined && up.reconciledPurchaseCost !== null && up.reconciledPurchaseCost !== 0 && !isNaN(Number(up.reconciledPurchaseCost));
-
-    // Dynamic vs Reconciled logic:
-    // If formula / unit price / manual price or volume exists, use calculated sales revenue and purchase cost.
-    // Reconciled amounts act as a static import baseline when no pricing/formula is set.
-    const hasDynamicSales = (up.salesRevenue > 0) || (up.sellFormula && up.sellFormula.trim() !== '') || up.isSellPriceManual || (up.absoluteSellPrice || 0) > 0 || (up as any).sellPriceIndex1;
-    up.finalSalesRevenue = (hasDynamicSales && (up.salesRevenue !== 0 || !hasRecSales)) ? up.salesRevenue : (hasRecSales ? Number(up.reconciledSalesRevenue) : up.salesRevenue);
-
-    const hasDynamicPurchase = (totalPurchaseCost > 0) || (up.buyFormula && up.buyFormula.trim() !== '') || up.isBuyPriceManual || (up.absoluteBuyPrice || 0) > 0 || (up as any).buyPriceIndex1;
-    const basePurchaseCost = (hasDynamicPurchase && (totalPurchaseCost !== 0 || !hasRecPurchase)) ? totalPurchaseCost : (hasRecPurchase ? Number(up.reconciledPurchaseCost) : totalPurchaseCost);
-    
+    const basePurchaseCost = hasRecPurchase ? Number(up.reconciledPurchaseCost) : totalPurchaseCost;
     up.finalTotalCost = basePurchaseCost + totalNonCommodityCosts;
 
     // Implied Unit Price Fallback:

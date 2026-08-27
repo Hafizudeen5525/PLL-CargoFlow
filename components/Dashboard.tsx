@@ -1,4 +1,4 @@
-import React, { useMemo, useState, useEffect, useCallback, useRef } from 'react';
+import React, { useMemo, useState, useEffect, useCallback } from 'react';
 import { CargoProfile, PnLBucket } from '../types';
 import { ForwardCurveRow, detectUnit, getExposureChartData, getPortfolioYear, recalculateProfile, getAvailableCurveDates, getPricesSnapshot, getForwardCurve, explainPricing, analyzeFormulaStructure, evaluateFormula, findDataGaps, DataGap, getGroupName, GROUPS, getPricingMonths, formatCurrency, formatPrice, normalizeMonthKey } from '../services/calculationService';
 import { BarChart, Bar, XAxis, YAxis, CartesianGrid, Tooltip, ResponsiveContainer, Cell, PieChart, Pie, LineChart, Line, Legend } from 'recharts';
@@ -8,7 +8,7 @@ import { PnLVarianceExplainer } from './PnLVarianceExplainer';
 import { IndexWeightedPrices } from './IndexWeightedPrices';
 import { AutoScalingText } from './AutoScalingText';
 import { PortfolioSummaryExportModal } from './PortfolioSummaryExportModal';
-import { Download, ChevronDown, Check, X, Search, Calendar } from 'lucide-react';
+import { Download } from 'lucide-react';
 import { toast } from 'react-hot-toast';
 
 const getDeliveryMonth = (p: CargoProfile): string => {
@@ -98,12 +98,7 @@ export const Dashboard: React.FC<DashboardProps> = ({
 }) => {
   const [curveView, setCurveView] = useState<'gas' | 'oil'>('gas');
   const [groupFilter, setGroupFilter] = useState<string>('All');
-  
-  // Multi-select delivery month filter state: empty array or containing 'All' means all months active
-  const [selectedDeliveryMonths, setSelectedDeliveryMonths] = useState<string[]>([]);
-  const [isDeliveryMonthDropdownOpen, setIsDeliveryMonthDropdownOpen] = useState(false);
-  const [monthSearchTerm, setMonthSearchTerm] = useState('');
-  const deliveryMonthDropdownRef = useRef<HTMLDivElement>(null);
+  const [deliveryMonthFilter, setDeliveryMonthFilter] = useState<string>('All');
   
   const [targetDate, setTargetDate] = useState<string>('');
   const [baselineDate, setBaselineDate] = useState<string>('');
@@ -121,20 +116,6 @@ export const Dashboard: React.FC<DashboardProps> = ({
   const [isExportModalOpen, setIsExportModalOpen] = useState(false);
 
   const [availableDates, setAvailableDates] = useState<string[]>([]);
-
-  useEffect(() => {
-    const handleClickOutside = (event: MouseEvent) => {
-      if (deliveryMonthDropdownRef.current && !deliveryMonthDropdownRef.current.contains(event.target as Node)) {
-        setIsDeliveryMonthDropdownOpen(false);
-      }
-    };
-    if (isDeliveryMonthDropdownOpen) {
-      document.addEventListener('mousedown', handleClickOutside);
-    }
-    return () => {
-      document.removeEventListener('mousedown', handleClickOutside);
-    };
-  }, [isDeliveryMonthDropdownOpen]);
 
   useEffect(() => {
     const initDates = async () => {
@@ -170,123 +151,30 @@ export const Dashboard: React.FC<DashboardProps> = ({
           const dm = getDeliveryMonth(p);
           if (dm) monthsSet.add(dm);
       });
-      return Array.from(monthsSet).sort();
+      const sorted = Array.from(monthsSet).sort();
+      return ['All', ...sorted];
   }, [profiles]);
 
-  const monthCounts = useMemo(() => {
-      const counts: Record<string, number> = {};
-      profiles.forEach((p: CargoProfile) => {
-          const dm = getDeliveryMonth(p);
-          if (dm) {
-              counts[dm] = (counts[dm] || 0) + 1;
-          }
-      });
-      return counts;
-  }, [profiles]);
-
-  const isAllDeliveryMonthsSelected = useMemo(() => {
-      if (selectedDeliveryMonths.length === 0) return true;
-      if (selectedDeliveryMonths.includes('All')) return true;
-      if (selectedDeliveryMonths.includes('__NONE__')) return false;
-      const valid = selectedDeliveryMonths.filter(m => availableDeliveryMonths.includes(m));
-      if (valid.length === 0) return true;
-      if (availableDeliveryMonths.length > 0 && valid.length === availableDeliveryMonths.length) return true;
-      return false;
-  }, [selectedDeliveryMonths, availableDeliveryMonths]);
-
-  const activeDeliveryMonthsSet = useMemo(() => {
-      if (isAllDeliveryMonthsSelected) {
-          return new Set(availableDeliveryMonths);
+  const effectiveDeliveryMonth = useMemo(() => {
+      if (deliveryMonthFilter !== 'All' && !availableDeliveryMonths.includes(deliveryMonthFilter)) {
+          return 'All';
       }
-      if (selectedDeliveryMonths.includes('__NONE__')) {
-          return new Set<string>();
-      }
-      return new Set(selectedDeliveryMonths.filter(m => availableDeliveryMonths.includes(m)));
-  }, [isAllDeliveryMonthsSelected, selectedDeliveryMonths, availableDeliveryMonths]);
-
-  const toggleDeliveryMonth = (monthKey: string) => {
-      setSelectedDeliveryMonths(prev => {
-          if (isAllDeliveryMonthsSelected) {
-              // From all selected, unchecking one leaves the rest selected
-              return availableDeliveryMonths.filter(m => m !== monthKey);
-          }
-          const valid = prev.filter(m => m !== '__NONE__' && availableDeliveryMonths.includes(m));
-          const currentSet = new Set(valid);
-          if (currentSet.has(monthKey)) {
-              currentSet.delete(monthKey);
-              if (currentSet.size === 0) {
-                  return ['__NONE__'];
-              }
-              return Array.from(currentSet);
-          } else {
-              currentSet.add(monthKey);
-              if (currentSet.size === availableDeliveryMonths.length) {
-                  return []; // All selected
-              }
-              return Array.from(currentSet);
-          }
-      });
-  };
-
-  const selectOnlyMonth = (monthKey: string, e: React.MouseEvent) => {
-      e.stopPropagation();
-      setSelectedDeliveryMonths([monthKey]);
-  };
-
-  const handleSelectAllMonths = () => {
-      setSelectedDeliveryMonths([]);
-  };
-
-  const handleClearMonths = () => {
-      setSelectedDeliveryMonths(['__NONE__']);
-  };
-
-  const deliveryMonthButtonLabel = useMemo(() => {
-      if (isAllDeliveryMonthsSelected) {
-          return 'All Months';
-      }
-      const count = activeDeliveryMonthsSet.size;
-      if (count === 0) {
-          return 'None Selected';
-      }
-      if (count === 1) {
-          const monthKey = Array.from(activeDeliveryMonthsSet)[0];
-          return formatDeliveryMonthLabel(monthKey);
-      }
-      if (count === 2) {
-          const months = Array.from(activeDeliveryMonthsSet);
-          const name1 = formatDeliveryMonthLabel(months[0]).split(' (')[0];
-          const name2 = formatDeliveryMonthLabel(months[1]).split(' (')[0];
-          return `${name1}, ${name2}`;
-      }
-      return `${count} Months Selected`;
-  }, [isAllDeliveryMonthsSelected, activeDeliveryMonthsSet]);
-
-  const filteredDeliveryMonthOptions = useMemo(() => {
-      if (!monthSearchTerm.trim()) return availableDeliveryMonths;
-      const term = monthSearchTerm.trim().toLowerCase();
-      return availableDeliveryMonths.filter(m => {
-          const label = formatDeliveryMonthLabel(m).toLowerCase();
-          return label.includes(term) || m.toLowerCase().includes(term);
-      });
-  }, [availableDeliveryMonths, monthSearchTerm]);
+      return deliveryMonthFilter;
+  }, [deliveryMonthFilter, availableDeliveryMonths]);
 
   const viewProfiles = useMemo(() => {
       let filtered = profiles;
       if (groupFilter !== 'All') {
           filtered = filtered.filter((p: CargoProfile) => getGroupName(p.strategyName, p.strategyGroup) === groupFilter);
       }
-      if (!isAllDeliveryMonthsSelected) {
-          filtered = filtered.filter((p: CargoProfile) => {
-              const dm = getDeliveryMonth(p);
-              return activeDeliveryMonthsSet.has(dm);
-          });
+      if (effectiveDeliveryMonth !== 'All') {
+          filtered = filtered.filter((p: CargoProfile) => getDeliveryMonth(p) === effectiveDeliveryMonth);
       }
 
       return filtered.map((p: CargoProfile) => {
           return recalculateProfile(p, true, targetDate) as CargoProfile;
       });
-  }, [profiles, groupFilter, isAllDeliveryMonthsSelected, activeDeliveryMonthsSet, targetDate]);
+  }, [profiles, groupFilter, effectiveDeliveryMonth, targetDate]);
 
   const dataGaps = useMemo(() => findDataGaps(viewProfiles, targetDate), [viewProfiles, targetDate]);
 
@@ -408,11 +296,8 @@ export const Dashboard: React.FC<DashboardProps> = ({
     if (groupFilter !== 'All') {
         filtered = filtered.filter((p: CargoProfile) => getGroupName(p.strategyName, p.strategyGroup) === groupFilter);
     }
-    if (!isAllDeliveryMonthsSelected) {
-        filtered = filtered.filter((p: CargoProfile) => {
-            const dm = getDeliveryMonth(p);
-            return activeDeliveryMonthsSet.has(dm);
-        });
+    if (effectiveDeliveryMonth !== 'All') {
+        filtered = filtered.filter((p: CargoProfile) => getDeliveryMonth(p) === effectiveDeliveryMonth);
     }
 
     filtered.forEach((p: CargoProfile) => {
@@ -469,7 +354,7 @@ export const Dashboard: React.FC<DashboardProps> = ({
     });
 
     return acc;
-  }, [profiles, groupFilter, isAllDeliveryMonthsSelected, activeDeliveryMonthsSet]);
+  }, [profiles, groupFilter, effectiveDeliveryMonth]);
 
   const baselineStats = useMemo(() => getStatsSnapshot(baselineDate), [getStatsSnapshot, baselineDate]);
 
@@ -524,182 +409,17 @@ export const Dashboard: React.FC<DashboardProps> = ({
                   </select>
               </div>
 
-              {/* Delivery Month Multi-Select Filter */}
-              <div className="relative flex items-center gap-2" ref={deliveryMonthDropdownRef}>
+              <div className="flex items-center gap-2">
                   <span className="text-[10px] sm:text-xs font-bold text-slate-500 uppercase tracking-wide px-1">Delivery Month:</span>
-                  <button
-                      type="button"
-                      onClick={() => setIsDeliveryMonthDropdownOpen(prev => !prev)}
-                      className={`text-xs sm:text-sm rounded-lg py-1.5 px-3 font-bold border transition-all flex items-center gap-2 cursor-pointer shadow-xs ${
-                          isDeliveryMonthDropdownOpen || !isAllDeliveryMonthsSelected
-                              ? 'bg-blue-50/90 border-blue-400 text-blue-700 ring-2 ring-blue-500/20'
-                              : 'bg-slate-50 border-slate-200 text-slate-700 hover:bg-slate-100'
-                      }`}
-                      title="Filter by delivery month (supports multi-selection)"
+                  <select 
+                      value={effectiveDeliveryMonth} 
+                      onChange={(e) => setDeliveryMonthFilter(e.target.value)} 
+                      className="bg-slate-50 border border-slate-200 text-slate-700 text-xs sm:text-sm rounded-lg p-2 font-bold focus:ring-1 focus:ring-blue-500 cursor-pointer"
                   >
-                      <Calendar className={`w-3.5 h-3.5 ${!isAllDeliveryMonthsSelected ? 'text-blue-600' : 'text-slate-400'}`} />
-                      <span className="max-w-[170px] truncate">{deliveryMonthButtonLabel}</span>
-                      {!isAllDeliveryMonthsSelected && (
-                          <span className="px-1.5 py-0.2 rounded-full text-[10px] font-extrabold bg-blue-600 text-white leading-none">
-                              {activeDeliveryMonthsSet.size}
-                          </span>
-                      )}
-                      {!isAllDeliveryMonthsSelected && (
-                          <span
-                              onClick={(e) => {
-                                  e.stopPropagation();
-                                  handleSelectAllMonths();
-                              }}
-                              className="p-0.5 rounded-full hover:bg-blue-200 text-blue-700 hover:text-blue-900 transition-colors"
-                              title="Reset filter to All Months"
-                          >
-                              <X className="w-3 h-3" />
-                          </span>
-                      )}
-                      <ChevronDown className={`w-3.5 h-3.5 text-slate-400 transition-transform ${isDeliveryMonthDropdownOpen ? 'rotate-180 text-blue-600' : ''}`} />
-                  </button>
-
-                  {isDeliveryMonthDropdownOpen && (
-                      <div className="absolute left-0 top-full mt-1.5 w-72 bg-white border border-slate-200 rounded-xl shadow-2xl z-50 p-2.5 space-y-2 text-xs text-slate-700">
-                          {/* Dropdown Header */}
-                          <div className="flex items-center justify-between pb-2 border-b border-slate-100">
-                              <span className="text-[11px] font-bold text-slate-500 uppercase tracking-wider font-mono">
-                                  Delivery Months ({availableDeliveryMonths.length})
-                              </span>
-                              <div className="flex items-center gap-1.5">
-                                  <button
-                                      type="button"
-                                      onClick={handleSelectAllMonths}
-                                      className={`text-[10px] font-semibold px-2 py-0.5 rounded transition-colors cursor-pointer ${
-                                          isAllDeliveryMonthsSelected
-                                              ? 'bg-blue-100 text-blue-700 font-bold'
-                                              : 'text-blue-600 hover:bg-blue-50'
-                                      }`}
-                                  >
-                                      All
-                                  </button>
-                                  <span className="text-slate-300">|</span>
-                                  <button
-                                      type="button"
-                                      onClick={handleClearMonths}
-                                      className="text-[10px] font-semibold text-slate-500 hover:text-slate-800 px-1.5 py-0.5 rounded hover:bg-slate-100 transition-colors cursor-pointer"
-                                  >
-                                      Clear
-                                  </button>
-                              </div>
-                          </div>
-
-                          {/* Search Filter Input (if more than 4 options) */}
-                          {availableDeliveryMonths.length > 4 && (
-                              <div className="relative">
-                                  <Search className="w-3.5 h-3.5 text-slate-400 absolute left-2.5 top-1/2 -translate-y-1/2 pointer-events-none" />
-                                  <input
-                                      type="text"
-                                      value={monthSearchTerm}
-                                      onChange={(e) => setMonthSearchTerm(e.target.value)}
-                                      placeholder="Search months..."
-                                      className="w-full pl-8 pr-7 py-1 text-xs bg-slate-50 border border-slate-200 rounded-lg focus:outline-none focus:ring-1 focus:ring-blue-500 focus:bg-white text-slate-800 placeholder-slate-400"
-                                  />
-                                  {monthSearchTerm && (
-                                      <button
-                                          type="button"
-                                          onClick={() => setMonthSearchTerm('')}
-                                          className="absolute right-2 top-1/2 -translate-y-1/2 text-slate-400 hover:text-slate-600 p-0.5"
-                                      >
-                                          <X className="w-3 h-3" />
-                                      </button>
-                                  )}
-                              </div>
-                          )}
-
-                          {/* "All Months" row */}
-                          <div
-                              onClick={handleSelectAllMonths}
-                              className={`flex items-center justify-between px-2.5 py-1.5 rounded-lg transition-colors cursor-pointer ${
-                                  isAllDeliveryMonthsSelected
-                                      ? 'bg-blue-50 text-blue-900 font-bold'
-                                      : 'hover:bg-slate-50 text-slate-700'
-                              }`}
-                          >
-                              <div className="flex items-center gap-2">
-                                  <div className={`w-4 h-4 rounded border flex items-center justify-center transition-colors ${
-                                      isAllDeliveryMonthsSelected ? 'bg-blue-600 border-blue-600 text-white' : 'border-slate-300 bg-white'
-                                  }`}>
-                                      {isAllDeliveryMonthsSelected && <Check className="w-2.5 h-2.5 stroke-[3]" />}
-                                  </div>
-                                  <span className="text-xs font-semibold">All Months (Default)</span>
-                              </div>
-                              <span className="text-[10px] font-mono font-medium px-1.5 py-0.2 rounded bg-slate-100 text-slate-500">
-                                  {profiles.length} deals
-                              </span>
-                          </div>
-
-                          <div className="border-t border-slate-100 my-1" />
-
-                          {/* Month Options list */}
-                          <div className="space-y-0.5 max-h-56 overflow-y-auto custom-scrollbar pr-0.5">
-                              {filteredDeliveryMonthOptions.length === 0 ? (
-                                  <div className="py-4 text-center text-slate-400 text-xs italic">
-                                      No matching months found
-                                  </div>
-                              ) : (
-                                  filteredDeliveryMonthOptions.map(m => {
-                                      const isChecked = isAllDeliveryMonthsSelected || activeDeliveryMonthsSet.has(m);
-                                      const count = monthCounts[m] || 0;
-                                      return (
-                                          <div
-                                              key={m}
-                                              onClick={() => toggleDeliveryMonth(m)}
-                                              className={`group flex items-center justify-between px-2.5 py-1.5 rounded-lg transition-colors cursor-pointer ${
-                                                  isChecked && !isAllDeliveryMonthsSelected
-                                                      ? 'bg-blue-50 text-blue-900 font-semibold'
-                                                      : isAllDeliveryMonthsSelected
-                                                          ? 'text-slate-700 hover:bg-slate-50'
-                                                          : 'text-slate-400 hover:bg-slate-50 hover:text-slate-700'
-                                              }`}
-                                          >
-                                              <div className="flex items-center gap-2 min-w-0">
-                                                  <div className={`w-4 h-4 rounded border flex items-center justify-center shrink-0 transition-colors ${
-                                                      isChecked ? 'bg-blue-600 border-blue-600 text-white' : 'border-slate-300 bg-white'
-                                                  }`}>
-                                                      {isChecked && <Check className="w-2.5 h-2.5 stroke-[3]" />}
-                                                  </div>
-                                                  <span className="truncate text-xs font-mono">
-                                                      {formatDeliveryMonthLabel(m)}
-                                                  </span>
-                                              </div>
-                                              <div className="flex items-center gap-1.5 shrink-0">
-                                                  <button
-                                                      type="button"
-                                                      onClick={(e) => selectOnlyMonth(m, e)}
-                                                      className="opacity-0 group-hover:opacity-100 text-[10px] text-blue-600 hover:text-blue-800 font-semibold px-1 py-0.2 rounded hover:bg-blue-100 transition-all cursor-pointer"
-                                                      title={`Show only ${m}`}
-                                                  >
-                                                      only
-                                                  </button>
-                                                  <span className={`text-[10px] font-mono px-1.5 py-0.2 rounded ${
-                                                      isChecked ? 'bg-blue-100 text-blue-700' : 'bg-slate-100 text-slate-500'
-                                                  }`}>
-                                                      {count}
-                                                  </span>
-                                              </div>
-                                          </div>
-                                      );
-                                  })
-                              )}
-                          </div>
-
-                          {/* Footer Info */}
-                          <div className="pt-1.5 border-t border-slate-100 flex items-center justify-between text-[10px] text-slate-400 font-mono">
-                              <span>
-                                  {isAllDeliveryMonthsSelected
-                                      ? `All ${availableDeliveryMonths.length} months active`
-                                      : `${activeDeliveryMonthsSet.size} of ${availableDeliveryMonths.length} selected`}
-                              </span>
-                              <span>{viewProfiles.length} cargos visible</span>
-                          </div>
-                      </div>
-                  )}
+                      {availableDeliveryMonths.map((m: string) => (
+                          <option key={m} value={m}>{formatDeliveryMonthLabel(m)}</option>
+                      ))}
+                  </select>
               </div>
 
               <div className="flex items-center gap-2">

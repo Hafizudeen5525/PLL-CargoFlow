@@ -1885,7 +1885,7 @@ export const TrmsSummaryTable: React.FC<TrmsSummaryTableProps> = ({ trmsData, vi
       cols.push('Sell Index');
     }
     cols.push(
-      'Purchase Cost', 'Sales Revenue', 'Shipping Related Costs', 'Misc Cost', 'Physical P&L',
+      'Purchase Cost', 'Sales Revenue', 'Shipping Related Costs', 'Physical P&L',
       'Hedging P&L', 'Sum of Value', 'Change in P&L'
     );
     if (showLinesCount) {
@@ -1896,12 +1896,12 @@ export const TrmsSummaryTable: React.FC<TrmsSummaryTableProps> = ({ trmsData, vi
 
   const numCols = useMemo(() => [
     'Purchase Volume', 'Sales Volume', 'Purchase Price', 'Sales Price',
-    'Purchase Cost', 'Sales Revenue', 'Shipping Related Costs', 'Misc Cost', 'Physical P&L',
+    'Purchase Cost', 'Sales Revenue', 'Shipping Related Costs', 'Physical P&L',
     'Hedging P&L', 'Sum of Value', 'Change in P&L', 'Lines Count'
   ], []);
 
   const clickableFilteredCols = useMemo(() => [
-    'Shipping Related Costs', 'Misc Cost', 'Hedging P&L'
+    'Shipping Related Costs', 'Hedging P&L'
   ], []);
 
   // Compute unique values inside each column for filters
@@ -1929,7 +1929,6 @@ export const TrmsSummaryTable: React.FC<TrmsSummaryTableProps> = ({ trmsData, vi
         else if (col === 'Purchase Cost') val = String(item.purchaseCost);
         else if (col === 'Sales Revenue') val = String(item.salesRevenue);
         else if (col === 'Shipping Related Costs') val = String(item.shippingRelatedCosts);
-        else if (col === 'Misc Cost') val = String(item.miscCost);
         else if (col === 'Hedging P&L') val = String(item.hedgingPnL);
         else if (col === 'Physical P&L') val = String((item.salesRevenue - item.purchaseCost) + item.shippingRelatedCosts);
         else if (col === 'Sum of Value') val = String(item.totalValueUSD);
@@ -2013,7 +2012,6 @@ export const TrmsSummaryTable: React.FC<TrmsSummaryTableProps> = ({ trmsData, vi
           else if (col === 'Purchase Cost') val = String(item.purchaseCost);
           else if (col === 'Sales Revenue') val = String(item.salesRevenue);
           else if (col === 'Shipping Related Costs') val = String(item.shippingRelatedCosts);
-          else if (col === 'Misc Cost') val = String(item.miscCost);
           else if (col === 'Hedging P&L') val = String(item.hedgingPnL);
           else if (col === 'Sum of Value') val = String(item.totalValueUSD);
           else if (col === 'Change in P&L') val = String(item.totalPnL);
@@ -2052,7 +2050,6 @@ export const TrmsSummaryTable: React.FC<TrmsSummaryTableProps> = ({ trmsData, vi
           else if (col === 'Purchase Cost') { valStr = String(item.purchaseCost); valNum = item.purchaseCost; }
           else if (col === 'Sales Revenue') { valStr = String(item.salesRevenue); valNum = item.salesRevenue; }
           else if (col === 'Shipping Related Costs') { valStr = String(item.shippingRelatedCosts); valNum = item.shippingRelatedCosts; }
-          else if (col === 'Misc Cost') { valStr = String(item.miscCost); valNum = item.miscCost; }
           else if (col === 'Hedging P&L') { valStr = String(item.hedgingPnL); valNum = item.hedgingPnL; }
           else if (col === 'Physical P&L') { const p = (item.salesRevenue - item.purchaseCost) + item.shippingRelatedCosts; valStr = String(p); valNum = p; }
           else if (col === 'Sum of Value') { valStr = String(item.totalValueUSD); valNum = item.totalValueUSD; }
@@ -2117,7 +2114,6 @@ export const TrmsSummaryTable: React.FC<TrmsSummaryTableProps> = ({ trmsData, vi
         else if (col === 'Purchase Cost') { valA = a.purchaseCost; valB = b.purchaseCost; }
         else if (col === 'Sales Revenue') { valA = a.salesRevenue; valB = b.salesRevenue; }
         else if (col === 'Shipping Related Costs') { valA = a.shippingRelatedCosts; valB = b.shippingRelatedCosts; }
-        else if (col === 'Misc Cost') { valA = a.miscCost; valB = b.miscCost; }
         else if (col === 'Hedging P&L') { valA = a.hedgingPnL; valB = b.hedgingPnL; }
         else if (col === 'Physical P&L') { valA = (a.salesRevenue - a.purchaseCost) + a.shippingRelatedCosts; valB = (b.salesRevenue - b.purchaseCost) + b.shippingRelatedCosts; }
         else if (col === 'Sum of Value') { valA = a.totalValueUSD; valB = b.totalValueUSD; }
@@ -2688,11 +2684,7 @@ export const TrmsSummaryTable: React.FC<TrmsSummaryTableProps> = ({ trmsData, vi
 
     // Determine targeted filter mode
     let targetMode: 'base_lng' | 'shipping_costs' | 'other_costs' | 'misc_costs' | 'hedging' | 'all' | 'buy_commodity' | 'sell_commodity' = 'base_lng';
-    if (columnClicked === 'Shipping Related Costs' || columnClicked === 'SRC') {
-      targetMode = 'shipping_costs';
-    } else if (columnClicked === 'Misc Cost' || columnClicked === 'Misc') {
-      targetMode = 'misc_costs';
-    } else if (columnClicked === 'Other Costs') {
+    if (columnClicked === 'Shipping Related Costs' || columnClicked === 'Other Costs' || columnClicked === 'SRC') {
       targetMode = 'other_costs';
     } else if (columnClicked === 'Hedging P&L') {
       targetMode = 'hedging';
@@ -2841,7 +2833,6 @@ export const TrmsSummaryTable: React.FC<TrmsSummaryTableProps> = ({ trmsData, vi
       'Purchase Cost', 
       'Sales Revenue', 
       'Shipping Related Costs',
-      'Misc Cost',
       'Hedging P&L',
       'Physical P&L',
       'Sum of Value', 
@@ -2869,7 +2860,6 @@ export const TrmsSummaryTable: React.FC<TrmsSummaryTableProps> = ({ trmsData, vi
         item.purchaseCost,
         item.salesRevenue,
         item.shippingRelatedCosts,
-        item.miscCost,
         item.hedgingPnL,
         (item.salesRevenue - item.purchaseCost) + item.shippingRelatedCosts,
         item.totalValueUSD,
@@ -2902,7 +2892,6 @@ export const TrmsSummaryTable: React.FC<TrmsSummaryTableProps> = ({ trmsData, vi
     else if (col === 'Purchase Cost') val = item.purchaseCost;
     else if (col === 'Sales Revenue') val = item.salesRevenue;
     else if (col === 'Shipping Related Costs') val = item.shippingRelatedCosts;
-    else if (col === 'Misc Cost') val = item.miscCost;
     else if (col === 'Hedging P&L') val = item.hedgingPnL;
     else if (col === 'Physical P&L') val = (item.salesRevenue - item.purchaseCost) + item.shippingRelatedCosts;
     else if (col === 'Sum of Value') val = item.totalValueUSD;
@@ -3086,7 +3075,7 @@ export const TrmsSummaryTable: React.FC<TrmsSummaryTableProps> = ({ trmsData, vi
       if (col === 'Purchase Price' || col === 'Sales Price') {
         return val === 0 ? '—' : `$${val.toLocaleString(undefined, { minimumFractionDigits: 2, maximumFractionDigits: 4 })}`;
       }
-      if (col === 'Purchase Cost' || col === 'Sales Revenue' || col === 'Shipping Related Costs' || col === 'Misc Cost' || col === 'Hedging P&L') {
+      if (col === 'Purchase Cost' || col === 'Sales Revenue' || col === 'Shipping Related Costs' || col === 'Hedging P&L') {
         const sign = val < 0 ? '-' : '';
         return val === 0 ? '—' : `${sign}$${Math.abs(val).toLocaleString(undefined, { maximumFractionDigits: 0 })}`;
       }
@@ -6571,7 +6560,6 @@ export const TrmsSummaryTable: React.FC<TrmsSummaryTableProps> = ({ trmsData, vi
 
                           let tooltip = "";
                           if (col === 'Shipping Related Costs') tooltip = "Click to filter trade details by Shipping Related Cost (SRC)";
-                          else if (col === 'Misc Cost') tooltip = "Click to filter trade details by Miscellaneous Fee (Misc)";
                           else if (col === 'Hedging P&L') tooltip = "Click to filter trade details by Hedging LNG";
                           else if (col === 'Purchase Cost' || col === 'Purchase Price' || col === 'Purchase Volume') tooltip = "Click to filter trade details to Purchase (Buy + Commodity) only";
                           else if (col === 'Sales Revenue' || col === 'Sales Price' || col === 'Sales Volume') tooltip = "Click to filter trade details to Sales (Sell + Commodity) only";
