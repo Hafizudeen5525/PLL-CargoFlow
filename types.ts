@@ -35,6 +35,7 @@ export interface CargoProfile {
   finalPhysicalPnL: number;
   totalHedgingPnL: number;
   finalTotalPnL: number;
+  pricingMode?: 'formula' | 'component';
   volumeUnit?: string;
   pricingEndDate?: string;
   totalLoadedVolume?: number;

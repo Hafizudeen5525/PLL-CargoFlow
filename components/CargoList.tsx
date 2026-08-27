@@ -361,10 +361,8 @@ export const CargoList: React.FC<CargoListProps> = ({
                                 const miscVal = miscIdx !== -1 ? (cleanNumeric(row[miscIdx]) as number) : 0;
                                 const finVal = finIdx !== -1 ? (cleanNumeric(row[finIdx]) as number) : 0;
 
-                                const rowOtherTotal = (srcVal || 0) + (miscVal || 0) + (finVal || 0);
-
-                                mergedData[lookupName].reconciledSrcCost = ((mergedData[lookupName].reconciledSrcCost || 0) + rowOtherTotal);
-                                mergedData[lookupName].reconciledOtherCost = mergedData[lookupName].reconciledSrcCost;
+                                mergedData[lookupName].reconciledSrcCost = ((mergedData[lookupName].reconciledSrcCost || 0) + (srcVal || 0));
+                                mergedData[lookupName].reconciledOtherCost = ((mergedData[lookupName].reconciledOtherCost || 0) + (miscVal || 0) + (finVal || 0));
                                 mergedData[lookupName].srcCost = ((mergedData[lookupName].srcCost || 0) + (srcVal || 0));
                                 mergedData[lookupName].miscCost = ((mergedData[lookupName].miscCost || 0) + (miscVal || 0));
                                 mergedData[lookupName].financeCost = ((mergedData[lookupName].financeCost || 0) + (finVal || 0));

@@ -72,6 +72,9 @@ export interface ReconciliationRow {
         purchaseCost: number;
         salesRevenue: number;
         src: number;
+        miscCost?: number;
+        financeCost?: number;
+        otherCost: number;
         loadingMonth: string;
         deliveryMonth: string;
         hedgingPnL?: number;
@@ -123,6 +126,8 @@ export interface ReconciliationRow {
         purchaseCost: number;
         salesRevenue: number;
         src: number;
+        miscCost?: number;
+        otherCost: number;
         loadingMonth: string;
         deliveryMonth: string;
         buyIndex?: string;
@@ -160,6 +165,7 @@ export interface ReconciliationRow {
         buyPrice: number;
         sellPrice: number;
         src: number;
+        otherCost: number;
         loadingMonth: boolean;
         deliveryMonth: boolean;
         purchaseCost: number;
@@ -171,6 +177,7 @@ export interface ReconciliationRow {
         buyVol: number;
         sellVol: number;
         src: number;
+        otherCost: number;
         loadingDate: number;
         deliveryDate: number;
         purchaseCost: number;
@@ -469,6 +476,84 @@ function parseMonthOrDate(val: any): { year: string; monthName: string; rawVal: 
   return null;
 }
 
+const getColumnMismatchInfo = (row: ReconciliationRow, header: string): { isMismatch: boolean; isMatch: boolean } => {
+  if (!row.foundInApp || !row.foundInTrms) {
+    return { isMismatch: true, isMatch: false };
+  }
+  
+  if (header === 'Strategy Name') {
+    const isMismatch = row.discrepancies.size > 0;
+    return { isMismatch, isMatch: !isMismatch };
+  }
+  if (header === 'Buyer') {
+    const isMismatch = (row.app.buyer || '').toLowerCase().trim() !== (row.trms.buyer || '').toLowerCase().trim();
+    return { isMismatch, isMatch: !isMismatch };
+  }
+  if (header === 'P&L Bucket') {
+    const isMismatch = Boolean(row.diffs.pnlBucket || (row.app.pnlBucket !== '—' && row.trms.pnlBucket !== '—' && row.app.pnlBucket !== row.trms.pnlBucket));
+    return { isMismatch, isMatch: !isMismatch };
+  }
+  if (header === 'Optimization') {
+    const isMismatch = Boolean(row.diffs.optimization || row.discrepancies.has('Optimization'));
+    return { isMismatch, isMatch: !isMismatch };
+  }
+  if (header === 'Unallocated Cargo') {
+    const isMismatch = Boolean(row.diffs.unallocatedCargo || row.discrepancies.has('Unallocated Cargo'));
+    return { isMismatch, isMatch: !isMismatch };
+  }
+  if (header === 'Purchase Volume') {
+    const calcVolPctDiff = (v1: number, v2: number) => {
+      const diff = Math.abs(v1 - v2);
+      if (diff <= 0.1) return 0;
+      const maxVal = Math.max(Math.abs(v1), Math.abs(v2));
+      return maxVal > 0 ? (diff / maxVal) * 100 : 0;
+    };
+    const isMismatch = row.discrepancies.has('Buy Vol') || calcVolPctDiff(row.app.buyVolTotal, row.trms.buyVolTotal) >= 5 || Math.abs(row.app.buyVolTotal - row.trms.buyVolTotal) > 0.1;
+    return { isMismatch, isMatch: !isMismatch };
+  }
+  if (header === 'Sales Volume') {
+    const calcVolPctDiff = (v1: number, v2: number) => {
+      const diff = Math.abs(v1 - v2);
+      if (diff <= 0.1) return 0;
+      const maxVal = Math.max(Math.abs(v1), Math.abs(v2));
+      return maxVal > 0 ? (diff / maxVal) * 100 : 0;
+    };
+    const isMismatch = row.discrepancies.has('Sell Vol') || calcVolPctDiff(row.app.sellVolTotal, row.trms.sellVolTotal) >= 5 || Math.abs(row.app.sellVolTotal - row.trms.sellVolTotal) > 0.1;
+    return { isMismatch, isMatch: !isMismatch };
+  }
+  if (header === 'Purchase Price') {
+    const isMismatch = row.discrepancies.has('Buy Price') || Math.abs(row.app.buyPriceEffective - row.trms.buyPriceEffective) > 0.01;
+    return { isMismatch, isMatch: !isMismatch };
+  }
+  if (header === 'Sales Price') {
+    const isMismatch = row.discrepancies.has('Sell Price') || Math.abs(row.app.sellPriceEffective - row.trms.sellPriceEffective) > 0.01;
+    return { isMismatch, isMatch: !isMismatch };
+  }
+  if (header === 'Formula') {
+    const isMismatch = (row.app.buyFormula || '—') !== (row.trms.buyFormula || row.trms.buyIndex || '—') ||
+                       (row.app.sellFormula || '—') !== (row.trms.sellFormula || row.trms.sellIndex || '—');
+    return { isMismatch, isMatch: !isMismatch };
+  }
+  if (header === 'SRC Costs') {
+    const isMismatch = row.discrepancies.has('SRC Cost') || Math.abs(row.app.src - row.trms.src) > 1.0;
+    return { isMismatch, isMatch: !isMismatch };
+  }
+  if (header === 'Other Fees') {
+    const isMismatch = row.discrepancies.has('Other Fees') || Math.abs(row.app.otherCost - row.trms.otherCost) > 1.0;
+    return { isMismatch, isMatch: !isMismatch };
+  }
+  if (header === 'Loading Month') {
+    const isMismatch = Boolean(row.diffs.loadingMonth || (row.app.loadingMonth !== '—' && row.trms.loadingMonth !== '—' && row.app.loadingMonth !== row.trms.loadingMonth));
+    return { isMismatch, isMatch: !isMismatch };
+  }
+  if (header === 'Delivery Month') {
+    const isMismatch = Boolean(row.diffs.deliveryMonth || (row.app.deliveryMonth !== '—' && row.trms.deliveryMonth !== '—' && row.app.deliveryMonth !== row.trms.deliveryMonth));
+    return { isMismatch, isMatch: !isMismatch };
+  }
+
+  return { isMismatch: false, isMatch: true };
+};
+
 export const DiscrepancyCheck: React.FC<DiscrepancyCheckProps> = ({ 
   profiles, 
   trmsData, 
@@ -611,6 +696,7 @@ export const DiscrepancyCheck: React.FC<DiscrepancyCheckProps> = ({
   const [reportShowCustomizer, setReportShowCustomizer] = useState(true);
   
   const [activeFilters, setActiveFilters] = useState<Record<string, Set<any>> >({});
+  const [columnComparisonFilters, setColumnComparisonFilters] = useState<Record<string, 'all' | 'mismatch' | 'match'>>({});
   const [openFilterMenu, setOpenFilterMenu] = useState<string | null>(null);
   const [showReportPreview, setShowReportPreview] = useState(false);
   const [viewingRawData, setViewingRawData] = useState<any[] | null>(null);
@@ -714,6 +800,7 @@ export const DiscrepancyCheck: React.FC<DiscrepancyCheckProps> = ({
     'Sales Volume': 200,
     'Formula': 260,
     'SRC Costs': 200,
+    'Other Fees': 200,
     'SRC Components': 200,
     'Purchase Cost': 200,
     'Sales Revenue': 200,
@@ -1028,8 +1115,20 @@ export const DiscrepancyCheck: React.FC<DiscrepancyCheckProps> = ({
 
       const appPurchaseCost = app?.reconciledPurchaseCost || (appBuyPriceEffective * appBuyVolTotal);
       const appSalesRevenue = app?.reconciledSalesRevenue || (appSellPriceEffective * appSellVolTotal);
-      const rawAppSrc = app?.reconciledSrcCost !== undefined && app.reconciledSrcCost !== 0 ? app.reconciledSrcCost : (app?.srcUnitFee ? app.srcUnitFee * (appSellVolTotal || appBuyVolTotal) : 0);
+      
+      // Separated SRC and Other Fees (Misc + Finance)
+      const rawAppSrc = app?.reconciledSrcCost !== undefined && app.reconciledSrcCost !== 0 
+        ? app.reconciledSrcCost 
+        : (app?.srcUnitFee ? app.srcUnitFee * (appSellVolTotal || appBuyVolTotal) : (app?.srcCost || 0));
       const appSrc = rawAppSrc > 0 ? -rawAppSrc : rawAppSrc;
+
+      const rawAppMisc = app?.miscCost || 0;
+      const rawAppFin = app?.financeCost || 0;
+      const rawAppOther = app?.reconciledOtherCost !== undefined && app.reconciledOtherCost !== 0 
+        ? app.reconciledOtherCost 
+        : (rawAppMisc + rawAppFin);
+      const appOtherCost = rawAppOther > 0 ? -rawAppOther : rawAppOther;
+
       const appLoadingMonth = app?.loadingMonth || (app?.loadingDate ? getMonthStr(app.loadingDate) : '—');
       const appDeliveryMonth = app?.deliveryMonth || (app?.deliveryDate ? getMonthStr(app.deliveryDate) : '—');
       const appBuyer = app?.buyer && app.buyer.trim() !== '' ? app.buyer.trim() : 'Spot';
@@ -1061,6 +1160,8 @@ export const DiscrepancyCheck: React.FC<DiscrepancyCheckProps> = ({
       const trmsPurchaseCost = trms?.purchaseCost ?? 0;
       const trmsSalesRevenue = trms?.salesRevenue ?? 0;
       const trmsSrc = trms?.shippingRelatedCosts ?? 0;
+      const trmsMisc = trms?.miscCost ?? 0;
+      const trmsOtherCost = trmsMisc;
       const trmsLoadingMonth = trms?.loadingMonth || '—';
       const trmsDeliveryMonth = trms?.deliveryMonth || '—';
 
@@ -1102,6 +1203,9 @@ export const DiscrepancyCheck: React.FC<DiscrepancyCheckProps> = ({
         }
         if (Math.abs(appSrc - trmsSrc) > 1.0) {
           discrepancies.add('SRC Cost');
+        }
+        if (Math.abs(appOtherCost - trmsOtherCost) > 1.0) {
+          discrepancies.add('Other Fees');
         }
         if (appLoadingMonth !== '—' && trmsLoadingMonth !== '—' && appLoadingMonth !== trmsLoadingMonth) {
           discrepancies.add('Loading Month');
@@ -1145,6 +1249,9 @@ export const DiscrepancyCheck: React.FC<DiscrepancyCheckProps> = ({
           purchaseCost: appPurchaseCost,
           salesRevenue: appSalesRevenue,
           src: appSrc,
+          miscCost: rawAppMisc,
+          financeCost: rawAppFin,
+          otherCost: appOtherCost,
           loadingMonth: appLoadingMonth,
           deliveryMonth: appDeliveryMonth,
           hedgingPnL: 0,
@@ -1196,6 +1303,8 @@ export const DiscrepancyCheck: React.FC<DiscrepancyCheckProps> = ({
           purchaseCost: trmsPurchaseCost,
           salesRevenue: trmsSalesRevenue,
           src: trmsSrc,
+          miscCost: trmsMisc,
+          otherCost: trmsOtherCost,
           loadingMonth: trmsLoadingMonth,
           deliveryMonth: trmsDeliveryMonth,
           buyIndex: trms?.buyIndex || '—',
@@ -1253,6 +1362,7 @@ export const DiscrepancyCheck: React.FC<DiscrepancyCheckProps> = ({
           buyPrice: appBuyPriceEffective - trmsBuyPriceEffective,
           sellPrice: appSellPriceEffective - trmsSellPriceEffective,
           src: appSrc - trmsSrc,
+          otherCost: appOtherCost - trmsOtherCost,
           loadingMonth: appLoadingMonth !== trmsLoadingMonth,
           deliveryMonth: appDeliveryMonth !== trmsDeliveryMonth,
           purchaseCost: appPurchaseCost - trmsPurchaseCost,
@@ -1264,6 +1374,7 @@ export const DiscrepancyCheck: React.FC<DiscrepancyCheckProps> = ({
           buyVol: calcPct(appBuyVolTotal, trmsBuyVolTotal),
           sellVol: calcPct(appSellVolTotal, trmsSellVolTotal),
           src: calcPct(appSrc, trmsSrc),
+          otherCost: calcPct(appOtherCost, trmsOtherCost),
           loadingDate: appLoadingMonth === trmsLoadingMonth ? 0 : 100,
           deliveryDate: appDeliveryMonth === trmsDeliveryMonth ? 0 : 100,
           purchaseCost: calcPct(appPurchaseCost, trmsPurchaseCost),
@@ -1303,7 +1414,13 @@ export const DiscrepancyCheck: React.FC<DiscrepancyCheckProps> = ({
       }
 
       if (reconPnlBucketFilter !== 'all') {
-        if (reconFilterSource === 'app') {
+        if (reconPnlBucketFilter === '__mismatch__') {
+          const info = getColumnMismatchInfo(row, 'P&L Bucket');
+          if (!info.isMismatch) return false;
+        } else if (reconPnlBucketFilter === '__match__') {
+          const info = getColumnMismatchInfo(row, 'P&L Bucket');
+          if (!info.isMatch) return false;
+        } else if (reconFilterSource === 'app') {
           if (row.app.pnlBucket !== reconPnlBucketFilter) return false;
         } else if (reconFilterSource === 'trms') {
           if (row.trms.pnlBucket !== reconPnlBucketFilter) return false;
@@ -1313,7 +1430,13 @@ export const DiscrepancyCheck: React.FC<DiscrepancyCheckProps> = ({
       }
 
       if (reconOptimizationFilter !== 'all') {
-        if (reconFilterSource === 'app') {
+        if (reconOptimizationFilter === '__mismatch__') {
+          const info = getColumnMismatchInfo(row, 'Optimization');
+          if (!info.isMismatch) return false;
+        } else if (reconOptimizationFilter === '__match__') {
+          const info = getColumnMismatchInfo(row, 'Optimization');
+          if (!info.isMatch) return false;
+        } else if (reconFilterSource === 'app') {
           if (row.app.optimization !== reconOptimizationFilter) return false;
         } else if (reconFilterSource === 'trms') {
           if (row.trms.optimization !== reconOptimizationFilter) return false;
@@ -1323,7 +1446,13 @@ export const DiscrepancyCheck: React.FC<DiscrepancyCheckProps> = ({
       }
 
       if (reconUnallocatedFilter !== 'all') {
-        if (reconFilterSource === 'app') {
+        if (reconUnallocatedFilter === '__mismatch__') {
+          const info = getColumnMismatchInfo(row, 'Unallocated Cargo');
+          if (!info.isMismatch) return false;
+        } else if (reconUnallocatedFilter === '__match__') {
+          const info = getColumnMismatchInfo(row, 'Unallocated Cargo');
+          if (!info.isMatch) return false;
+        } else if (reconFilterSource === 'app') {
           if (row.app.unallocatedCargo !== reconUnallocatedFilter) return false;
         } else if (reconFilterSource === 'trms') {
           if (row.trms.unallocatedCargo !== reconUnallocatedFilter) return false;
@@ -1375,6 +1504,7 @@ export const DiscrepancyCheck: React.FC<DiscrepancyCheckProps> = ({
             'Sales Price',
             'Formula',
             'SRC Costs',
+            'Other Fees',
             'Loading Month',
             'Delivery Month'
         ];
@@ -1417,6 +1547,7 @@ export const DiscrepancyCheck: React.FC<DiscrepancyCheckProps> = ({
         if (row.app.tier2SellFormula) addVal(row.app.tier2SellFormula);
       }
       else if (header === 'SRC Costs') addVal(row.app.src);
+      else if (header === 'Other Fees') addVal(row.app.otherCost);
       else if (header === 'Loading Month') {
         if (row.app.loadingMonth && row.app.loadingMonth !== '—') addVal(row.app.loadingMonth);
         else if (row.app.loadingDate) addVal(row.app.loadingDate);
@@ -1443,6 +1574,7 @@ export const DiscrepancyCheck: React.FC<DiscrepancyCheckProps> = ({
         if (row.trms.sellIndex && row.trms.sellIndex !== '—') addVal(row.trms.sellIndex);
       }
       else if (header === 'SRC Costs') addVal(row.trms.src);
+      else if (header === 'Other Fees') addVal(row.trms.otherCost);
       else if (header === 'Loading Month') {
         if (row.trms.loadingMonth && row.trms.loadingMonth !== '—') addVal(row.trms.loadingMonth);
         else if (row.trms.loadingDate) addVal(row.trms.loadingDate);
@@ -1556,6 +1688,24 @@ export const DiscrepancyCheck: React.FC<DiscrepancyCheckProps> = ({
         });
       }
     });
+
+    // Apply App vs TRMS Comparison Filter (Mismatch vs Match per column)
+    if (activeTab === 'reconcile') {
+      Object.entries(columnComparisonFilters).forEach(([header, mode]) => {
+        if (mode === 'mismatch') {
+          result = result.filter(row => {
+            const info = getColumnMismatchInfo(row as ReconciliationRow, header);
+            return info.isMismatch;
+          });
+        } else if (mode === 'match') {
+          result = result.filter(row => {
+            const info = getColumnMismatchInfo(row as ReconciliationRow, header);
+            return info.isMatch;
+          });
+        }
+      });
+    }
+
     if (sortConfig.key) {
       const { key, direction } = sortConfig;
       result.sort((a, b) => {
@@ -1572,12 +1722,25 @@ export const DiscrepancyCheck: React.FC<DiscrepancyCheckProps> = ({
       });
     }
     return result;
-  }, [currentRawData, debouncedSearch, activeFilters, sortConfig, activeTab, reconFilterSource]);
+  }, [currentRawData, debouncedSearch, activeFilters, columnComparisonFilters, sortConfig, activeTab, reconFilterSource]);
+
+  // Comparison summary counts for the currently open column filter popover
+  const headerCompCounts = useMemo(() => {
+    if (!openFilterMenu || activeTab !== 'reconcile') return { mismatches: 0, matches: 0, total: 0 };
+    let mismatches = 0;
+    let matches = 0;
+    currentRawData.forEach(r => {
+      const info = getColumnMismatchInfo(r as ReconciliationRow, openFilterMenu);
+      if (info.isMismatch) mismatches++;
+      if (info.isMatch) matches++;
+    });
+    return { mismatches, matches, total: currentRawData.length };
+  }, [openFilterMenu, activeTab, currentRawData]);
 
   // Reset pagination page when filters or search or tab change
   useEffect(() => {
     setReconCurrentPage(1);
-  }, [searchTerm, debouncedSearch, reconStatusFilter, reconGroupFilter, reconPnlBucketFilter, reconOptimizationFilter, reconUnallocatedFilter, reconFilterSource, selectedYears, activeFilters, activeTab, reconPageSize]);
+  }, [searchTerm, debouncedSearch, reconStatusFilter, reconGroupFilter, reconPnlBucketFilter, reconOptimizationFilter, reconUnallocatedFilter, reconFilterSource, selectedYears, activeFilters, columnComparisonFilters, activeTab, reconPageSize]);
 
   const totalReconPages = useMemo(() => {
     if (reconPageSize === 0) return 1;
@@ -2488,6 +2651,8 @@ export const DiscrepancyCheck: React.FC<DiscrepancyCheckProps> = ({
                     {/* P&L Bucket Dropdown */}
                     <select value={reconPnlBucketFilter} onChange={(e) => setReconPnlBucketFilter(e.target.value)} className="bg-slate-800 text-slate-200 border border-slate-700 text-[10px] font-bold rounded-lg px-2.5 py-1 focus:ring-1 focus:ring-indigo-500 outline-none">
                       <option value="all">P&L Bucket: All</option>
+                      <option value="__mismatch__">⚠️ P&L Bucket: Mismatches (App ≠ TRMS)</option>
+                      <option value="__match__">✓ P&L Bucket: Matches (App = TRMS)</option>
                       <option value="Realized">Realized</option>
                       <option value="Unrealized">Unrealized</option>
                     </select>
@@ -2495,6 +2660,8 @@ export const DiscrepancyCheck: React.FC<DiscrepancyCheckProps> = ({
                     {/* Optimization Dropdown */}
                     <select value={reconOptimizationFilter} onChange={(e) => setReconOptimizationFilter(e.target.value)} className="bg-slate-800 text-slate-200 border border-slate-700 text-[10px] font-bold rounded-lg px-2.5 py-1 focus:ring-1 focus:ring-indigo-500 outline-none">
                       <option value="all">Optimization: All</option>
+                      <option value="__mismatch__">⚠️ Optimization: Mismatches (App ≠ TRMS)</option>
+                      <option value="__match__">✓ Optimization: Matches (App = TRMS)</option>
                       <option value="Yes">Optimization: Yes</option>
                       <option value="No">Optimization: No</option>
                     </select>
@@ -2502,13 +2669,15 @@ export const DiscrepancyCheck: React.FC<DiscrepancyCheckProps> = ({
                     {/* Unallocated Dropdown */}
                     <select value={reconUnallocatedFilter} onChange={(e) => setReconUnallocatedFilter(e.target.value)} className="bg-slate-800 text-slate-200 border border-slate-700 text-[10px] font-bold rounded-lg px-2.5 py-1 focus:ring-1 focus:ring-indigo-500 outline-none">
                       <option value="all">Unallocated: All</option>
+                      <option value="__mismatch__">⚠️ Unallocated: Mismatches (App ≠ TRMS)</option>
+                      <option value="__match__">✓ Unallocated: Matches (App = TRMS)</option>
                       <option value="Matched">Matched</option>
                       <option value="Open on Buy Leg">Open on Buy Leg</option>
                       <option value="Open on Sell Leg">Open on Sell Leg</option>
                     </select>
                   </div>
 
-                  {(reconStatusFilter !== 'all' || reconGroupFilter !== 'all' || reconPnlBucketFilter !== 'all' || reconOptimizationFilter !== 'all' || reconUnallocatedFilter !== 'all' || reconFilterSource !== 'both' || !selectedYears.has('all') || Object.keys(activeFilters).some(k => (activeFilters[k]?.size ?? 0) > 0)) && (
+                  {(reconStatusFilter !== 'all' || reconGroupFilter !== 'all' || reconPnlBucketFilter !== 'all' || reconOptimizationFilter !== 'all' || reconUnallocatedFilter !== 'all' || reconFilterSource !== 'both' || !selectedYears.has('all') || Object.keys(activeFilters).some(k => (activeFilters[k]?.size ?? 0) > 0) || Object.keys(columnComparisonFilters).some(k => columnComparisonFilters[k] && columnComparisonFilters[k] !== 'all')) && (
                     <button onClick={() => {
                       setReconStatusFilter('all');
                       setReconGroupFilter('all');
@@ -2518,6 +2687,7 @@ export const DiscrepancyCheck: React.FC<DiscrepancyCheckProps> = ({
                       setReconFilterSource('both');
                       setSelectedYears(new Set(['all']));
                       setActiveFilters({});
+                      setColumnComparisonFilters({});
                     }} className="text-[10px] font-bold text-rose-400 hover:text-rose-300 underline">
                       Reset Filters
                     </button>
@@ -2706,13 +2876,34 @@ export const DiscrepancyCheck: React.FC<DiscrepancyCheckProps> = ({
               <div className="sticky top-0 bg-white z-40 border-b-2 border-slate-200 flex shadow-sm">
                 {headers.map((header, idx) => {
                   const isSorted = sortConfig.key === header, isFirst = idx === 0, isStrat = header === 'Strategy Name';
-                  const hasActiveFilter = ((activeFilters[header] as any)?.size ?? 0) > 0;
+                  const hasActiveValueFilter = ((activeFilters[header] as any)?.size ?? 0) > 0;
+                  const comparisonFilterMode = columnComparisonFilters[header] || 'all';
+                  const hasActiveComparisonFilter = comparisonFilterMode !== 'all';
+                  const hasActiveFilter = hasActiveValueFilter || hasActiveComparisonFilter;
                   const width = columnWidths[header] || DEFAULT_COLUMN_WIDTH;
                   return (
                     <div key={header} className={`px-4 py-3 bg-slate-50 border-r border-slate-100 flex items-center justify-between gap-2 relative shrink-0 ${isFirst ? 'sticky left-0 z-50 bg-slate-100' : ''}`} style={{ width }}>
-                      <span className={`font-bold truncate uppercase tracking-tight text-[10px] ${isSorted ? 'text-indigo-600' : 'text-slate-600'}`}>{header}</span>
+                      <div className="flex items-center gap-1.5 min-w-0">
+                        <span className={`font-bold truncate uppercase tracking-tight text-[10px] ${isSorted ? 'text-indigo-600' : 'text-slate-600'}`}>{header}</span>
+                        {comparisonFilterMode === 'mismatch' && (
+                          <span className="bg-rose-100 text-rose-700 text-[9px] font-black px-1 py-0.2 rounded border border-rose-200 shrink-0" title="Filtering Mismatches">
+                            ≠
+                          </span>
+                        )}
+                        {comparisonFilterMode === 'match' && (
+                          <span className="bg-emerald-100 text-emerald-700 text-[9px] font-black px-1 py-0.2 rounded border border-emerald-200 shrink-0" title="Filtering Matches">
+                            =
+                          </span>
+                        )}
+                      </div>
                       <div className="flex items-center gap-1">
-                        <button onClick={() => setOpenFilterMenu(header === openFilterMenu ? null : header)} className={`p-1 rounded ${hasActiveFilter ? 'bg-indigo-100 text-indigo-600' : 'text-slate-400 hover:bg-slate-200 opacity-50'}`}><svg className="w-3 h-3" fill="none" stroke="currentColor" viewBox="0 0 24 24"><path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M3 4a1 1 0 011-1h16a1 1 0 011 1v2.586a1 1 0 01-.293.707l-6.414 6.414a1 1 0 00-.293.707V17l-4 4v-6.586a1 1 0 00-.293.707V17l-4 4v-6.586a1 1 0 00-.293.707L3.293 7.293A1 1 0 013 6.586V4z" /></svg></button>
+                        <button 
+                          onClick={() => setOpenFilterMenu(header === openFilterMenu ? null : header)} 
+                          className={`p-1 rounded transition-colors ${hasActiveFilter ? (comparisonFilterMode === 'mismatch' ? 'bg-rose-100 text-rose-600' : 'bg-indigo-100 text-indigo-600') : 'text-slate-400 hover:bg-slate-200 opacity-50'}`}
+                          title={`Filter ${header}`}
+                        >
+                          <svg className="w-3 h-3" fill="none" stroke="currentColor" viewBox="0 0 24 24"><path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M3 4a1 1 0 011-1h16a1 1 0 011 1v2.586a1 1 0 01-.293.707l-6.414 6.414a1 1 0 00-.293.707V17l-4 4v-6.586a1 1 0 00-.293.707V17l-4 4v-6.586a1 1 0 00-.293.707L3.293 7.293A1 1 0 013 6.586V4z" /></svg>
+                        </button>
                         <button onClick={() => setSortConfig({ key: header, direction: isSorted && sortConfig.direction === 'asc' ? 'desc' : 'asc' })} className={`p-1 rounded ${isSorted ? 'text-indigo-600' : 'text-slate-300'}`}><svg className={`w-3 h-3 transition-transform ${isSorted && sortConfig.direction === 'desc' ? 'rotate-180' : ''}`} fill="none" stroke="currentColor" viewBox="0 0 24 24"><path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M19 9l-7 7-7-7" /></svg></button>
                       </div>
                       
@@ -2724,10 +2915,93 @@ export const DiscrepancyCheck: React.FC<DiscrepancyCheckProps> = ({
 
                       <AnimatePresence>
                         {openFilterMenu === header && (
-                          <motion.div ref={filterMenuRef} initial={{ opacity: 0, y: 5 }} animate={{ opacity: 1, y: 0 }} exit={{ opacity: 0, y: 5 }} className="absolute top-full left-0 mt-1 w-72 bg-white border border-slate-200 shadow-2xl rounded-xl p-4 z-[100] text-slate-700 font-normal normal-case">
+                          <motion.div ref={filterMenuRef} initial={{ opacity: 0, y: 5 }} animate={{ opacity: 1, y: 0 }} exit={{ opacity: 0, y: 5 }} className="absolute top-full left-0 mt-1 w-80 bg-white border border-slate-200 shadow-2xl rounded-xl p-4 z-[100] text-slate-700 font-normal normal-case">
                             <div className="space-y-3">
-                              <input autoFocus type="text" placeholder="Search values..." value={filterSearch} onChange={(e) => setFilterSearch(e.target.value)} className="w-full text-[11px] px-3 py-2 border border-slate-200 rounded-lg bg-slate-50 focus:ring-2 focus:ring-indigo-500/20 focus:border-indigo-500 outline-none" />
-                               <div className="max-h-[350px] overflow-y-auto custom-scrollbar pr-1">
+                              {/* Header Title & Clear Header Filter */}
+                              <div className="flex items-center justify-between border-b border-slate-100 pb-2">
+                                <span className="font-bold text-xs text-slate-800 truncate">{header}</span>
+                                {(hasActiveValueFilter || hasActiveComparisonFilter) && (
+                                  <button 
+                                    onClick={() => {
+                                      setActiveFilters(prev => { const n = { ...prev }; delete n[header]; return n; });
+                                      setColumnComparisonFilters(prev => { const n = { ...prev }; delete n[header]; return n; });
+                                    }} 
+                                    className="text-[10px] text-rose-500 hover:text-rose-600 font-semibold underline"
+                                  >
+                                    Reset column
+                                  </button>
+                                )}
+                              </div>
+
+                              {/* App vs TRMS Comparison Filter Section (For Reconciliation View) */}
+                              {activeTab === 'reconcile' && (
+                                <div className="p-2.5 bg-slate-50 border border-slate-200 rounded-lg space-y-2">
+                                  <div className="flex items-center justify-between text-[10px] font-bold uppercase tracking-wider text-slate-500">
+                                    <span>Comparison Filter</span>
+                                    <span className="text-slate-400 font-normal normal-case">App vs TRMS</span>
+                                  </div>
+                                  <div className="grid grid-cols-3 gap-1 bg-slate-200/70 p-1 rounded-lg text-[11px] font-semibold">
+                                    <button
+                                      type="button"
+                                      onClick={() => setColumnComparisonFilters(prev => ({ ...prev, [header]: 'all' }))}
+                                      className={`py-1 px-1.5 rounded text-center transition-all ${(!columnComparisonFilters[header] || columnComparisonFilters[header] === 'all') ? 'bg-white text-slate-800 font-bold shadow-sm' : 'text-slate-500 hover:text-slate-800'}`}
+                                    >
+                                      All
+                                    </button>
+                                    <button
+                                      type="button"
+                                      onClick={() => setColumnComparisonFilters(prev => ({ ...prev, [header]: 'mismatch' }))}
+                                      className={`py-1 px-1.5 rounded text-center transition-all flex items-center justify-center gap-1 ${columnComparisonFilters[header] === 'mismatch' ? 'bg-rose-600 text-white font-bold shadow-sm' : 'text-rose-600 hover:bg-rose-50'}`}
+                                      title="Filter rows where App and TRMS values differ for this column"
+                                    >
+                                      <span>⚠️ Diff</span>
+                                      <span className={`text-[9px] px-1 rounded-full ${columnComparisonFilters[header] === 'mismatch' ? 'bg-rose-700 text-white' : 'bg-rose-100 text-rose-700'}`}>
+                                        {headerCompCounts.mismatches}
+                                      </span>
+                                    </button>
+                                    <button
+                                      type="button"
+                                      onClick={() => setColumnComparisonFilters(prev => ({ ...prev, [header]: 'match' }))}
+                                      className={`py-1 px-1.5 rounded text-center transition-all flex items-center justify-center gap-1 ${columnComparisonFilters[header] === 'match' ? 'bg-emerald-600 text-white font-bold shadow-sm' : 'text-emerald-700 hover:bg-emerald-50'}`}
+                                      title="Filter rows where App and TRMS values match for this column"
+                                    >
+                                      <span>✓ Match</span>
+                                      <span className={`text-[9px] px-1 rounded-full ${columnComparisonFilters[header] === 'match' ? 'bg-emerald-700 text-white' : 'bg-emerald-100 text-emerald-700'}`}>
+                                        {headerCompCounts.matches}
+                                      </span>
+                                    </button>
+                                  </div>
+                                </div>
+                              )}
+
+                              {/* Search & Values */}
+                              <div className="space-y-2">
+                                <input autoFocus type="text" placeholder="Search values..." value={filterSearch} onChange={(e) => setFilterSearch(e.target.value)} className="w-full text-[11px] px-3 py-1.5 border border-slate-200 rounded-lg bg-slate-50 focus:ring-2 focus:ring-indigo-500/20 focus:border-indigo-500 outline-none" />
+                                
+                                <div className="flex items-center justify-between text-[10px] text-slate-400 px-0.5">
+                                  <span>Values ({filterData.values[header]?.length || 0})</span>
+                                  {filterData.values[header] && !isStrat && !filterData.dateHierarchies[header] && (
+                                    <div className="flex gap-2">
+                                      <button 
+                                        type="button"
+                                        onClick={() => bulkToggle(header, filterData.values[header] || [], true)} 
+                                        className="text-indigo-600 hover:underline font-bold"
+                                      >
+                                        Select All
+                                      </button>
+                                      <button 
+                                        type="button"
+                                        onClick={() => bulkToggle(header, filterData.values[header] || [], false)} 
+                                        className="text-slate-500 hover:underline"
+                                      >
+                                        Clear
+                                      </button>
+                                    </div>
+                                  )}
+                                </div>
+                              </div>
+
+                              <div className="max-h-[240px] overflow-y-auto custom-scrollbar pr-1">
                                 {isStrat ? (
                                     <div className="space-y-1">
                                         {Object.keys(filterData.strategyHierarchies[header] || {}).sort().map(group => {
@@ -2821,7 +3095,7 @@ export const DiscrepancyCheck: React.FC<DiscrepancyCheckProps> = ({
                                 )}
                               </div>
                               <div className="pt-3 border-t border-slate-100 flex justify-end">
-                                <button onClick={() => { setOpenFilterMenu(null); setFilterSearch(''); }} className="text-xs font-bold text-white px-4 py-2 bg-indigo-600 rounded-lg hover:bg-indigo-700 shadow-sm transition-all">Apply Filters</button>
+                                <button onClick={() => { setOpenFilterMenu(null); setFilterSearch(''); }} className="text-xs font-bold text-white px-4 py-2 bg-indigo-600 rounded-lg hover:bg-indigo-700 shadow-sm transition-all">Close</button>
                               </div>
                             </div>
                           </motion.div>
@@ -3376,6 +3650,7 @@ const ReconciliationRowItem = memo(({ row, activeTab, columnWidths, handleRowEdi
   const buyPriceMismatch = r.foundInApp && r.foundInTrms && Math.abs(r.diffs.buyPrice) > 0.01;
   const sellPriceMismatch = r.foundInApp && r.foundInTrms && Math.abs(r.diffs.sellPrice) > 0.01;
   const srcMismatch = r.foundInApp && r.foundInTrms && Math.abs(r.diffs.src) > 1.0;
+  const otherCostMismatch = r.foundInApp && r.foundInTrms && Math.abs(r.diffs.otherCost) > 1.0;
   const loadingMonthMismatch = r.foundInApp && r.foundInTrms && r.diffs.loadingMonth;
   const deliveryMonthMismatch = r.foundInApp && r.foundInTrms && r.diffs.deliveryMonth;
 
@@ -3644,6 +3919,27 @@ const ReconciliationRowItem = memo(({ row, activeTab, columnWidths, handleRowEdi
         <div className="flex justify-between items-center">
           <span className="text-[8px] font-bold text-slate-400 uppercase">TRMS SRC</span>
           <span className={`text-[10px] font-bold font-mono ${srcMismatch ? 'text-rose-600' : 'text-slate-600'}`}>{formatUSD(r.trms.src)}</span>
+        </div>
+      </div>
+
+      {/* 9b. Other Fees (Misc + Finance) */}
+      <div className={`px-3 py-2 shrink-0 flex flex-col justify-center border-r border-slate-100 overflow-hidden ${otherCostMismatch ? 'bg-rose-50/70' : ''}`} style={{ width: columnWidths['Other Fees'] || DEFAULT_COLUMN_WIDTH }}>
+        <div className="flex flex-col mb-1 pb-1 border-b border-slate-100">
+          <div className="flex justify-between items-center text-[8px] text-slate-400 font-bold uppercase">
+            <span>App Other Fees</span>
+            {(r.app.miscCost || r.app.financeCost) ? (
+              <span className="text-slate-400 font-normal lowercase text-[7.5px] truncate ml-1" title={`Misc: ${formatUSD(r.app.miscCost || 0)} | Fin: ${formatUSD(r.app.financeCost || 0)}`}>
+                m:{formatUSD(r.app.miscCost || 0)} f:{formatUSD(r.app.financeCost || 0)}
+              </span>
+            ) : null}
+          </div>
+          <div className="flex justify-between items-center font-mono text-[10px]">
+            <span className="font-bold text-slate-800 ml-auto">{formatUSD(r.app.otherCost)}</span>
+          </div>
+        </div>
+        <div className="flex justify-between items-center">
+          <span className="text-[8px] font-bold text-slate-400 uppercase">TRMS Fees</span>
+          <span className={`text-[10px] font-bold font-mono ${otherCostMismatch ? 'text-rose-600' : 'text-slate-600'}`}>{formatUSD(r.trms.otherCost)}</span>
         </div>
       </div>
 

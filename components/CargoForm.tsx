@@ -389,7 +389,10 @@ export const CargoForm: React.FC<CargoFormProps> = ({ initialData, source = 'lis
     return () => clearTimeout(timer);
   }, [formData]);
   const [isProcessing, setIsProcessing] = useState(false);
-  const [pricingMode, setPricingMode] = useState<'formula' | 'component'>('formula');
+  const [pricingMode, setPricingMode] = useState<'formula' | 'component'>(
+    (initialData as any)?.pricingMode || 
+    ((initialData as any)?.buyPriceIndex1 || (initialData as any)?.sellPriceIndex1 ? 'component' : 'formula')
+  );
   const [showHedgingDetails, setShowHedgingDetails] = useState(false);
   const [showTrmsModal, setShowTrmsModal] = useState(false);
   const [asyncIssues, setAsyncIssues] = useState<Record<string, string>>({});
@@ -472,20 +475,32 @@ export const CargoForm: React.FC<CargoFormProps> = ({ initialData, source = 'lis
     const { name, value, type } = e.target;
     let newValue: any = type === 'checkbox' ? (e.target as HTMLInputElement).checked : value;
     
-    // Fields that should be numeric but might come as strings
+    // Fields that should be numeric
     const numericFields = [
       'tierLimit', 'totalLoadedVolume', 'totalDeliveredVolume', 
       'loadedVolume', 'deliveredVolume', 'tier2LoadedVolume', 'tier2DeliveredVolume',
       'absoluteBuyPrice', 'absoluteSellPrice', 'absoluteTier2BuyPrice', 'absoluteTier2SellPrice',
-      'reconciledPurchaseCost', 'reconciledSalesRevenue', 'reconciledSrcCost', 'srcUnitFee'
+      'buyPriceRounding', 'sellPriceRounding', 'tier2BuyPriceRounding', 'tier2SellPriceRounding',
+      'reconciledPurchaseCost', 'reconciledSalesRevenue', 'reconciledSrcCost', 'reconciledOtherCost',
+      'srcUnitFee', 'miscCost', 'financeCost',
+      'buyPriceOverallConstant', 'sellPriceOverallConstant',
+      'tier2BuyPriceOverallConstant', 'tier2SellPriceOverallConstant',
+      'buyPrice1Constant', 'buyPrice2Constant', 'buyPrice3Constant',
+      'sellPrice1Constant', 'sellPrice2Constant', 'sellPrice3Constant',
+      'tier2BuyPrice1Constant', 'tier2BuyPrice2Constant', 'tier2BuyPrice3Constant',
+      'tier2SellPrice1Constant', 'tier2SellPrice2Constant', 'tier2SellPrice3Constant'
     ];
 
     const isPercentageField = name.endsWith('Slope') || name.endsWith('Weightage');
+    const isRoundingField = name.toLowerCase().includes('rounding');
 
-    if (numericFields.includes(name) || type === 'number' || isPercentageField) {
+    if (numericFields.includes(name) || type === 'number' || isPercentageField || isRoundingField) {
         const raw = typeof value === 'string' ? parseCommas(value) : value;
         
-        if (isPercentageField && typeof raw === 'string' && raw.includes('%')) {
+        if (isRoundingField) {
+            const intVal = parseInt(String(raw), 10);
+            newValue = isNaN(intVal) ? 0 : Math.max(0, Math.min(8, intVal));
+        } else if (isPercentageField && typeof raw === 'string' && raw.includes('%')) {
             const num = parseFloat(raw.replace('%', ''));
             if (!isNaN(num)) {
                 newValue = num / 100;
@@ -509,35 +524,59 @@ export const CargoForm: React.FC<CargoFormProps> = ({ initialData, source = 'lis
     const timer = setTimeout(() => {
         setFormData((prev: any) => {
             const updated = recalculateProfile(prev);
-            // Only update if something actually changed (primitive comparison of key metrics)
-            if (updated.finalTotalPnL === prev.finalTotalPnL && 
-                updated.finalSalesRevenue === prev.finalSalesRevenue &&
-                updated.finalTotalCost === prev.finalTotalCost &&
-                updated.absoluteBuyPrice === prev.absoluteBuyPrice && 
-                updated.absoluteSellPrice === prev.absoluteSellPrice &&
-                updated.totalLoadedVolume === prev.totalLoadedVolume &&
-                updated.totalDeliveredVolume === prev.totalDeliveredVolume &&
-                updated.loadedVolume === prev.loadedVolume &&
-                updated.deliveredVolume === prev.deliveredVolume) {
+            // Check if any key metric changed
+            const isDifferent = 
+                updated.finalTotalPnL !== prev.finalTotalPnL ||
+                updated.finalPhysicalPnL !== prev.finalPhysicalPnL ||
+                updated.finalSalesRevenue !== prev.finalSalesRevenue ||
+                updated.finalTotalCost !== prev.finalTotalCost ||
+                updated.salesRevenue !== prev.salesRevenue ||
+                updated.absoluteBuyPrice !== prev.absoluteBuyPrice || 
+                updated.absoluteSellPrice !== prev.absoluteSellPrice ||
+                updated.absoluteTier2BuyPrice !== prev.absoluteTier2BuyPrice ||
+                updated.absoluteTier2SellPrice !== prev.absoluteTier2SellPrice ||
+                updated.finalSalesRevenueT1 !== prev.finalSalesRevenueT1 ||
+                updated.finalSalesRevenueT2 !== prev.finalSalesRevenueT2 ||
+                updated.finalPurchaseCostT1 !== prev.finalPurchaseCostT1 ||
+                updated.finalPurchaseCostT2 !== prev.finalPurchaseCostT2 ||
+                updated.totalLoadedVolume !== prev.totalLoadedVolume ||
+                updated.totalDeliveredVolume !== prev.totalDeliveredVolume ||
+                updated.loadedVolume !== prev.loadedVolume ||
+                updated.deliveredVolume !== prev.deliveredVolume ||
+                updated.tier2LoadedVolume !== prev.tier2LoadedVolume ||
+                updated.tier2DeliveredVolume !== prev.tier2DeliveredVolume;
+
+            if (!isDifferent) {
                 return prev;
             }
             return updated as any;
         });
-    }, 150); // Small 150ms delay is enough to keep typing smooth
+    }, 100);
     return () => clearTimeout(timer);
   }, [
     formData.strategyName, formData.loadingDate, formData.deliveryDate,
     formData.totalLoadedVolume, formData.totalDeliveredVolume, formData.tierLimit,
+    formData.loadedVolume, formData.deliveredVolume, formData.tier2LoadedVolume, formData.tier2DeliveredVolume,
     formData.buyFormula, formData.sellFormula, formData.isTieredPricing,
     formData.tier2BuyFormula, formData.tier2SellFormula,
-    formData.buyPrice1Slope, formData.buyPrice1Weightage, formData.buyPriceIndex1,
-    formData.sellPrice1Slope, formData.sellPrice1Weightage, formData.sellPriceIndex1,
-    formData.isBuyPriceManual, formData.isSellPriceManual,
+    formData.pricingMode,
+    formData.buyPrice1Slope, formData.buyPrice1Weightage, formData.buyPriceIndex1, formData.buyPrice1MonthDef, formData.buyPrice1Constant,
+    formData.buyPrice2Slope, formData.buyPrice2Weightage, formData.buyPriceIndex2, formData.buyPrice2MonthDef, formData.buyPrice2Constant,
+    formData.buyPrice3Slope, formData.buyPrice3Weightage, formData.buyPriceIndex3, formData.buyPrice3MonthDef, formData.buyPrice3Constant,
+    formData.sellPrice1Slope, formData.sellPrice1Weightage, formData.sellPriceIndex1, formData.sellPrice1MonthDef, formData.sellPrice1Constant,
+    formData.sellPrice2Slope, formData.sellPrice2Weightage, formData.sellPriceIndex2, formData.sellPrice2MonthDef, formData.sellPrice2Constant,
+    formData.sellPrice3Slope, formData.sellPrice3Weightage, formData.sellPriceIndex3, formData.sellPrice3MonthDef, formData.sellPrice3Constant,
+    formData.tier2BuyPrice1Slope, formData.tier2BuyPrice1Weightage, formData.tier2BuyPriceIndex1, formData.tier2BuyPrice1MonthDef, formData.tier2BuyPrice1Constant,
+    formData.tier2SellPrice1Slope, formData.tier2SellPrice1Weightage, formData.tier2SellPriceIndex1, formData.tier2SellPrice1MonthDef, formData.tier2SellPrice1Constant,
+    formData.isBuyPriceManual, formData.isSellPriceManual, formData.isTier2BuyPriceManual, formData.isTier2SellPriceManual,
+    formData.absoluteBuyPrice, formData.absoluteSellPrice, formData.absoluteTier2BuyPrice, formData.absoluteTier2SellPrice,
     formData.buyPriceOverallConstant, formData.sellPriceOverallConstant,
+    formData.tier2BuyPriceOverallConstant, formData.tier2SellPriceOverallConstant,
     formData.buyPriceRounding, formData.sellPriceRounding,
     formData.tier2BuyPriceRounding, formData.tier2SellPriceRounding,
     formData.reconciledPurchaseCost, formData.reconciledSalesRevenue,
     formData.reconciledSrcCost, formData.reconciledOtherCost, formData.srcUnitFee,
+    formData.miscCost, formData.financeCost,
     formData.incoterms
   ]);
 
@@ -801,8 +840,8 @@ export const CargoForm: React.FC<CargoFormProps> = ({ initialData, source = 'lis
                 Pricing Mode
             </h3>
             <div className="flex bg-slate-100 p-1 rounded-lg text-[10px] font-bold">
-                <button type="button" onClick={() => setPricingMode('formula')} className={`flex-1 sm:flex-none px-4 py-1.5 rounded-md transition-all ${pricingMode === 'formula' ? 'bg-white shadow-sm text-indigo-600' : 'text-slate-500'}`}>Formula</button>
-                <button type="button" onClick={() => setPricingMode('component')} className={`flex-1 sm:flex-none px-4 py-1.5 rounded-md transition-all ${pricingMode === 'component' ? 'bg-white shadow-sm text-indigo-600' : 'text-slate-500'}`}>Components</button>
+                <button type="button" onClick={() => { setPricingMode('formula'); setFormData((prev: any) => ({ ...prev, pricingMode: 'formula' })); }} className={`flex-1 sm:flex-none px-4 py-1.5 rounded-md transition-all ${pricingMode === 'formula' ? 'bg-white shadow-sm text-indigo-600' : 'text-slate-500'}`}>Formula</button>
+                <button type="button" onClick={() => { setPricingMode('component'); setFormData((prev: any) => ({ ...prev, pricingMode: 'component' })); }} className={`flex-1 sm:flex-none px-4 py-1.5 rounded-md transition-all ${pricingMode === 'component' ? 'bg-white shadow-sm text-indigo-600' : 'text-slate-500'}`}>Components</button>
             </div>
         </div>
 
@@ -994,14 +1033,14 @@ export const CargoForm: React.FC<CargoFormProps> = ({ initialData, source = 'lis
                             <div className="flex flex-col items-end">
                                 <span className="text-[10px] font-bold text-slate-400 uppercase">T2 Purchase Price</span>
                                 <div className="flex items-center gap-2">
-                                    <span className="text-sm font-mono font-bold text-emerald-700 bg-emerald-50 px-2 py-0.5 rounded border border-emerald-100">{formatPrice(formData.absoluteBuyPriceTier2 || 0, formData.buyPriceRounding)}</span>
+                                    <span className="text-sm font-mono font-bold text-emerald-700 bg-emerald-50 px-2 py-0.5 rounded border border-emerald-100">{formatPrice(formData.absoluteTier2BuyPrice || 0, formData.tier2BuyPriceRounding)}</span>
                                     <span className="text-xs font-bold text-slate-500">({formatCurrency(formData.finalPurchaseCostT2 || 0)})</span>
                                 </div>
                             </div>
                             <div className="flex flex-col items-end">
                                 <span className="text-[10px] font-bold text-slate-400 uppercase">T2 Sales Price</span>
                                 <div className="flex items-center gap-2">
-                                    <span className="text-sm font-mono font-bold text-blue-700 bg-blue-50 px-2 py-0.5 rounded border border-blue-100">{formatPrice(formData.absoluteSellPriceTier2 || 0, formData.sellPriceRounding)}</span>
+                                    <span className="text-sm font-mono font-bold text-blue-700 bg-blue-50 px-2 py-0.5 rounded border border-blue-100">{formatPrice(formData.absoluteTier2SellPrice || 0, formData.tier2SellPriceRounding)}</span>
                                     <span className="text-xs font-bold text-slate-500">({formatCurrency(formData.finalSalesRevenueT2 || 0)})</span>
                                 </div>
                             </div>
