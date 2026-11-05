@@ -123,7 +123,7 @@ The pricing engine lives in `services/calculationService.ts`.
 
 1. Clone the repository:
    ```bash
-   git clone https://github.com/your-username/cargoflow.git
+   git clone https://github.com/Hafizudeen5525/PLL-CargoFlow.git
    cd cargoflow
    ```
 
