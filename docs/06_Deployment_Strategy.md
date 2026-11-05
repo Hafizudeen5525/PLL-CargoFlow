@@ -1,12 +1,13 @@
-# Deployment Strategy (Azure)
+# Deployment Strategy
 
-The repository is structured to support a transition from a standalone React app to a full Azure Enterprise setup.
+The application is structured to run as a fast standalone client-side tool, while being cleanly architected to deploy to enterprise cloud environments like Azure.
 
-## Current State (Mock/Demo)
-*   **Frontend:** Runs entirely in the browser.
-*   **Data:** LocalStorage.
-*   **Auth:** Mock (Simulated delay).
-*   **AI:** Client-side calls to Gemini API.
+## Operating Modes
+
+### 1. Standalone / Local Mode
+- **Frontend:** Runs locally via Vite (`npm run dev`).
+- **Data Persistence:** IndexedDB and LocalStorage.
+- **Computation:** Formula evaluation and curve lookups run client-side.
 
 ## Target Architecture (Azure)
 

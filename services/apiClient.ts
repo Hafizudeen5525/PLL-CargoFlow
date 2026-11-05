@@ -3,7 +3,7 @@
  * 
  * This file serves as the abstraction layer between the UI and the Data.
  * 
- * - In Development (AI Studio): It calls local services (geminiService, calculationService).
+ * - In Standalone / Client-side Mode: It calls local services directly.
  * - In Production (Azure): It calls the backend API endpoints defined in /backend/server.ts.
  */
 
@@ -23,7 +23,7 @@ export const apiClient = {
      */
     parseDocument: async (data: string, mimeType: string, isText: boolean): Promise<Partial<CargoProfile>> => {
         if (!USE_REAL_BACKEND) {
-            // Use local Gemini service (Google AI Studio compatible)
+            // Run client-side parser
             return await parseKTSDocument(data, mimeType, isText);
         }
 

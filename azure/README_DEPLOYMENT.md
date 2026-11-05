@@ -22,7 +22,7 @@ For the final git repository, the IT team should organize the files as follows:
 └── .gitignore
 ```
 
-**Note:** For the current development environment (Google AI Studio), the frontend files remain in the root directory to maintain preview functionality.
+**Note:** In local development mode, the frontend source files reside in the root directory for standard Vite serving.
 
 ---
 
