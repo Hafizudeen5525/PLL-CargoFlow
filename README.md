@@ -69,7 +69,7 @@ The pricing engine lives in `services/calculationService.ts`.
    - Evaluates the final formula to compute price per unit ($/MMBtu or $/Bbl).
 4. **Margin Calculation**:
    $$\text{Gross Margin} = (\text{Sell Price} - \text{Buy Price}) \times \text{Delivered Volume}$$
-   $$\text{Net P\&L} = \text{Gross Margin} - \text{SRC Costs} - \text{Other Fees}$$
+   $$\text{Net PnL} = \text{Gross Margin} - \text{SRC Costs} - \text{Other Fees}$$
 
 ---
 
