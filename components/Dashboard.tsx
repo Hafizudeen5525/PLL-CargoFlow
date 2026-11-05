@@ -142,7 +142,7 @@ export const Dashboard: React.FC<DashboardProps> = ({
   };
 
   const availableGroups = useMemo(() => {
-      return ['All', 'CarvedOut', ...GROUPS, 'Others'];
+      return Array.from(new Set(['All', 'CarvedOut', ...GROUPS, 'Others']));
   }, []);
 
   const availableDeliveryMonths = useMemo(() => {
